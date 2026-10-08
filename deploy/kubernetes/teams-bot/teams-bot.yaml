@@ -79,6 +79,14 @@ spec:
               value: "3100"
             - name: TEAMS_BOT_STATE_DIR
               value: /state
+            # The model new sessions start on when the message has no !model
+            # flag (docs/TEAMS_BOT.md). Unset, the bot uses the shared catalog
+            # default, anthropic/claude-sonnet-4-6; set it to a model this
+            # control plane has a provider key for. Checked at boot.
+            # - name: TEAMS_BOT_DEFAULT_MODEL
+            #   value: zai-coding-plan/glm-5.3
+            # - name: TEAMS_BOT_DEFAULT_REASONING_EFFORT
+            #   value: high
           ports:
             - name: http
               containerPort: 3100

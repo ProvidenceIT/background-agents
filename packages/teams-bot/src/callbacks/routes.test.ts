@@ -164,6 +164,7 @@ function harness(options: {
     bot,
     store,
     log: silent,
+    defaultModel: DEFAULT_MODEL,
     enqueue,
   });
   const callbacks = createCallbacksRouter({

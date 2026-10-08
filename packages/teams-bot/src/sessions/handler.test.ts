@@ -59,7 +59,7 @@ const promptQueued: RouteHandler = () => json({ messageId: "message-1", status: 
 
 function harness(
   controlPlaneRoutes: Record<string, RouteHandler>,
-  options: { store?: TeamsStateStore } = {}
+  options: { store?: TeamsStateStore; defaultModel?: string; defaultReasoningEffort?: string } = {}
 ) {
   const controlPlaneRemote = scriptedFetch(controlPlaneRoutes);
   let replyCounter = 0;
@@ -90,6 +90,8 @@ function harness(
     bot,
     store,
     log: silent,
+    defaultModel: options.defaultModel ?? DEFAULT_MODEL,
+    defaultReasoningEffort: options.defaultReasoningEffort,
   });
   const background: Promise<void>[] = [];
   const app = createApp({
@@ -355,6 +357,7 @@ describe("POST /api/messages", () => {
     expect(prompt.body).toEqual({
       content: "add a README badge",
       source: "msteams",
+      model: DEFAULT_MODEL,
       callbackContext: {
         source: "msteams",
         conversationId: THREAD_KEY,
@@ -545,6 +548,111 @@ describe("POST /api/messages", () => {
     expect(h.controlPlaneCalls()).toEqual([
       `GET /channel-bindings/msteams/${encodeURIComponent(CHANNEL_ID)}`,
     ]);
+  });
+
+  it("starts a new session on the configured default model when no inline flag names one", async () => {
+    const h = harness(
+      {
+        [`GET /channel-bindings/msteams/${CHANNEL_ID}`]: boundChannel,
+        "POST /sessions": sessionCreated,
+        "POST /sessions/session-1/prompt": promptQueued,
+      },
+      { defaultModel: "zai-coding-plan/glm-5.3" }
+    );
+    await h.post(activityFixture());
+    const [, create, prompt] = h.controlPlaneRemote.requests;
+    expect(create.body).toEqual({
+      teamId: "team-platform",
+      repoOwner: "ProvidenceIT",
+      repoName: "playground",
+      model: "zai-coding-plan/glm-5.3",
+      actorDisplayName: "Casey",
+    });
+    expect(prompt.body).toEqual({
+      content: "add a README badge",
+      source: "msteams",
+      model: "zai-coding-plan/glm-5.3",
+      callbackContext: {
+        source: "msteams",
+        conversationId: THREAD_KEY,
+        serviceUrl: SERVICE_URL,
+        replyToId: ROOT_ID,
+        channelId: CHANNEL_ID,
+        repoFullName: "ProvidenceIT/playground",
+        model: "zai-coding-plan/glm-5.3",
+      },
+    });
+    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+      model: "zai-coding-plan/glm-5.3",
+      reasoningEffort: null,
+    });
+  });
+
+  it("lets an inline !model flag win over the configured default", async () => {
+    const h = harness(
+      {
+        [`GET /channel-bindings/msteams/${CHANNEL_ID}`]: boundChannel,
+        "POST /sessions": sessionCreated,
+        "POST /sessions/session-1/prompt": promptQueued,
+      },
+      { defaultModel: "zai-coding-plan/glm-5.3" }
+    );
+    await h.post(
+      activityFixture({
+        text: "<at>Open-Inspect</at> !model anthropic/claude-haiku-4-5 ProvidenceIT/playground do it",
+      })
+    );
+    const [, create, prompt] = h.controlPlaneRemote.requests;
+    expect(create.body).toMatchObject({ model: "anthropic/claude-haiku-4-5" });
+    expect(prompt.body).toMatchObject({
+      content: "do it",
+      model: "anthropic/claude-haiku-4-5",
+      callbackContext: { model: "anthropic/claude-haiku-4-5" },
+    });
+    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+      model: "anthropic/claude-haiku-4-5",
+    });
+  });
+
+  it("sends the configured reasoning effort with the default model and drops it for an inline model", async () => {
+    const routes = {
+      [`GET /channel-bindings/msteams/${CHANNEL_ID}`]: boundChannel,
+      "POST /sessions": sessionCreated,
+      "POST /sessions/session-1/prompt": promptQueued,
+    };
+    const defaults = { defaultModel: "anthropic/claude-opus-4-6", defaultReasoningEffort: "low" };
+    const plain = harness(routes, defaults);
+    await plain.post(activityFixture());
+    const [, create, prompt] = plain.controlPlaneRemote.requests;
+    expect(create.body).toMatchObject({
+      model: "anthropic/claude-opus-4-6",
+      reasoningEffort: "low",
+    });
+    expect(prompt.body).toMatchObject({
+      model: "anthropic/claude-opus-4-6",
+      reasoningEffort: "low",
+    });
+    expect(plain.store.getThreadSession(THREAD_KEY)).toMatchObject({
+      model: "anthropic/claude-opus-4-6",
+      reasoningEffort: "low",
+    });
+
+    const inline = harness(routes, defaults);
+    await inline.post(
+      activityFixture({
+        text: "<at>Open-Inspect</at> !model zai-coding-plan/glm-5.3 ProvidenceIT/playground do it",
+      })
+    );
+    const [, inlineCreate, inlinePrompt] = inline.controlPlaneRemote.requests;
+    expect(inlineCreate.body).toEqual({
+      teamId: "team-platform",
+      repoOwner: "ProvidenceIT",
+      repoName: "playground",
+      model: "zai-coding-plan/glm-5.3",
+      actorDisplayName: "Casey",
+    });
+    expect(inlinePrompt.body).not.toHaveProperty("reasoningEffort");
+    expect(inlinePrompt.body).toMatchObject({ model: "zai-coding-plan/glm-5.3" });
   });
 
   it("turns a reply inside a session's thread into a follow-up prompt", async () => {

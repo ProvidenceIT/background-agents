@@ -1,3 +1,4 @@
+import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { describe, expect, it } from "vitest";
 import { ConfigError, DEFAULT_ALLOWED_SERVICE_URL_HOSTS, loadConfig } from "./config";
 
@@ -28,6 +29,8 @@ describe("loadConfig", () => {
       stateDir: "/state",
       allowedServiceUrlHosts: ["*.botframework.com", "smba.trafficmanager.net"],
       logLevel: "info",
+      defaultModel: DEFAULT_MODEL,
+      defaultReasoningEffort: undefined,
     });
     expect(DEFAULT_ALLOWED_SERVICE_URL_HOSTS).toBe("*.botframework.com,smba.trafficmanager.net");
   });
@@ -63,5 +66,50 @@ describe("loadConfig", () => {
     expect(config.port).toBe(4000);
     expect(config.allowedServiceUrlHosts).toEqual(["smba.trafficmanager.net", "*.example.test"]);
     expect(config.logLevel).toBe("debug");
+  });
+
+  it("takes the default model and reasoning effort from the environment", () => {
+    const config = loadConfig({
+      ...complete,
+      TEAMS_BOT_DEFAULT_MODEL: "zai-coding-plan/glm-5.3",
+    });
+    expect(config.defaultModel).toBe("zai-coding-plan/glm-5.3");
+    expect(config.defaultReasoningEffort).toBeUndefined();
+
+    const withEffort = loadConfig({
+      ...complete,
+      TEAMS_BOT_DEFAULT_MODEL: "claude-opus-4-6",
+      TEAMS_BOT_DEFAULT_REASONING_EFFORT: "low",
+    });
+    expect(withEffort.defaultModel).toBe("anthropic/claude-opus-4-6");
+    expect(withEffort.defaultReasoningEffort).toBe("low");
+
+    const empty = loadConfig({ ...complete, TEAMS_BOT_DEFAULT_MODEL: "" });
+    expect(empty.defaultModel).toBe(DEFAULT_MODEL);
+  });
+
+  it("refuses to boot on an unknown default model", () => {
+    expect(() => loadConfig({ ...complete, TEAMS_BOT_DEFAULT_MODEL: "zai/glm-99" })).toThrow(
+      new ConfigError(['TEAMS_BOT_DEFAULT_MODEL "zai/glm-99" is not a known model id'])
+    );
+  });
+
+  it("refuses a reasoning effort the default model does not support", () => {
+    expect(() =>
+      loadConfig({
+        ...complete,
+        TEAMS_BOT_DEFAULT_MODEL: "zai-coding-plan/glm-5.3",
+        TEAMS_BOT_DEFAULT_REASONING_EFFORT: "high",
+      })
+    ).toThrow(
+      new ConfigError([
+        'TEAMS_BOT_DEFAULT_REASONING_EFFORT "high" is not valid for "zai-coding-plan/glm-5.3" (this model does not support reasoning controls)',
+      ])
+    );
+    expect(() => loadConfig({ ...complete, TEAMS_BOT_DEFAULT_REASONING_EFFORT: "xhigh" })).toThrow(
+      new ConfigError([
+        'TEAMS_BOT_DEFAULT_REASONING_EFFORT "xhigh" is not valid for "anthropic/claude-sonnet-4-6" (supported values: low, medium, high, max)',
+      ])
+    );
   });
 });

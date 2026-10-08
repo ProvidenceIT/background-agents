@@ -11,6 +11,13 @@
  */
 
 import { parseLogLevel, type LogLevel } from "@open-inspect/shared/logger";
+import {
+  DEFAULT_MODEL,
+  getReasoningConfig,
+  isValidModel,
+  isValidReasoningEffort,
+  normalizeModelId,
+} from "@open-inspect/shared/models";
 import { z } from "zod";
 import { parseAllowedServiceUrlHosts } from "./bot-framework/service-url";
 
@@ -41,6 +48,8 @@ const envSchema = z.object({
   TEAMS_BOT_ALLOWED_SERVICE_URL_HOSTS: nonEmpty.default(DEFAULT_ALLOWED_SERVICE_URL_HOSTS),
   HOST: nonEmpty.default("0.0.0.0"),
   LOG_LEVEL: z.string().optional(),
+  TEAMS_BOT_DEFAULT_MODEL: z.string().trim().optional(),
+  TEAMS_BOT_DEFAULT_REASONING_EFFORT: z.string().trim().optional(),
 });
 
 export interface TeamsBotConfig {
@@ -60,6 +69,14 @@ export interface TeamsBotConfig {
   stateDir: string;
   allowedServiceUrlHosts: readonly string[];
   logLevel: LogLevel;
+  /**
+   * The model a new session starts with when the message carries no `!model`
+   * flag: `TEAMS_BOT_DEFAULT_MODEL` in canonical `provider/model` form, or the
+   * shared catalog default. The inline flag always wins over it.
+   */
+  defaultModel: string;
+  /** The reasoning effort that goes with `defaultModel`; unset leaves the control plane's default. */
+  defaultReasoningEffort: string | undefined;
 }
 
 export class ConfigError extends Error {
@@ -97,6 +114,10 @@ export function loadConfig(source: ConfigSource): TeamsBotConfig {
   if (allowedServiceUrlHosts.length === 0) {
     throw new ConfigError(["TEAMS_BOT_ALLOWED_SERVICE_URL_HOSTS must name at least one host"]);
   }
+  const { defaultModel, defaultReasoningEffort } = resolveDefaultModel(
+    env.TEAMS_BOT_DEFAULT_MODEL,
+    env.TEAMS_BOT_DEFAULT_REASONING_EFFORT
+  );
   return {
     appId: env.TEAMS_BOT_APP_ID,
     appSecret: env.TEAMS_BOT_APP_SECRET,
@@ -109,5 +130,32 @@ export function loadConfig(source: ConfigSource): TeamsBotConfig {
     stateDir: env.TEAMS_BOT_STATE_DIR,
     allowedServiceUrlHosts,
     logLevel: parseLogLevel(env.LOG_LEVEL),
+    defaultModel,
+    defaultReasoningEffort,
   };
+}
+
+/**
+ * The deployment's default model and reasoning effort, checked against the
+ * shared catalog so a typo fails the boot instead of every session. The
+ * message names the value: a model id is configuration, not a secret.
+ */
+function resolveDefaultModel(
+  model: string | undefined,
+  reasoningEffort: string | undefined
+): { defaultModel: string; defaultReasoningEffort: string | undefined } {
+  if (model !== undefined && !isValidModel(model)) {
+    throw new ConfigError([`TEAMS_BOT_DEFAULT_MODEL "${model}" is not a known model id`]);
+  }
+  const defaultModel = model === undefined ? DEFAULT_MODEL : normalizeModelId(model);
+  if (reasoningEffort !== undefined && !isValidReasoningEffort(defaultModel, reasoningEffort)) {
+    const efforts = getReasoningConfig(defaultModel)?.efforts;
+    const detail = efforts?.length
+      ? `supported values: ${efforts.join(", ")}`
+      : "this model does not support reasoning controls";
+    throw new ConfigError([
+      `TEAMS_BOT_DEFAULT_REASONING_EFFORT "${reasoningEffort}" is not valid for "${defaultModel}" (${detail})`,
+    ]);
+  }
+  return { defaultModel, defaultReasoningEffort: reasoningEffort };
 }

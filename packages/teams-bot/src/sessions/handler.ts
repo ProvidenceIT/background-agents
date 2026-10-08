@@ -42,6 +42,9 @@ export interface ActivityHandlerDeps {
   bot: BotFrameworkClient;
   store: TeamsStateStore;
   log: Logger;
+  /** The model (and reasoning effort) a new session starts with when no inline flag names one. */
+  defaultModel: string;
+  defaultReasoningEffort?: string;
   /** The per-thread queue, shared with the callback routes so both sides take turns on a thread. */
   enqueue?: KeyedQueue;
 }
@@ -235,6 +238,8 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
             store: deps.store,
             log: deps.log,
             webAppUrl: deps.webAppUrl,
+            defaultModel: deps.defaultModel,
+            defaultReasoningEffort: deps.defaultReasoningEffort,
           },
           {
             activity: ctx.activity,

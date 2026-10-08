@@ -51,6 +51,8 @@ function main(): void {
     bot,
     store,
     log: createLogger("activity", {}, config.logLevel),
+    defaultModel: config.defaultModel,
+    defaultReasoningEffort: config.defaultReasoningEffort,
     enqueue,
   });
   const callbacks = createCallbacksRouter({

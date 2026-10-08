@@ -55,11 +55,20 @@ service principal, and renders progress back into the Teams thread.
 | `WEB_APP_URL`                         | Web app origin for session links.                                            |
 | `TEAMS_BOT_STATE_DIR`                 | SQLite directory, default `/state`.                                          |
 | `TEAMS_BOT_ALLOWED_SERVICE_URL_HOSTS` | Default `*.botframework.com,smba.trafficmanager.net`.                        |
+| `TEAMS_BOT_DEFAULT_MODEL`             | Model for new sessions without a `!model` flag; default the catalog default. |
+| `TEAMS_BOT_DEFAULT_REASONING_EFFORT`  | Reasoning effort that goes with `TEAMS_BOT_DEFAULT_MODEL`; unset by default. |
 | `HOST`                                | Listen address, default `0.0.0.0`.                                           |
 | `LOG_LEVEL`                           | `debug`, `info` (default), `warn` or `error`.                                |
 
 Required: `TEAMS_BOT_APP_ID`, `TEAMS_BOT_APP_SECRET`, `TEAMS_BOT_TENANT_ID`, `CONTROL_PLANE_URL`,
 `SERVICE_AUTH_SECRET_TEAMS_BOT`, `WEB_APP_URL`. The rest have the defaults shown.
+
+`TEAMS_BOT_DEFAULT_MODEL` is a catalog id such as `zai-coding-plan/glm-5.3`, checked with the shared
+`isValidModel` at boot (an unknown id fails the start with
+`TEAMS_BOT_DEFAULT_MODEL "<id>" is not a known model id`); `TEAMS_BOT_DEFAULT_REASONING_EFFORT` must
+be an effort that model supports. Set them to the model the deployment has a provider key for; an
+inline `!model`/`!reasoning` flag in the message always wins, and follow-ups keep the model their
+session was started with.
 
 ## Development
 

@@ -5,7 +5,6 @@
  */
 
 import {
-  DEFAULT_MODEL,
   getReasoningConfig,
   isValidModel,
   isValidReasoningEffort,
@@ -42,6 +41,9 @@ export interface LaunchDeps {
   store: TeamsStateStore;
   log: Logger;
   webAppUrl: string;
+  /** What a new session runs on unless the message carries `!model`/`!reasoning` (config.ts). */
+  defaultModel: string;
+  defaultReasoningEffort?: string;
 }
 
 export interface ModelSelection {
@@ -159,7 +161,10 @@ export async function launchSession(deps: LaunchDeps, input: LaunchInput): Promi
   }
   const teamId = binding.binding.teamId;
 
-  const selection = resolveModelSelection(input.options, { model: DEFAULT_MODEL });
+  const selection = resolveModelSelection(input.options, {
+    model: deps.defaultModel,
+    reasoningEffort: deps.defaultReasoningEffort,
+  });
   if (!selection.ok) {
     await reply(selection.error);
     return;
@@ -209,7 +214,12 @@ export async function launchSession(deps: LaunchDeps, input: LaunchInput): Promi
   const prompt = await deps.controlPlane.sendPrompt(
     actor,
     sessionId,
-    { content: input.prompt, callbackContext },
+    {
+      content: input.prompt,
+      model: selection.selection.model,
+      reasoningEffort: selection.selection.reasoningEffort,
+      callbackContext,
+    },
     traceId
   );
   if (!prompt.ok) {
