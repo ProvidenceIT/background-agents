@@ -125,6 +125,12 @@ export interface LaunchInput {
   prompt: string;
   options: InlinePromptOptions;
   traceId: string;
+  /**
+   * The sender's own session for a follow-up the thread's session refused:
+   * recorded as the sender's fork, leaving the thread's mapping to everyone
+   * else.
+   */
+  fork?: boolean;
 }
 
 async function resolveRepository(
@@ -248,7 +254,7 @@ export async function launchSession(deps: LaunchDeps, input: LaunchInput): Promi
   }
 
   const working = await reply(WORKING_TEXT);
-  deps.store.putThreadSession({
+  const record = {
     threadKey: input.threadKey,
     sessionId,
     actor,
@@ -262,7 +268,9 @@ export async function launchSession(deps: LaunchDeps, input: LaunchInput): Promi
     progressActivityId: working.id || null,
     lastMessageId: prompt.data.messageId,
     turnState: "working",
-  });
+  } as const;
+  if (input.fork) deps.store.putThreadFork(record);
+  else deps.store.putThreadSession(record);
   if (working.id) {
     deps.store.putTurnPlaceholder(input.threadKey, prompt.data.messageId, working.id);
   }

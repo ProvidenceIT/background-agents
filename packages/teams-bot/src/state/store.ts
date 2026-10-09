@@ -101,6 +101,26 @@ CREATE TABLE IF NOT EXISTS thread_sessions (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_thread_sessions_session ON thread_sessions(session_id);
+CREATE TABLE IF NOT EXISTS thread_forks (
+  thread_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  team_id TEXT,
+  repo_full_name TEXT,
+  model TEXT NOT NULL,
+  reasoning_effort TEXT,
+  service_url TEXT NOT NULL,
+  channel_id TEXT,
+  root_activity_id TEXT,
+  progress_activity_id TEXT,
+  last_message_id TEXT,
+  turn_state TEXT NOT NULL DEFAULT 'idle' CHECK (turn_state IN ('idle', 'working')),
+  closed INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (thread_key, actor)
+);
+CREATE INDEX IF NOT EXISTS idx_thread_forks_session ON thread_forks(thread_key, session_id);
 CREATE TABLE IF NOT EXISTS turn_placeholders (
   thread_key TEXT NOT NULL,
   message_id TEXT NOT NULL,
@@ -207,6 +227,100 @@ export class TeamsStateStore {
       .prepare("SELECT * FROM thread_sessions WHERE session_id = ? ORDER BY created_at")
       .all(sessionId) as unknown as ThreadSessionRow[];
     return rows.map(toRecord);
+  }
+
+  /**
+   * The session a colleague's follow-up in the thread forked to, when the
+   * thread's own session runs on a subscription home they may not spend.
+   * The thread keeps its own session for everyone else; this one is the
+   * sender's only.
+   */
+  getThreadFork(threadKey: string, actor: string): ThreadSessionRecord | null {
+    const row = this.db
+      .prepare("SELECT * FROM thread_forks WHERE thread_key = ? AND actor = ?")
+      .get(threadKey, actor) as ThreadSessionRow | undefined;
+    return row ? toRecord(row) : null;
+  }
+
+  /** Record (or replace) the sender's fork in the thread; the thread's mapping is untouched. */
+  putThreadFork(session: NewThreadSession & { actor: string }): ThreadSessionRecord {
+    const now = this.now();
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO thread_forks (
+           thread_key, session_id, actor, team_id, repo_full_name, model, reasoning_effort,
+           service_url, channel_id, root_activity_id, progress_activity_id, last_message_id,
+           turn_state, closed, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+      )
+      .run(
+        session.threadKey,
+        session.sessionId,
+        session.actor,
+        session.teamId,
+        session.repoFullName,
+        session.model,
+        session.reasoningEffort,
+        session.serviceUrl,
+        session.channelId,
+        session.rootActivityId,
+        session.progressActivityId ?? null,
+        session.lastMessageId ?? null,
+        session.turnState ?? "idle",
+        now,
+        now
+      );
+    return this.getThreadFork(session.threadKey, session.actor)!;
+  }
+
+  /** The thread's record for `sessionId`: its own session, or a sender's fork. */
+  getThreadRecord(threadKey: string, sessionId: string): ThreadSessionRecord | null {
+    const thread = this.getThreadSession(threadKey);
+    if (thread && thread.sessionId === sessionId) return thread;
+    const row = this.db
+      .prepare("SELECT * FROM thread_forks WHERE thread_key = ? AND session_id = ?")
+      .get(threadKey, sessionId) as ThreadSessionRow | undefined;
+    return row ? toRecord(row) : null;
+  }
+
+  /** `updateThreadSession` for whichever record of the thread holds `sessionId`. */
+  updateThreadRecord(
+    threadKey: string,
+    sessionId: string,
+    patch: ThreadSessionPatch
+  ): ThreadSessionRecord | null {
+    const current = this.getThreadRecord(threadKey, sessionId);
+    if (!current) return null;
+    const next = { ...current, ...patch };
+    this.db
+      .prepare(
+        `UPDATE ${this.recordTable(threadKey, sessionId)}
+           SET progress_activity_id = ?, last_message_id = ?, turn_state = ?, closed = ?, updated_at = ?
+         WHERE thread_key = ? AND session_id = ?`
+      )
+      .run(
+        next.progressActivityId,
+        next.lastMessageId,
+        next.turnState,
+        next.closed ? 1 : 0,
+        this.now(),
+        threadKey,
+        sessionId
+      );
+    return this.getThreadRecord(threadKey, sessionId);
+  }
+
+  /** Mark the thread's session or a sender's fork closed; false when the thread has neither. */
+  closeThreadRecord(threadKey: string, sessionId: string): boolean {
+    if (!this.getThreadRecord(threadKey, sessionId)) return false;
+    this.updateThreadRecord(threadKey, sessionId, { closed: true, turnState: "idle" });
+    return true;
+  }
+
+  private recordTable(threadKey: string, sessionId: string): "thread_sessions" | "thread_forks" {
+    return this.getThreadSession(threadKey)?.sessionId === sessionId
+      ? "thread_sessions"
+      : "thread_forks";
   }
 
   /** Insert the mapping, replacing any earlier session mapped to the same thread. */

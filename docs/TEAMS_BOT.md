@@ -278,6 +278,10 @@ than API keys, three settings make Teams work end to end:
   `anthropic/claude-sonnet-4-6`. A mention then runs on the sender's own home when it carries
   Claude, else on a home an enrolled colleague shares (under the `household` policy), else it is
   refused with `no_eligible_home` and the reason is posted in the thread.
+- **Replies by someone else.** When a colleague replies in a thread whose session runs on a home
+  they may not spend, the bot starts the colleague's own session for that reply (their fork) and
+  routes their later replies in the thread to it. The thread's own session stays the starter's, so
+  the starter's replies keep running on the starter's home.
 - **Anthropic models enabled.** The Anthropic group is on by default; if Settings › Models (the
   `model_preferences` row) has turned it off, turn it on again, or the default model is refused at
   session create.

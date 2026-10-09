@@ -68,14 +68,13 @@ export interface CompletionDeps {
 
 export type DeliveryOutcome = "delivered" | "duplicate" | "skipped";
 
-/** The thread a callback addresses, when the store maps it to the callback's session. */
+/** The thread record a callback addresses: the thread's own session or a sender's fork. */
 function threadFor(
   store: TeamsStateStore,
   threadKey: string,
   sessionId: string
 ): ThreadSessionRecord | null {
-  const thread = store.getThreadSession(threadKey);
-  return thread && thread.sessionId === sessionId ? thread : null;
+  return store.getThreadRecord(threadKey, sessionId);
 }
 
 /**
@@ -303,7 +302,10 @@ export async function deliverCompletion(
     const finalId = await updateOrPost(port, target, text);
     deps.store.markCallbackPosted(input.messageId, COMPLETE_KIND);
     if (isCurrentTurn) {
-      deps.store.updateThreadSession(threadKey, { turnState: "idle", progressActivityId: null });
+      deps.store.updateThreadRecord(threadKey, input.sessionId, {
+        turnState: "idle",
+        progressActivityId: null,
+      });
     }
     if (thread) deps.store.deleteTurnPlaceholder(threadKey, input.messageId);
     deps.log.info("callback.complete", {
@@ -377,7 +379,8 @@ export async function deliverThreadClosed(
 ): Promise<DeliveryOutcome> {
   const threadKey = input.context.conversationId;
   const logBase = { trace_id: input.traceId, thread_key: threadKey, session_id: input.sessionId };
-  const mapped = deps.store.getThreadSession(threadKey);
+  const record = deps.store.getThreadRecord(threadKey, input.sessionId);
+  const mapped = record ?? deps.store.getThreadSession(threadKey);
   if (mapped && mapped.sessionId !== input.sessionId) {
     deps.log.info("callback.thread_closed", {
       ...logBase,
@@ -386,7 +389,7 @@ export async function deliverThreadClosed(
     });
     return "skipped";
   }
-  deps.store.closeThreadSession(threadKey, input.sessionId);
+  deps.store.closeThreadRecord(threadKey, input.sessionId);
   await deps.progress.finish(threadKey);
   if (!deps.store.claimCallback(input.sessionId, THREAD_CLOSED_KIND)) {
     deps.log.info("callback.thread_closed", { ...logBase, outcome: "duplicate" });

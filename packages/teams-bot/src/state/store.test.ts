@@ -85,6 +85,37 @@ describe("TeamsStateStore", () => {
     expect(store.getThreadSession(threadKey)).toMatchObject({ closed: true, turnState: "idle" });
   });
 
+  it("keeps a sender's fork beside the thread's own session and updates each by session", () => {
+    const store = open();
+    store.putThreadSession(newSession());
+    const colleague = "microsoft:99999999-8888-7777-6666-555555555555";
+    store.putThreadFork({ ...newSession({ sessionId: "session-2" }), actor: colleague });
+
+    expect(store.getThreadSession(threadKey)?.sessionId).toBe("session-1");
+    expect(store.getThreadFork(threadKey, colleague)?.sessionId).toBe("session-2");
+    expect(store.getThreadFork(threadKey, "microsoft:someone-else")).toBeNull();
+    expect(store.getThreadRecord(threadKey, "session-2")?.actor).toBe(colleague);
+    expect(store.getThreadRecord(threadKey, "session-3")).toBeNull();
+
+    store.updateThreadRecord(threadKey, "session-2", {
+      turnState: "working",
+      lastMessageId: "m-2",
+    });
+    expect(store.getThreadFork(threadKey, colleague)).toMatchObject({
+      turnState: "working",
+      lastMessageId: "m-2",
+    });
+    expect(store.getThreadSession(threadKey)).toMatchObject({
+      turnState: "idle",
+      lastMessageId: null,
+    });
+
+    expect(store.closeThreadRecord(threadKey, "session-2")).toBe(true);
+    expect(store.getThreadFork(threadKey, colleague)?.closed).toBe(true);
+    expect(store.getThreadSession(threadKey)?.closed).toBe(false);
+    expect(store.closeThreadRecord(threadKey, "session-3")).toBe(false);
+  });
+
   it("replaces the mapping when a new session starts in the same thread", () => {
     const store = open();
     store.putThreadSession(newSession());

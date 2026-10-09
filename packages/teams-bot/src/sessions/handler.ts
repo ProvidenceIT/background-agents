@@ -151,7 +151,7 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
       await reply(ctx, renderFailure(result, deps.webAppUrl, STOP_FAILED_MESSAGE));
       return;
     }
-    deps.store.updateThreadSession(ctx.threadKey, { turnState: "idle" });
+    deps.store.updateThreadRecord(ctx.threadKey, thread.sessionId, { turnState: "idle" });
     await reply(ctx, STOP_REQUESTED_MESSAGE);
   }
 
@@ -198,6 +198,8 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
         // The thread's session runs on a subscription home this sender may
         // not spend: the follow-up becomes a session of the sender's own,
         // resolved for them (and refused with its own message if none fits).
+        // It is the sender's fork: the thread keeps its session for its
+        // owner, and the sender's later replies go to the fork.
         deps.log.info("follow_up.forked", {
           trace_id: ctx.traceId,
           thread_key: ctx.threadKey,
@@ -213,6 +215,7 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
           prompt: content,
           options: { ...command.options, model: selection.selection.model },
           traceId: ctx.traceId,
+          fork: true,
         });
         return;
       }
@@ -222,7 +225,7 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
         // it can tell us the session is really gone; anyone else is told they
         // cannot reach it, and the thread stays open for its owner.
         if (thread.actor === ctx.actor) {
-          deps.store.closeThreadSession(ctx.threadKey, thread.sessionId);
+          deps.store.closeThreadRecord(ctx.threadKey, thread.sessionId);
           await reply(ctx, THREAD_CLOSED_MESSAGE);
           return;
         }
@@ -239,7 +242,7 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
       return;
     }
     const working = await reply(ctx, WORKING_TEXT);
-    deps.store.updateThreadSession(ctx.threadKey, {
+    deps.store.updateThreadRecord(ctx.threadKey, thread.sessionId, {
       progressActivityId: working.id || null,
       lastMessageId: prompt.data.messageId,
       turnState: "working",
@@ -254,7 +257,10 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
   }
 
   async function dispatch(ctx: ThreadContext): Promise<void> {
-    const thread = deps.store.getThreadSession(ctx.threadKey);
+    // A sender with a fork in this thread talks to it; everyone else to the
+    // thread's own session.
+    const fork = deps.store.getThreadFork(ctx.threadKey, ctx.actor);
+    const thread = fork && !fork.closed ? fork : deps.store.getThreadSession(ctx.threadKey);
     const text = normalizeTeamsText(ctx.activity);
     const command = parseCommand(text, { inThread: thread !== null });
     switch (command.kind) {

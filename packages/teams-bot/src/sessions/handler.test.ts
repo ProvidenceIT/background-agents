@@ -810,16 +810,19 @@ describe("POST /api/messages", () => {
     const colleague = "99999999-8888-7777-6666-555555555555";
     const h = harness({
       [`GET /channel-bindings/msteams/${CHANNEL_ID}`]: boundChannel,
-      "POST /sessions/session-1/prompt": () =>
-        json(
-          {
-            error: "no eligible subscription home for anthropic: refused",
-            message: "no eligible subscription home for anthropic: refused",
-            code: "no_eligible_home",
-            reason: "no_eligible_home",
-          },
-          403
-        ),
+      // The thread's session serves its owner and refuses anyone else.
+      "POST /sessions/session-1/prompt": (request) =>
+        request.headers[ACTOR_HEADER.toLowerCase()] === `microsoft:${USER_OID}`
+          ? json({ messageId: "message-owner", status: "queued" })
+          : json(
+              {
+                error: "no eligible subscription home for anthropic: refused",
+                message: "no eligible subscription home for anthropic: refused",
+                code: "no_eligible_home",
+                reason: "no_eligible_home",
+              },
+              403
+            ),
       "POST /sessions": () => json({ sessionId: "session-2", status: "created" }),
       "POST /sessions/session-2/prompt": promptQueued,
     });
@@ -858,10 +861,45 @@ describe("POST /api/messages", () => {
     const texts = h.replies().map((reply) => reply.text);
     expect(texts).not.toContain(SESSION_NOT_ACCESSIBLE_MESSAGE);
     expect(texts).toEqual([WORKING_TEXT]);
+    // The thread keeps its own session for its owner; the fork is the colleague's.
     expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
-      sessionId: "session-2",
-      actor: `microsoft:${colleague}`,
+      sessionId: "session-1",
+      actor: `microsoft:${USER_OID}`,
     });
+    expect(h.store.getThreadFork(THREAD_KEY, `microsoft:${colleague}`)).toMatchObject({
+      sessionId: "session-2",
+    });
+
+    // The owner's next reply goes to the owner's session, on the owner's own home.
+    await h.post(
+      activityFixture({ id: "3", replyToId: ROOT_ID, text: "<at>Open-Inspect</at> and the tests" })
+    );
+    // The colleague's next reply goes to their fork, without another refusal.
+    await h.post(
+      activityFixture({
+        id: "4",
+        replyToId: ROOT_ID,
+        from: { id: "29:2user", name: "Riley", aadObjectId: colleague },
+        text: "<at>Open-Inspect</at> and the changelog",
+      })
+    );
+    const prompts = h.controlPlaneRemote.requests
+      .filter((request) => request.method === "POST" && request.url.endsWith("/prompt"))
+      .map((request) => [
+        new URL(request.url).pathname,
+        request.headers[ACTOR_HEADER.toLowerCase()],
+      ]);
+    expect(prompts).toEqual([
+      ["/sessions/session-1/prompt", `microsoft:${colleague}`],
+      ["/sessions/session-2/prompt", `microsoft:${colleague}`],
+      ["/sessions/session-1/prompt", `microsoft:${USER_OID}`],
+      ["/sessions/session-2/prompt", `microsoft:${colleague}`],
+    ]);
+    expect(
+      h.controlPlaneRemote.requests.filter(
+        (request) => request.method === "POST" && new URL(request.url).pathname === "/sessions"
+      )
+    ).toHaveLength(1);
   });
 
   it("renders the refusal verbatim when the sender's own session is refused too", async () => {
