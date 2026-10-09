@@ -12,6 +12,7 @@ import type { SessionModelProviderAuthInput } from "../model-provider-accounts/p
 import { SessionIndexStore, type SessionEntry } from "../db/session-index";
 import type { SqlDatabase } from "../db/sql-database";
 import { createLogger } from "../logger";
+import type { RequestContext } from "../http/request-context";
 import { bindAuthHomePromptAudit } from "./audit";
 import {
   authHomeSelectionSource,
@@ -172,4 +173,10 @@ export async function enforceAuthHomeTurn(input: AuthHomeTurnInput): Promise<Res
     channel: input.channel,
   }).run();
   return null;
+}
+
+/** The trigger kind of a later turn, by who sends it: a person prompts, a bot relays. */
+export function turnTriggerKind(principal: RequestContext["principal"]): TriggerKind {
+  if (principal?.kind !== "service" || principal.service === "web") return "prompt";
+  return principal.service === "github-bot" ? "pr_event" : "mention";
 }

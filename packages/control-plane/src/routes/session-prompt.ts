@@ -18,6 +18,7 @@ import {
 } from "../routing/identity-enforcement";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { SessionIndexStore } from "../db/session-index";
+import { enforceAuthHomeTurn, turnTriggerKind } from "../auth-homes/session-binding";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
@@ -123,6 +124,20 @@ export async function handleSessionPrompt(
         )) ?? undefined;
     }
   }
+
+  // A session bound to an auth home serves this turn only for an actor
+  // eligible for that home under the current sharing policy.
+  const authHomeRefusal = await enforceAuthHomeTurn({
+    db: ctx.db,
+    requestId: ctx.request_id,
+    sessionId,
+    session: ctx.sessionAdmission?.row,
+    actorUserId: canonicalUserId ?? null,
+    triggerKind: turnTriggerKind(ctx.principal),
+    model: body.model,
+    channel: "prompt",
+  });
+  if (authHomeRefusal) return authHomeRefusal;
 
   const promptRequest = {
     content: body.content,

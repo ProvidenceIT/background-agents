@@ -1,3 +1,8 @@
+import { DatabaseSync } from "node:sqlite";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { applyMigrations } from "../node/migrate";
+import { createNodeSqlDatabase } from "../node/sqlite-database";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   TEST_BACKGROUND_TASK_CONTEXT,
@@ -14,6 +19,17 @@ import { AdmissionDeniedError } from "../auth/user/admission-policy";
 import { UserStore } from "../db/user-store";
 import type { ProviderAccountClient } from "../source-control/github-credential-authority";
 import { withSessionRuntime } from "./session-route";
+import { HOUSEHOLD, seedHousehold } from "../auth-homes/auth-homes.test-support";
+
+async function createHouseholdFixture() {
+  const sqlite = new DatabaseSync(":memory:");
+  applyMigrations(
+    sqlite,
+    resolve(dirname(fileURLToPath(import.meta.url)), "../../../../terraform/d1/migrations")
+  );
+  const db = createNodeSqlDatabase(sqlite);
+  return { ...(await seedHousehold(db)), close: () => db.close() };
+}
 
 function routeFor(path: string): { handler: typeof handleSessionWsToken; params: { id: string } } {
   const match = path.match(routePathPattern("/sessions/:id/ws-token"));
@@ -26,6 +42,7 @@ function accessDatabase() {
   const statement = {
     bind: vi.fn(() => statement),
     run,
+    first: vi.fn(async () => null),
   };
   return {
     db: { prepare: vi.fn(() => statement) } as unknown as SqlDatabase,
@@ -113,7 +130,7 @@ describe("session ws-token route (non-GitHub display fields)", () => {
     );
 
     expect(response.status).toBe(409);
-    expect(access.db.prepare).not.toHaveBeenCalled();
+    expect(access.run).not.toHaveBeenCalled();
   });
 
   it("forwards null SCM display fields accepted by the session contract", async () => {
@@ -322,5 +339,59 @@ describe("GitHub browser attribution availability", () => {
     vi.mocked(api.getAccessToken).mockResolvedValue({ accessToken: 123 });
     await expect(join()).rejects.toThrow();
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("session ws-token route on an auth-home session", () => {
+  let fixture: Awaited<ReturnType<typeof createHouseholdFixture>>;
+
+  beforeEach(async () => {
+    fixture = await createHouseholdFixture();
+  });
+  afterEach(() => fixture.close());
+
+  async function mint(userId: string) {
+    const fetch = vi.fn(async () => Response.json({ token: "token-1" }));
+    const ctx = { ...createContext(fixture.db), principal: { kind: "user" as const, userId } };
+    ctx.authorization = { ...ctx.authorization!, userId };
+    const response = await handleSessionWsToken(
+      new Request(`https://test.local/sessions/${HOUSEHOLD.sessionId}/ws-token`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+      createEnv(fetch),
+      { id: HOUSEHOLD.sessionId },
+      withSessionRuntime(createEnv(fetch), ctx)
+    );
+    return { response, minted: fetch.mock.calls.length };
+  }
+
+  it("mints for the colleague under household with H1 shared, refuses under owner_only", async () => {
+    const served = await mint(HOUSEHOLD.colleague);
+    expect(served.response.status).toBe(200);
+    expect(served.minted).toBe(1);
+    expect(await fixture.auditRows("credential.auth_home_prompt")).toEqual([
+      {
+        actor: HOUSEHOLD.colleague,
+        metadata: expect.objectContaining({
+          home_owner: HOUSEHOLD.owner,
+          actor: HOUSEHOLD.colleague,
+          channel: "ws_token",
+        }),
+      },
+    ]);
+
+    await fixture.setPolicy("owner_only");
+    const refused = await mint(HOUSEHOLD.colleague);
+    expect(refused.response.status).toBe(403);
+    expect(await refused.response.json()).toMatchObject({ code: "no_eligible_home" });
+    expect(refused.minted).toBe(0);
+  });
+
+  it("refuses an unenrolled user under both policies", async () => {
+    expect((await mint(HOUSEHOLD.unenrolled)).response.status).toBe(403);
+    await fixture.setPolicy("owner_only");
+    expect((await mint(HOUSEHOLD.unenrolled)).response.status).toBe(403);
+    expect((await mint(HOUSEHOLD.owner)).response.status).toBe(200);
   });
 });

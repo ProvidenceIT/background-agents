@@ -13,6 +13,7 @@ import {
 import type { Env } from "../types";
 import { error, GITHUB_USER_OR_SERVICE_ROUTE, requireSession } from "./shared";
 import { parseJsonBody } from "./body";
+import { enforceAuthHomeTurn, turnTriggerKind } from "../auth-homes/session-binding";
 import { dispatchSession, type SessionRouteContext } from "./session-route";
 
 // Optional attribution must leave time for minting before the browser proxy aborts.
@@ -42,6 +43,18 @@ export async function handleSessionWsToken(
   if (!authorization) return error("Authorization unavailable", 503);
   const userId = enforcement.enforced.participantUserId;
   const canonicalUserId = authorization.userId;
+  // A websocket carries the actor's later turns, so it is minted only for an
+  // actor eligible for the session's auth home.
+  const authHomeRefusal = await enforceAuthHomeTurn({
+    db: ctx.db,
+    requestId: ctx.request_id,
+    sessionId,
+    session: ctx.sessionAdmission?.row,
+    actorUserId: canonicalUserId,
+    triggerKind: turnTriggerKind(ctx.principal),
+    channel: "ws_token",
+  });
+  if (authHomeRefusal) return authHomeRefusal;
   const isGitHub = resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github";
   let enrichment: GitHubEnrichment | null = null;
   if (isGitHub) {

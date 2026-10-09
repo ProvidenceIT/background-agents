@@ -1,3 +1,8 @@
+import { DatabaseSync } from "node:sqlite";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { applyMigrations } from "../node/migrate";
+import { createNodeSqlDatabase } from "../node/sqlite-database";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SANDBOX_ERROR_BODY_MAX_BYTES } from "@open-inspect/shared/types/sandbox-events";
 import type { PermissionId } from "@open-inspect/shared/rbac";
@@ -6,7 +11,9 @@ import type * as AuthenticateModule from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
 import { SessionIndexStore } from "../db/session-index";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
+import { HOUSEHOLD, seedHousehold } from "../auth-homes/auth-homes.test-support";
 import {
+  authorizationDatabase,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
   createTestRequestHandler,
@@ -16,6 +23,16 @@ import {
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
+
+async function createHouseholdFixture() {
+  const sqlite = new DatabaseSync(":memory:");
+  applyMigrations(
+    sqlite,
+    resolve(dirname(fileURLToPath(import.meta.url)), "../../../../terraform/d1/migrations")
+  );
+  const db = createNodeSqlDatabase(sqlite);
+  return { ...(await seedHousehold(db)), close: () => db.close() };
+}
 
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
 
@@ -867,5 +884,54 @@ describe("session runtime proxy routes", () => {
       expect(get).toHaveBeenCalledOnce();
       expect(fetch).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("sandbox access on an auth-home session", () => {
+  let fixture: Awaited<ReturnType<typeof createHouseholdFixture>>;
+  let proxied: number;
+
+  beforeEach(async () => {
+    fixture = await createHouseholdFixture();
+    proxied = 0;
+    mocks.authenticate.mockImplementation(async (request: Request) => ({
+      principal: { kind: "user", userId: request.headers.get("x-test-user") },
+      request,
+    }));
+  });
+  afterEach(() => fixture.close());
+
+  function sandboxAccess(userId: string) {
+    const env = {
+      ...TEST_SERVICE_SECRETS,
+      DB: authorizationDatabase({
+        userId,
+        statement: (sql) => fixture.db.prepare(sql),
+        batch: (statements) => fixture.db.batch(statements),
+      }),
+      SESSION: fakeSessionRuntimeDispatch(async () => {
+        proxied += 1;
+        return Response.json({ vncUrl: null, codeServerUrl: null });
+      }),
+    } as unknown as Env;
+    return handleRequest(
+      new Request(`https://test.local/sessions/${HOUSEHOLD.sessionId}/sandbox-access`, {
+        headers: { "x-test-user": userId },
+      }),
+      env,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+  }
+
+  it("follows the home's turn eligibility under both policies", async () => {
+    expect((await sandboxAccess(HOUSEHOLD.colleague)).status).toBe(200);
+    expect((await sandboxAccess(HOUSEHOLD.unenrolled)).status).toBe(403);
+    await fixture.setPolicy("owner_only");
+    const refused = await sandboxAccess(HOUSEHOLD.colleague);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: "no_eligible_home" });
+    expect((await sandboxAccess(HOUSEHOLD.owner)).status).toBe(200);
+    expect(proxied).toBe(2);
+    expect(await fixture.auditRows("credential.auth_home_prompt")).toHaveLength(2);
   });
 });

@@ -43,6 +43,7 @@ import {
 import { parseBody, parseJsonBody } from "./body";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { canManageSessionBudget } from "../session/budget-authorization";
+import { enforceAuthHomeTurn, turnTriggerKind } from "../auth-homes/session-binding";
 
 const participantsResponseSchema = z.object({
   participants: z.array(
@@ -337,6 +338,29 @@ async function handleBudgetUpdate(
 }
 
 /** Every proxied session operation, by the name its route is known by. */
+/**
+ * Sandbox access hands a person the running sandbox, where the session's
+ * auth home is mounted: only an actor eligible for that home receives it.
+ * Sandbox principals (the session's own runtime) are not gated.
+ */
+function authHomeGated(handler: ProxyHandler): ProxyHandler {
+  return async (request, env, params, ctx) => {
+    if (ctx.principal?.kind !== "sandbox") {
+      const refusal = await enforceAuthHomeTurn({
+        db: ctx.db,
+        requestId: ctx.request_id,
+        sessionId: params.id,
+        session: ctx.sessionAdmission?.row,
+        actorUserId: ctx.authorization?.userId ?? null,
+        triggerKind: turnTriggerKind(ctx.principal),
+        channel: "sandbox_access",
+      });
+      if (refusal) return refusal;
+    }
+    return handler(request, env, params, ctx);
+  };
+}
+
 const LIFECYCLE = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
   authorization: requireSession("lifecycle"),
@@ -350,7 +374,11 @@ sessionRuntimeProxyRoutes.get(
     ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     authorization: requireSession("sandbox"),
   }),
-  (c) => dispatchSession(c, simpleProxy({ internalPath: SessionInternalPaths.sandboxAccess }))
+  (c) =>
+    dispatchSession(
+      c,
+      authHomeGated(simpleProxy({ internalPath: SessionInternalPaths.sandboxAccess }))
+    )
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id",
@@ -466,7 +494,9 @@ sessionRuntimeProxyRoutes.get(
   (c) =>
     dispatchSession(
       c,
-      simpleProxy({ internalPath: SessionInternalPaths.tunnelUrls, runtimeMethod: "GET" })
+      authHomeGated(
+        simpleProxy({ internalPath: SessionInternalPaths.tunnelUrls, runtimeMethod: "GET" })
+      )
     )
 );
 sessionRuntimeProxyRoutes.patch("/sessions/:id/title", LIFECYCLE, (c) =>
