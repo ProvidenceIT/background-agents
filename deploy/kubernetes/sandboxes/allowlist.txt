@@ -8,6 +8,7 @@ registry.npmjs.org
 pypi.org
 files.pythonhosted.org
 api.anthropic.com
+api.openai.com
 chatgpt.com
 auth.openai.com
 models.dev
