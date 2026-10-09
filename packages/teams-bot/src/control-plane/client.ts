@@ -301,6 +301,8 @@ export class ControlPlaneClient {
     const body = JSON.stringify({
       content: input.content,
       source: "msteams",
+      // A Teams turn is always a mention of the bot.
+      triggerKind: "mention",
       ...(input.model ? { model: input.model } : {}),
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       callbackContext: input.callbackContext,

@@ -358,6 +358,7 @@ describe("POST /api/messages", () => {
     expect(prompt.body).toEqual({
       content: "add a README badge",
       source: "msteams",
+      triggerKind: "mention",
       model: DEFAULT_MODEL,
       callbackContext: {
         source: "msteams",
@@ -573,6 +574,7 @@ describe("POST /api/messages", () => {
     expect(prompt.body).toEqual({
       content: "add a README badge",
       source: "msteams",
+      triggerKind: "mention",
       model: "zai-coding-plan/glm-5.3",
       callbackContext: {
         source: "msteams",
@@ -721,6 +723,7 @@ describe("POST /api/messages", () => {
       content:
         "## Teams Thread Context\n\nThe user quoted these earlier messages:\n\n- Casey: add a README badge\n\nalso update the docs",
       source: "msteams",
+      triggerKind: "mention",
       callbackContext: {
         source: "msteams",
         conversationId: THREAD_KEY,

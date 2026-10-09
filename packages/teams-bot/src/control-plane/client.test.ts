@@ -137,6 +137,7 @@ describe("ControlPlaneClient", () => {
     expect(remote.requests[0].body).toEqual({
       content: "add a README badge",
       source: "msteams",
+      triggerKind: "mention",
       callbackContext,
     });
     await expectValidSig1(remote.requests[0]);

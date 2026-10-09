@@ -173,6 +173,11 @@ export const sendPromptRequestSchema = z
     reasoningEffort: z.string().optional(),
     attachments: z.unknown().optional(),
     callbackContext: z.unknown().optional(),
+    /**
+     * What a bot relays this turn as (`mention`, `issue_label`, `pr_event`);
+     * the subscription-home kind gates read it. Refused from a person.
+     */
+    triggerKind: triggerKindSchema.optional(),
   })
   .refine(
     (prompt) =>

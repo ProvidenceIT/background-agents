@@ -43,14 +43,18 @@ describe("POST /sessions/:id/prompt on an auth-home session", () => {
   });
   afterEach(() => fixture.close());
 
-  function prompt(userId: string, body: Record<string, unknown> = {}) {
+  function prompt(
+    userId: string,
+    body: Record<string, unknown> = {},
+    principal: SessionRouteContext["principal"] = { kind: "user", userId }
+  ) {
     const ctx: SessionRouteContext = {
       db: fixture.db,
       metrics: {} as SessionRouteContext["metrics"],
       request_id: `req-${userId}`,
       trace_id: "trace-prompt",
       executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
-      principal: { kind: "user", userId },
+      principal,
       sessionRuntime: {
         fetch: async () => {
           forwarded += 1;
@@ -105,6 +109,35 @@ describe("POST /sessions/:id/prompt on an auth-home session", () => {
     expect(refused.status).toBe(403);
     expect(await refused.json()).toMatchObject({ code: "no_eligible_home" });
     expect(forwarded).toBe(0);
+  });
+
+  it("gates a bot's turn on the kind it names, which only a bot may name", async () => {
+    await fixture.db
+      .prepare("UPDATE user_auth_homes SET kinds_enabled = ? WHERE id = ?")
+      .bind(JSON.stringify(["prompt", "mention"]), HOUSEHOLD.homeId)
+      .run();
+    const bot: SessionRouteContext["principal"] = {
+      kind: "service",
+      service: "slack-bot",
+      actor: {
+        provider: "slack",
+        providerUserId: "U1",
+        canonicalUserId: HOUSEHOLD.owner,
+        participantUserId: "slack:U1",
+      },
+    };
+
+    const labelled = await prompt(HOUSEHOLD.owner, { triggerKind: "issue_label" }, bot);
+    expect(labelled.status).toBe(403);
+    expect(await labelled.json()).toMatchObject({ reason: "kind_disabled" });
+    expect((await prompt(HOUSEHOLD.owner, { triggerKind: "mention" }, bot)).status).toBe(200);
+    expect(await fixture.auditRows("credential.auth_home_prompt")).toEqual([
+      expect.objectContaining({ metadata: expect.objectContaining({ trigger_kind: "mention" }) }),
+    ]);
+
+    expect((await prompt(HOUSEHOLD.owner, { triggerKind: "schedule" }, bot)).status).toBe(400);
+    expect((await prompt(HOUSEHOLD.owner, { triggerKind: "mention" })).status).toBe(400);
+    expect(forwarded).toBe(1);
   });
 
   it("refuses switching the turn to a provider the session's home does not carry", async () => {

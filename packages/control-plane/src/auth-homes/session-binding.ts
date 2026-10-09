@@ -179,6 +179,9 @@ export async function admitAuthHomeTurn(
     db: input.db,
     actorUserId: input.actorUserId,
     homeId,
+    triggerKind: input.triggerKind,
+    provider,
+    sessionProvider: providerForModel(session.model),
   });
   if (resolution.kind === "refused") {
     logger.info("auth_home.turn_refused", {
@@ -211,11 +214,28 @@ export async function enforceAuthHomeTurn(input: AuthHomeTurnInput): Promise<Res
   return refusal ? authHomeRefusalResponse(refusal.reason, refusal.provider) : null;
 }
 
-/** The trigger kind of a later turn, by who sends it: a person prompts, a bot relays. */
-export function turnTriggerKind(principal: RequestContext["principal"]): TriggerKind {
+/**
+ * The trigger kind of a later turn, by who sends it: a person always
+ * prompts; a bot relays and names the kind (`mention`, `issue_label`,
+ * `pr_event`), or else is taken to relay a mention. GitHub's bot only relays
+ * pull-request events.
+ */
+export function turnTriggerKind(
+  principal: RequestContext["principal"],
+  named?: TriggerKind
+): TriggerKind {
   if (principal?.kind !== "service" || principal.service === "web") return "prompt";
+  if (named) return named;
   return principal.service === "github-bot" ? "pr_event" : "mention";
 }
+
+/** Kinds a bot may name for a later turn; `child` and `schedule` are the control plane's. */
+export const BOT_TURN_TRIGGER_KINDS: readonly TriggerKind[] = [
+  "prompt",
+  "mention",
+  "issue_label",
+  "pr_event",
+];
 
 /** Error code of the 409 that keeps an unshared home's session from being widened. */
 export const AUTH_HOME_NOT_SHARED = "auth_home_not_shared";

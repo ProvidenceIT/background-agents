@@ -18,7 +18,11 @@ import {
 } from "../routing/identity-enforcement";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { SessionIndexStore } from "../db/session-index";
-import { enforceAuthHomeTurn, turnTriggerKind } from "../auth-homes/session-binding";
+import {
+  BOT_TURN_TRIGGER_KINDS,
+  enforceAuthHomeTurn,
+  turnTriggerKind,
+} from "../auth-homes/session-binding";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
@@ -72,6 +76,14 @@ export async function handleSessionPrompt(
 
   const attachments = validateAttachments(body.attachments);
   if (attachments instanceof Response) return attachments;
+  if (body.triggerKind !== undefined) {
+    if (turnTriggerKind(ctx.principal) === "prompt") {
+      return error("triggerKind is set by bots only", 400);
+    }
+    if (!BOT_TURN_TRIGGER_KINDS.includes(body.triggerKind)) {
+      return error(`Trigger kind '${body.triggerKind}' is assigned by the control plane`, 400);
+    }
+  }
 
   let callbackContext: CallbackContext | undefined;
   if (mayAttachCallbackContext(ctx) && body.callbackContext !== undefined) {
@@ -133,7 +145,7 @@ export async function handleSessionPrompt(
     sessionId,
     session: ctx.sessionAdmission?.row,
     actorUserId: canonicalUserId ?? null,
-    triggerKind: turnTriggerKind(ctx.principal),
+    triggerKind: turnTriggerKind(ctx.principal, body.triggerKind),
     model: body.model,
     channel: "prompt",
   });

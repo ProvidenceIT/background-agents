@@ -90,7 +90,13 @@ export async function sendPrompt(
   params: { content: string; authorId: string }
 ): Promise<string> {
   const url = `https://internal/sessions/${sessionId}/prompt`;
-  const bodyText = JSON.stringify({ content: params.content, source: "github" });
+  // Every turn this bot relays is a pull-request event; the control plane
+  // gates the session's subscription home on that kind.
+  const bodyText = JSON.stringify({
+    content: params.content,
+    source: "github",
+    triggerKind: "pr_event",
+  });
   const response = await signedControlPlaneFetch(env, {
     method: "POST",
     url,

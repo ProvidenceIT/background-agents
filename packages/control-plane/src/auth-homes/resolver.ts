@@ -181,14 +181,40 @@ export interface CheckTurnEligibilityInput {
   actorUserId: string | null;
   /** The home recorded on the session at create. */
   homeId: string;
+  /** What sends this turn: a person prompts, a bot relays a mention or an event. */
+  triggerKind: TriggerKind;
+  /** The provider this turn spends (the session's model, or the one it switches to). */
+  provider: string;
+  /** The provider the session was created on, whose gates ran at create. */
+  sessionProvider: string;
+}
+
+/**
+ * The home's own gates for a later turn of `triggerKind` on `provider`: the
+ * kind must be enabled, and OpenAI (the Codex path) needs background consent
+ * for every kind but `prompt`. Repository visibility was checked at create
+ * only for a session created on OpenAI, so a later turn may move to OpenAI
+ * only from such a session; anything else fails closed as `public_repo`.
+ */
+function laterTurnGateFailure(
+  home: AuthHome,
+  input: Pick<CheckTurnEligibilityInput, "triggerKind" | "provider" | "sessionProvider">
+): AuthHomeRefusalReason | null {
+  if (!home.kindsEnabled.includes(input.triggerKind)) return "kind_disabled";
+  if (input.provider === CODEX_PROVIDER) {
+    if (input.sessionProvider !== CODEX_PROVIDER) return "public_repo";
+    if (input.triggerKind !== "prompt" && home.backgroundConsentAt === null) return "no_consent";
+  }
+  return null;
 }
 
 /**
  * Whether `actorUserId` may spend the session's home on a later turn under the
  * current policy: its owner always; under `household`, any enrolled person
- * when the home is shared. A session's home is fixed at create, so this never
- * picks another home, and concurrency is not re-counted (the session already
- * holds its place).
+ * when the home is shared. The home's kind and consent gates apply to every
+ * turn as they do at create. A session's home is fixed at create, so this
+ * never picks another home, and concurrency is not re-counted (the session
+ * already holds its place).
  */
 export async function checkTurnEligibility(
   input: CheckTurnEligibilityInput
@@ -198,10 +224,21 @@ export async function checkTurnEligibility(
   if (!home || home.status !== "active") return refused("auth_home_unavailable", home ?? undefined);
   const actor = input.actorUserId;
   if (!actor) return refused("no_eligible_home", home);
-  if (owns(home, actor)) return served("own", home);
+  const eligibility = await actorEligibility(input.db, store, home, actor);
+  if (eligibility.kind === "refused") return eligibility;
+  const failure = laterTurnGateFailure(home, input);
+  return failure ? refused(failure, home) : eligibility;
+}
 
+async function actorEligibility(
+  db: SqlDatabase,
+  store: UserAuthHomeStore,
+  home: AuthHome,
+  actor: string
+): Promise<AuthHomeResolution> {
+  if (owns(home, actor)) return served("own", home);
   const [policy, actorHomes] = await Promise.all([
-    new SubscriptionSharingStore(input.db).get(),
+    new SubscriptionSharingStore(db).get(),
     store.listForUser(actor),
   ]);
   const enrolled = actorHomes.some((candidate) => candidate.status === "active");

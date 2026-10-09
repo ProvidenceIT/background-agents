@@ -311,10 +311,52 @@ describe("auth-home resolver", () => {
   });
 
   describe("checkTurnEligibility", () => {
+    const promptTurn = {
+      triggerKind: "prompt",
+      provider: "anthropic",
+      sessionProvider: "anthropic",
+    } as const;
+
+    it("applies the home's kind and Codex consent gates to every later turn", async () => {
+      await homes.register({
+        id: "H1",
+        ownerUserIds: [OWNER],
+        pvcName: "sf-home-owner",
+        nodeName: "sandbox-node-1",
+        providers: ["anthropic", "openai"],
+        kindsEnabled: ["prompt"],
+        now: REGISTERED_AT,
+      });
+      const check = (turn: Partial<typeof promptTurn> | Record<string, string>) =>
+        checkTurnEligibility({ db, actorUserId: OWNER, homeId: "H1", ...promptTurn, ...turn });
+
+      expect(await check({})).toMatchObject({ kind: "own" });
+      // A Teams mention in the thread of a web session the owner allowed only prompts on.
+      expect(await check({ triggerKind: "mention" })).toMatchObject({
+        kind: "refused",
+        reason: "kind_disabled",
+      });
+
+      await homes.update("H1", { kindsEnabled: ["prompt", "pr_event"] });
+      const codex = { provider: "openai", sessionProvider: "openai" };
+      expect(await check({ ...codex, triggerKind: "pr_event" })).toMatchObject({
+        kind: "refused",
+        reason: "no_consent",
+      });
+      expect(await check({ ...codex })).toMatchObject({ kind: "own" });
+      // Visibility was checked at create only for a session made on OpenAI.
+      expect(await check({ provider: "openai" })).toMatchObject({
+        kind: "refused",
+        reason: "public_repo",
+      });
+      await homes.update("H1", { backgroundConsentAt: REGISTERED_AT });
+      expect(await check({ ...codex, triggerKind: "pr_event" })).toMatchObject({ kind: "own" });
+    });
+
     it("admits the owner always and an enrolled colleague only on a shared home under household", async () => {
       await registerHouseholdHomes();
       const check = (actorUserId: string | null) =>
-        checkTurnEligibility({ db, actorUserId, homeId: "H1" });
+        checkTurnEligibility({ db, actorUserId, homeId: "H1", ...promptTurn });
 
       expect(await check(OWNER)).toEqual({ kind: "own", homeId: "H1", homeOwnerUserId: OWNER });
       expect(await check(COLLEAGUE)).toEqual({
@@ -342,11 +384,15 @@ describe("auth-home resolver", () => {
     it("refuses every turn on a removed or disabled home", async () => {
       await registerHouseholdHomes();
       await homes.update("H1", { status: "disabled" });
-      expect(await checkTurnEligibility({ db, actorUserId: OWNER, homeId: "H1" })).toMatchObject({
+      expect(
+        await checkTurnEligibility({ db, actorUserId: OWNER, homeId: "H1", ...promptTurn })
+      ).toMatchObject({
         kind: "refused",
         reason: "auth_home_unavailable",
       });
-      expect(await checkTurnEligibility({ db, actorUserId: OWNER, homeId: "missing" })).toEqual({
+      expect(
+        await checkTurnEligibility({ db, actorUserId: OWNER, homeId: "missing", ...promptTurn })
+      ).toEqual({
         kind: "refused",
         reason: "auth_home_unavailable",
       });
