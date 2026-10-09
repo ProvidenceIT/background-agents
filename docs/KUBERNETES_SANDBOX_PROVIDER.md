@@ -282,6 +282,13 @@ turn or a restored sandbox resumes the conversation. The operator creates and bi
 the home's own claim; a missing one refuses the launch with `auth_home_unavailable`, a missing
 `codex/auth.json` stops the harness with a request to log in again.
 
+Back the two claims with sibling directories on the node, never one inside the other, for example
+`<root>/<name>/main` (holding `claude/` and `env`) for `sf-home-<name>` and `<root>/<name>/codex`
+(holding `codex/`) for `sf-home-<name>-codex`. A home volume that contained the Codex directory
+would put the Codex login in every Claude or OpenCode session on the home, outside the seat. Log in
+with the Codex claim mounted at `/home/sandbox/.sf-auth` and
+`CODEX_HOME=/home/sandbox/.sf-auth/codex`, which is where a session looks for it.
+
 Codex refreshes the login's single-use token itself, so two sandboxes must never run Codex on the
 same claim. The control plane holds a per-home **Codex seat** (`auth_home_leases`, with the FIFO
 `auth_home_lease_queue`) and admits a Codex launch only to its holder:
