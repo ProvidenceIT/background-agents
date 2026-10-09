@@ -573,7 +573,7 @@ export class PrebuiltImageUnavailableError extends SandboxProviderError {
 }
 
 /** Error code carried by `AuthHomeUnavailableError`; also an auth-home refusal reason. */
-export const AUTH_HOME_UNAVAILABLE = "auth_home_unavailable" as const;
+const AUTH_HOME_UNAVAILABLE = "auth_home_unavailable" as const;
 
 /**
  * The launch named a subscription home whose volume claim is missing, not

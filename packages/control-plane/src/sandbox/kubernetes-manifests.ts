@@ -70,7 +70,7 @@ export const SANDBOX_ROLE = "sandbox";
 export const AUTH_HOME_MOUNT_PATH = "/home/sandbox/.sf-auth";
 const AUTH_HOME_VOLUME = "sf-auth";
 /** The env the runtime reads to find the home and the providers it carries. */
-export const AUTH_HOME_ENV = {
+const AUTH_HOME_ENV = {
   path: "SF_AUTH_HOME",
   providers: "SF_AUTH_HOME_PROVIDERS",
 } as const;

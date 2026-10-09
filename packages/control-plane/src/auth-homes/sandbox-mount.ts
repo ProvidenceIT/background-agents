@@ -18,7 +18,7 @@ export interface SessionAuthHomeLookup {
   getForSession(sessionId: string): Promise<SandboxAuthHome | undefined>;
 }
 
-export function toSandboxAuthHome(home: AuthHome): SandboxAuthHome {
+function toSandboxAuthHome(home: AuthHome): SandboxAuthHome {
   return {
     pvcName: home.pvcName,
     ownerUserId: authHomeOwnerUserId(home),
