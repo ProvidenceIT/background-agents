@@ -45,13 +45,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -62,6 +55,11 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { SUBSCRIPTION_TOKEN_PROVIDERS } from "@open-inspect/shared/types/auth-homes";
+
+function isSubscriptionTokenProvider(provider: SubscriptionProviderId): boolean {
+  return SUBSCRIPTION_TOKEN_PROVIDERS.includes(provider);
+}
 
 type Confirm = { account: ModelProviderAccount; action: "disable" | "archive" } | null;
 type Connection =
@@ -260,6 +258,12 @@ export function ProviderAccountsSettings() {
     if (!operationInFlightRef.current) setConfirm(next);
   }
 
+  // Claude's subscription credential lives only in a subscription home; the
+  // control plane refuses to store one, so the page does not offer it.
+  const connectableProviders = providers.filter(
+    (provider) => !isSubscriptionTokenProvider(provider.provider)
+  );
+
   if (loading) return <p className="text-sm text-muted-foreground">Loading provider accounts...</p>;
   if (error) return <ErrorBanner role="alert">Failed to load provider accounts.</ErrorBanner>;
 
@@ -268,7 +272,8 @@ export function ProviderAccountsSettings() {
       <div>
         <h2 className="text-lg font-semibold text-foreground">Provider Accounts</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Connected subscriptions are installation-wide. Credential values are write-only.
+          An account you connect serves your own sessions only. Credential values are write-only.
+          Claude runs on the setup token in your subscription home, not on an account here.
         </p>
       </div>
 
@@ -308,7 +313,7 @@ export function ProviderAccountsSettings() {
           <section className="overflow-hidden rounded-md border border-border-muted">
             <div className="flex items-center justify-between gap-3 border-b border-border-muted p-4">
               <h3 className="font-medium text-foreground">Connected accounts</h3>
-              {canManage && (
+              {canManage && connectableProviders.length > 0 && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button size="sm" variant="subtle" disabled={saving}>
@@ -318,7 +323,7 @@ export function ProviderAccountsSettings() {
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-64">
                     <DropdownMenuLabel>Subscriptions</DropdownMenuLabel>
-                    {providers.map((provider) => (
+                    {connectableProviders.map((provider) => (
                       <DropdownMenuItem
                         key={provider.provider}
                         disabled={saving}
@@ -348,8 +353,7 @@ export function ProviderAccountsSettings() {
                     (item) => item.provider === account.provider
                   );
                   const isDefault = providerDefault?.providerAccountId === account.id;
-                  const isDefaultForAutomation =
-                    isDefault && providerDefault.unattendedMode === "provider_account";
+                  const canReconnect = !isSubscriptionTokenProvider(account.provider);
                   const externalAccountId = account.externalAccountId;
                   return (
                     <div key={account.id} className="p-4">
@@ -382,11 +386,6 @@ export function ProviderAccountsSettings() {
                               >
                                 {accountStatusLabel(account.status)}
                               </span>
-                              {isDefaultForAutomation && (
-                                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
-                                  Default for automation
-                                </span>
-                              )}
                             </div>
                             <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                               <span
@@ -412,7 +411,7 @@ export function ProviderAccountsSettings() {
                         </div>
                         {canManage && (
                           <div className="flex shrink-0 items-center gap-1.5">
-                            {account.status === "reconnect_required" && (
+                            {account.status === "reconnect_required" && canReconnect && (
                               <Button
                                 size="xs"
                                 disabled={saving}
@@ -452,7 +451,7 @@ export function ProviderAccountsSettings() {
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
-                                {account.status !== "reconnect_required" && (
+                                {account.status !== "reconnect_required" && canReconnect && (
                                   <DropdownMenuItem
                                     disabled={saving}
                                     onSelect={() =>
@@ -486,7 +485,8 @@ export function ProviderAccountsSettings() {
                                           setProviderAccountDefault(
                                             account.provider,
                                             account.id,
-                                            providerDefault?.unattendedMode ?? "provider_account"
+                                            // Automated sessions never spend an account.
+                                            "api_key"
                                           ),
                                         "Default updated"
                                       )
@@ -555,7 +555,9 @@ export function ProviderAccountsSettings() {
                           }`}
                         >
                           {account.status === "reconnect_required"
-                            ? "This account cannot start new sessions until it is reconnected."
+                            ? canReconnect
+                              ? "This account cannot start new sessions until it is reconnected."
+                              : "This account cannot be reconnected here: Claude runs on the token in your subscription home."
                             : "This account is disabled and is not available for new sessions."}
                         </p>
                       )}
@@ -564,84 +566,6 @@ export function ProviderAccountsSettings() {
                 })}
               </div>
             )}
-          </section>
-
-          <section className="overflow-hidden rounded-md border border-border-muted">
-            <div className="border-b border-border-muted p-4">
-              <h3 className="font-medium text-foreground">Automated sessions</h3>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Choose credentials for sessions started by automations, bots, or other agents.
-              </p>
-            </div>
-            <div className="divide-y divide-border-muted">
-              {providers.map((provider) => {
-                const providerDefault = defaults.find(
-                  (item) => item.provider === provider.provider
-                );
-                const defaultAccount = accounts.find(
-                  (account) => account.id === providerDefault?.providerAccountId
-                );
-                return (
-                  <div
-                    key={provider.provider}
-                    className="grid gap-3 p-4 sm:grid-cols-[minmax(8rem,0.6fr)_1fr] sm:items-end"
-                  >
-                    <div className="flex items-center gap-2 self-center font-medium text-foreground">
-                      <SubscriptionProviderIcon
-                        provider={provider.provider}
-                        className="size-5 text-primary"
-                      />
-                      {provider.subscriptionName}
-                    </div>
-                    <div>
-                      {providerDefault ? (
-                        <>
-                          <Label htmlFor={`unattended-${provider.provider}`}>
-                            Automated authentication
-                          </Label>
-                          <Select
-                            disabled={!canManage || saving}
-                            value={providerDefault.unattendedMode}
-                            onValueChange={(value: "provider_account" | "api_key") => {
-                              if (!operationInFlightRef.current)
-                                void run(
-                                  () =>
-                                    setProviderAccountDefault(
-                                      provider.provider,
-                                      providerDefault.providerAccountId,
-                                      value
-                                    ),
-                                  "Authentication updated"
-                                );
-                            }}
-                          >
-                            <SelectTrigger id={`unattended-${provider.provider}`}>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="provider_account">
-                                Use default: {defaultAccount?.displayName ?? "Unavailable account"}
-                              </SelectItem>
-                              <SelectItem value="api_key">No account (API key)</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </>
-                      ) : (
-                        <div className="rounded-md border border-dashed border-border-muted px-3 py-2">
-                          <p className="text-xs font-medium text-muted-foreground">
-                            Automated authentication
-                          </p>
-                          <p className="text-sm text-foreground">No default account selected</p>
-                          <p className="mt-0.5 text-xs text-muted-foreground">
-                            Choose Make default from an account above.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
           </section>
         </>
       )}

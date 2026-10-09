@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { toast } from "sonner";
 import type {
@@ -306,7 +306,6 @@ describe("ProviderAccountsSettings", () => {
 
     expect(screen.getByRole("heading", { name: "Connected accounts" })).toBeInTheDocument();
     expect(screen.getByText("Team ChatGPT")).toBeInTheDocument();
-    expect(screen.getByText("SuperGrok")).toBeInTheDocument();
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
       button: 0,
@@ -359,121 +358,42 @@ describe("ProviderAccountsSettings", () => {
     expect(startAuthorization).not.toHaveBeenCalled();
   });
 
-  it("starts Claude through the authorization-code dialog from the provider picker", async () => {
+  it("offers no Claude entry under Add account: its token lives in a subscription home", async () => {
     render(<ProviderAccountsSettings />);
-
-    expect(screen.getByText("Claude")).toBeInTheDocument();
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
-      button: 0,
-      ctrlKey: false,
-    });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Claude" }));
 
     expect(
-      await screen.findByRole("heading", { name: "Connect your Claude account" })
-    ).toBeInTheDocument();
-    expect(startAuthorizationCode).toHaveBeenCalledWith("anthropic", {
-      operation: "create",
-      displayName: "Claude account",
-    });
-    expect(startAuthorization).not.toHaveBeenCalled();
-    const link = await screen.findByRole("link", { name: "Open Anthropic" });
-    expect(link).toHaveAttribute("href", authorizationCodeStart.authorizationUrl);
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(screen.getByLabelText("Authorization code")).toBeInTheDocument();
-    expect(document.body.textContent).not.toMatch(/Claude Code/);
-  });
-
-  it("connects a Claude setup token through the direct path", async () => {
-    render(<ProviderAccountsSettings />);
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
-      button: 0,
-      ctrlKey: false,
-    });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Claude" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Paste a setup token instead" }));
-    fireEvent.change(screen.getByLabelText("Setup token"), {
-      target: { value: "sk-ant-oat01-token" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() =>
-      expect(connectAccount).toHaveBeenCalledWith({
-        provider: "anthropic",
-        displayName: "Claude account",
-        setupToken: "sk-ant-oat01-token",
-      })
-    );
-    await waitFor(() => expect(refresh).toHaveBeenCalled());
-    expect(toast.success).toHaveBeenCalledWith("Claude account connected");
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("heading", { name: "Connect your Claude account" })
-      ).not.toBeInTheDocument()
-    );
-  });
-
-  it("closes the setup token form once the connect succeeds even if the refresh fails", async () => {
-    refresh.mockRejectedValueOnce(new Error("Failed to load provider accounts"));
-    render(<ProviderAccountsSettings />);
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
-      button: 0,
-      ctrlKey: false,
-    });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Claude" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Paste a setup token instead" }));
-    fireEvent.change(screen.getByLabelText("Setup token"), {
-      target: { value: "sk-ant-oat01-token" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("heading", { name: "Connect your Claude account" })
-      ).not.toBeInTheDocument()
-    );
-    expect(connectAccount).toHaveBeenCalledTimes(1);
-    expect(toast.success).toHaveBeenCalledWith("Claude account connected");
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(
-        "Saved, but the account list could not be refreshed. Reload the page to see it."
+      screen.getByText(
+        "An account you connect serves your own sessions only. Credential values are write-only. Claude runs on the setup token in your subscription home, not on an account here."
       )
-    );
+    ).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getAllByRole("menuitem")).toHaveLength(2);
+    expect(within(menu).getByRole("menuitem", { name: "ChatGPT" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "SuperGrok" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "Claude" })).not.toBeInTheDocument();
+    expect(startAuthorizationCode).not.toHaveBeenCalled();
   });
 
-  it("reconnects a Claude account with a setup token against the explicit account", async () => {
-    accountsResult = [claudeAccount];
-    startAuthorizationCode.mockResolvedValue({ ...authorizationCodeStart, operation: "reconnect" });
+  it("offers no reconnect for an existing Claude account, even when it needs one", async () => {
+    accountsResult = [{ ...claudeAccount, status: "reconnect_required" }];
     render(<ProviderAccountsSettings />);
+
+    expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This account cannot be reconnected here: Claude runs on the token in your subscription home."
+      )
+    ).toBeInTheDocument();
     fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team Claude" }), {
       button: 0,
       ctrlKey: false,
     });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Reconnect" }));
-
-    expect(
-      await screen.findByRole("heading", { name: "Reconnect Team Claude" })
-    ).toBeInTheDocument();
-    expect(screen.getByText(ANTHROPIC_CREDENTIAL_ROTATION_WARNING)).toBeInTheDocument();
-    expect(startAuthorizationCode).toHaveBeenCalledWith("anthropic", {
-      operation: "reconnect",
-      providerAccountId: claudeAccount.id,
-    });
-    expect(await screen.findByRole("link", { name: "Open Anthropic" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Paste a setup token instead" }));
-    expect(screen.queryByLabelText("Account name")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Setup token"), {
-      target: { value: "sk-ant-oat01-rotated" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() =>
-      expect(reconnectAccount).toHaveBeenCalledWith(claudeAccount.id, {
-        provider: "anthropic",
-        setupToken: "sk-ant-oat01-rotated",
-      })
-    );
+    expect(await screen.findByRole("menuitem", { name: "Archive" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Reconnect" })).not.toBeInTheDocument();
   });
 
   it("hides Verify for Claude accounts and warns before disabling", async () => {
@@ -484,7 +404,8 @@ describe("ProviderAccountsSettings", () => {
       ctrlKey: false,
     });
 
-    expect(await screen.findByRole("menuitem", { name: "Reconnect" })).toBeInTheDocument();
+    expect(await screen.findByRole("menuitem", { name: "Disable" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Reconnect" })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Verify" })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Copy account ID" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "Disable" }));
@@ -512,44 +433,7 @@ describe("ProviderAccountsSettings", () => {
     expect(liveRegion).not.toHaveTextContent("expires in");
   });
 
-  it("shows an actionable empty state when automated sessions have no default", () => {
-    render(<ProviderAccountsSettings />);
-
-    expect(screen.getByRole("heading", { name: "Automated sessions" })).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Choose credentials for sessions started by automations, bots, or other agents."
-      )
-    ).toBeInTheDocument();
-    expect(screen.queryByLabelText("Automated authentication")).not.toBeInTheDocument();
-    expect(screen.getAllByText("No default account selected")).toHaveLength(3);
-    expect(screen.getAllByText("Choose Make default from an account above.")).toHaveLength(3);
-    expect(screen.getAllByTitle("OpenAI")).not.toHaveLength(0);
-    expect(screen.getAllByTitle("Grok")).not.toHaveLength(0);
-    expect(screen.getAllByTitle("Anthropic")).not.toHaveLength(0);
-  });
-
-  it("names the effective account used by automated sessions", () => {
-    defaultsResult = [
-      {
-        provider: "openai",
-        providerAccountId: account.id,
-        unattendedMode: "provider_account",
-        createdBy: null,
-        updatedBy: null,
-        createdAt: 1,
-        updatedAt: 1,
-      },
-    ];
-    render(<ProviderAccountsSettings />);
-
-    expect(screen.getByLabelText("Automated authentication")).toHaveTextContent(
-      "Use default: Team ChatGPT"
-    );
-    expect(screen.getByText("Default for automation")).toBeInTheDocument();
-  });
-
-  it("does not label the stored account as the automation default in API key mode", () => {
+  it("shows no automated-session default picker: automated sessions never spend an account", () => {
     defaultsResult = [
       {
         provider: "openai",
@@ -563,9 +447,9 @@ describe("ProviderAccountsSettings", () => {
     ];
     render(<ProviderAccountsSettings />);
 
-    expect(screen.getByLabelText("Automated authentication")).toHaveTextContent(
-      "No account (API key)"
-    );
+    expect(screen.queryByRole("heading", { name: "Automated sessions" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Automated authentication")).not.toBeInTheDocument();
+    expect(screen.queryByText("No default account selected")).not.toBeInTheDocument();
     expect(screen.queryByText("Default for automation")).not.toBeInTheDocument();
   });
 
@@ -580,7 +464,7 @@ describe("ProviderAccountsSettings", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Make default" }));
 
     await waitFor(() => {
-      expect(setDefault).toHaveBeenCalledWith("openai", account.id, "provider_account");
+      expect(setDefault).toHaveBeenCalledWith("openai", account.id, "api_key");
     });
   });
 
@@ -613,7 +497,6 @@ describe("ProviderAccountsSettings", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Verify" }));
 
     expect(screen.getByRole("button", { name: "Add account" })).toBeDisabled();
-    expect(screen.getAllByLabelText("Automated authentication")[0]).toBeDisabled();
     expect(screen.getByRole("button", { name: "More actions for Backup ChatGPT" })).toBeDisabled();
     expect(runAction).toHaveBeenCalledTimes(1);
 
