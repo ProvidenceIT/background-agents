@@ -269,6 +269,35 @@ sign-in links to the existing user when the verified email matches, see
   `serviceUrl`, with a client-credentials token for the bot app (scope
   `https://api.botframework.com/.default`, the single tenant's token endpoint).
 
+## Subscription homes
+
+On an installation where sessions run on subscription homes (Settings › Subscription homes) rather
+than API keys, three settings make Teams work end to end:
+
+- **Default model.** The Kubernetes manifest sets `TEAMS_BOT_DEFAULT_MODEL` to
+  `anthropic/claude-sonnet-4-6`. A mention then runs on the sender's own home when it carries
+  Claude, else on a home an enrolled colleague shares (under the `household` policy), else it is
+  refused with `no_eligible_home` and the reason is posted in the thread.
+- **Anthropic models enabled.** The Anthropic group is on by default; if Settings › Models (the
+  `model_preferences` row) has turned it off, turn it on again, or the default model is refused at
+  session create.
+- **A workspace usage quota.** Homes cap their own concurrency (`max_concurrent`, three by default),
+  but nothing else bounds the node all homes share. Give the workspace one quota row, for example
+  the sum of the enrolled homes' caps as the global sandbox cap and a daily turn count that only
+  warns (see [usage quotas](../packages/docs/content/docs/sessions/spend-limits.mdx)):
+
+  ```bash
+  curl -X PUT "$CONTROL_PLANE_URL/usage-quotas" -H "Content-Type: application/json" \
+    -d '{"scopeKind":"workspace","maxRunningSandboxes":6}'
+  curl -X PUT "$CONTROL_PLANE_URL/usage-quotas" -H "Content-Type: application/json" \
+    -d '{"scopeKind":"workspace","period":"day","maxTurns":500,"action":"warn"}'
+  ```
+
+The bot also delivers the control plane's notices to each home owner's one-to-one chat: the Claude
+token expiry notice from 14 days before the date the home reported, and on Mondays a digest of the
+sessions the home served the week before, per trigger kind and per person. The owner needs the app
+installed for themselves and a Microsoft sign-in linked to their Open-Inspect user.
+
 ## Troubleshooting
 
 | Symptom                                                                    | Where to look                                                                                                                                                                                                                                                                                                                                                    |
