@@ -316,6 +316,30 @@ export class TeamsStateStore {
     }
   }
 
+  /**
+   * The connector endpoint the tenant's most recent activity named, for a
+   * post that answers no activity (a direct message). Null before the bot
+   * has heard from anyone.
+   */
+  latestServiceUrl(): string | null {
+    const rows = this.db
+      .prepare(
+        "SELECT reference_json FROM conversation_references ORDER BY updated_at DESC LIMIT 20"
+      )
+      .all() as { reference_json: string }[];
+    for (const row of rows) {
+      try {
+        const reference = JSON.parse(row.reference_json) as StoredConversationReference;
+        if (typeof reference.serviceUrl === "string" && reference.serviceUrl) {
+          return reference.serviceUrl;
+        }
+      } catch {
+        // A malformed row names no endpoint; the next one may.
+      }
+    }
+    return null;
+  }
+
   putConversationReference(threadKey: string, reference: StoredConversationReference): void {
     this.db
       .prepare(

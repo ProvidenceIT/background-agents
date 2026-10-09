@@ -38,7 +38,7 @@ import {
   type RecordedRequest,
   type RouteHandler,
 } from "../test-support";
-import { MSTEAMS_THREAD_CLOSED_KIND } from "./schemas";
+import { MSTEAMS_DIRECT_MESSAGE_KIND, MSTEAMS_THREAD_CLOSED_KIND } from "./schemas";
 import { createCallbacksRouter } from "./routes";
 
 const WEB_APP_URL = "https://web.example.test";
@@ -169,6 +169,8 @@ function harness(options: {
   });
   const callbacks = createCallbacksRouter({
     secret: SECRET,
+    appId: APP_ID,
+    tenantId: TENANT_ID,
     store,
     bot,
     controlPlane,
@@ -769,6 +771,101 @@ describe("POST /callbacks/thread_closed", () => {
     expect(await response.json()).toEqual({ ok: true, outcome: "skipped" });
     expect(h.store.getThreadSession(THREAD_KEY)?.closed).toBe(false);
     expect(h.connectorCalls()).toEqual([WORKING_REPLY]);
+  });
+});
+
+describe("POST /callbacks/direct_message", () => {
+  function directMessage(overrides: Record<string, unknown> = {}) {
+    return {
+      kind: MSTEAMS_DIRECT_MESSAGE_KIND,
+      notificationId: "auth-home:H1:claude_expiry:1760000000000",
+      recipientAadObjectId: USER_OID,
+      text: "Your Claude setup token expires in 13 days.",
+      timestamp: Date.now(),
+      ...overrides,
+    };
+  }
+
+  it("requires the control plane's signature: unsigned, forged and stale bodies post nothing", async () => {
+    const h = harness({});
+    const unsigned = await h.app.request("/callbacks/direct_message", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(directMessage()),
+    });
+    expect(unsigned.status).toBe(400);
+    expect(await unsigned.json()).toEqual({ error: "invalid payload" });
+
+    const forged = await h.callback("direct_message", directMessage(), "0".repeat(64));
+    expect(forged.status).toBe(401);
+    expect(await forged.json()).toEqual({ error: "unauthorized" });
+
+    const stale = await h.callback(
+      "direct_message",
+      directMessage({ timestamp: Date.now() - 6 * 60 * 1000 })
+    );
+    expect(stale.status).toBe(401);
+
+    const notAnOid = await h.callback(
+      "direct_message",
+      directMessage({ recipientAadObjectId: "microsoft:someone" })
+    );
+    expect(notAnOid.status).toBe(400);
+    expect(h.connectorRemote.requests).toEqual([]);
+  });
+
+  it("opens the person's one-to-one chat and posts once; a retried delivery is a no-op", async () => {
+    const h = harness({
+      connector: {
+        "POST /teams/v3/conversations": () => json({ id: "a:personal-chat" }),
+      },
+    });
+    const first = await h.callback("direct_message", directMessage());
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ ok: true, outcome: "delivered" });
+    const retried = await h.callback("direct_message", directMessage());
+    expect(await retried.json()).toEqual({ ok: true, outcome: "duplicate" });
+
+    const [create, post, ...rest] = h.connectorRemote.requests;
+    expect(rest).toEqual([]);
+    expect(create?.url).toBe("https://smba.trafficmanager.net/teams/v3/conversations");
+    expect(create?.body).toEqual({
+      bot: { id: `28:${APP_ID}` },
+      members: [{ id: USER_OID }],
+      channelData: { tenant: { id: TENANT_ID } },
+      tenantId: TENANT_ID,
+      isGroup: false,
+    });
+    expect(post?.url).toBe(
+      `https://smba.trafficmanager.net/teams/v3/conversations/${encodeURIComponent("a:personal-chat")}/activities`
+    );
+    expect(post?.body).toMatchObject({
+      type: "message",
+      text: "Your Claude setup token expires in 13 days.",
+      conversation: { id: "a:personal-chat" },
+    });
+  });
+
+  it("uses the connector endpoint the tenant's activities named, and lets a failed post be retried", async () => {
+    let failCreate = true;
+    const h = harness({
+      connector: {
+        "POST /emea/v3/conversations": () =>
+          failCreate ? json({ error: "busy" }, 503) : json({ id: "a:personal-chat" }),
+      },
+    });
+    await h.start();
+    const failed = await h.callback("direct_message", directMessage());
+    expect(failed.status).toBe(503);
+    failCreate = false;
+    const retried = await h.callback("direct_message", directMessage());
+    expect(await retried.json()).toEqual({ ok: true, outcome: "delivered" });
+    expect(
+      h.connectorRemote.requests.map((request) => new URL(request.url).pathname).slice(-2)
+    ).toEqual([
+      "/emea/v3/conversations",
+      `/emea/v3/conversations/${encodeURIComponent("a:personal-chat")}/activities`,
+    ]);
   });
 });
 

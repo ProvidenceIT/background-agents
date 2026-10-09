@@ -40,6 +40,12 @@ service principal, and renders progress back into the Teams thread.
     session's team.
   - `activity` is acknowledged; Teams has no indicator to refresh, and the control plane emits
     activity refreshes only for Slack.
+- `POST /callbacks/direct_message` (`kind: "msteams.direct_message"`): a notice for one person, the
+  subscription-home expiry notice and weekly digest, signed and time-checked like the session
+  callbacks but tied to no session. The bot opens (or reuses) the person's one-to-one chat by their
+  Entra object id (`recipientAadObjectId`) through the connector's create-conversation call, on the
+  service URL of the tenant's latest activity (`https://smba.trafficmanager.net/teams/` before any),
+  and posts `text` once per `notificationId`. The app must be installed for that person.
 - `GET /healthz` for probes.
 
 ## Configuration

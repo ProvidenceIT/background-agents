@@ -1,6 +1,9 @@
 /**
  * `POST /callbacks/{complete,activity,tool_call,thread_closed}`: where the
- * control plane reports on a session this bot started. Each route verifies
+ * control plane reports on a session this bot started. `POST
+ * /callbacks/direct_message` carries a notice for one person instead (the
+ * subscription-home expiry notice and weekly digest) and belongs to no
+ * session; it is signed the same way. Each route verifies
  * the body signature (see `verify.ts`), checks the shape, then hands over to
  * the completion module inside the thread's queue so a callback and an
  * inbound reply for the same thread never interleave.
@@ -25,6 +28,7 @@ import type { KeyedQueue } from "../sessions/handler";
 import {
   activityCallbackSchema,
   completeCallbackSchema,
+  directMessageCallbackSchema,
   threadClosedCallbackSchema,
   toolCallCallbackSchema,
 } from "./schemas";
@@ -40,9 +44,17 @@ const MAX_CALLBACK_BODY_BYTES = 1024 * 1024;
  */
 const ACTIVITY_CALLBACK_MAX_AGE_MS = 2 * 60 * 1000;
 
+/** The connector endpoint a direct message uses before the bot has heard from anyone. */
+export const DEFAULT_DIRECT_MESSAGE_SERVICE_URL = "https://smba.trafficmanager.net/teams/";
+
+const DIRECT_MESSAGE_KIND = "direct_message";
+
 export interface CallbackRouterDeps extends CompletionDeps {
   /** SERVICE_AUTH_SECRET_TEAMS_BOT: the key the control plane signs this bot's callbacks with. */
   secret: string;
+  /** The bot registration and tenant a direct message is opened under. */
+  appId: string;
+  tenantId: string;
   enqueue: KeyedQueue;
   log: Logger;
   now?: () => number;
@@ -219,6 +231,41 @@ export function createCallbacksRouter(deps: CallbackRouterDeps): Hono {
       session_id: data.sessionId,
       message_id: data.messageId,
     });
+  });
+
+  router.post("/direct_message", async (c) => {
+    const admitted = await admit(c, directMessageCallbackSchema, TOKEN_VALIDITY_MS);
+    if (!admitted.ok) return admitted.respond;
+    const { data, timing } = admitted;
+    const fields = { notification_id: data.notificationId };
+    // One person's notices go out one at a time, and a redelivery of one
+    // already posted is acknowledged without a second message.
+    try {
+      const outcome = await deps.enqueue(`dm:${data.recipientAadObjectId}`, async () => {
+        if (!deps.store.claimCallback(data.notificationId, DIRECT_MESSAGE_KIND)) {
+          return "duplicate" as const;
+        }
+        try {
+          await deps.bot.sendDirectMessage(
+            {
+              serviceUrl: deps.store.latestServiceUrl() ?? DEFAULT_DIRECT_MESSAGE_SERVICE_URL,
+              botAppId: deps.appId,
+              tenantId: deps.tenantId,
+              aadObjectId: data.recipientAadObjectId,
+            },
+            data.text
+          );
+        } catch (error) {
+          deps.store.releaseCallback(data.notificationId, DIRECT_MESSAGE_KIND);
+          throw error;
+        }
+        deps.store.markCallbackPosted(data.notificationId, DIRECT_MESSAGE_KIND);
+        return "delivered" as const;
+      });
+      return finish(c, timing, outcome, fields);
+    } catch (error) {
+      return failed(c, timing, error);
+    }
   });
 
   return router;

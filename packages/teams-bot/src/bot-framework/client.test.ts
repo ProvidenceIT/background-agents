@@ -114,6 +114,17 @@ describe("Bot Framework REST client", () => {
     await expect(
       client.sendProactive({ conversationId: "c", serviceUrl: "https://attacker.example/" }, "hi")
     ).rejects.toBeInstanceOf(ServiceUrlNotAllowedError);
+    await expect(
+      client.sendDirectMessage(
+        {
+          serviceUrl: "https://attacker.example/",
+          botAppId: "app",
+          tenantId: "tenant",
+          aadObjectId: "oid",
+        },
+        "hi"
+      )
+    ).rejects.toBeInstanceOf(ServiceUrlNotAllowedError);
     expect(remote.requests).toHaveLength(0);
   });
 

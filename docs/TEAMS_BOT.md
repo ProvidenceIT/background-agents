@@ -258,11 +258,13 @@ sign-in links to the existing user when the verified email matches, see
   Prompts carry `source: "msteams"` and an `msteams` callback context (conversation id, service URL,
   reply id, channel id, repository, model).
 - **Control plane to bot.** `POST /callbacks/complete`, `/callbacks/activity`,
-  `/callbacks/tool_call` and `/callbacks/thread_closed`, JSON bodies that carry a `signature` field:
-  the hex HMAC-SHA256, under `SERVICE_AUTH_SECRET_TEAMS_BOT`, of the JSON of the body without that
-  field (the same scheme the Slack and Linear bots verify with `verifyCallbackFromControlPlane`).
-  The bot rejects a body whose signature does not match, and dedupes accepted callbacks by
-  `(messageId, kind)` in SQLite because the control plane retries deliveries.
+  `/callbacks/tool_call`, `/callbacks/thread_closed` and `/callbacks/direct_message` (a notice to
+  one person's one-to-one chat, deduped by `notificationId`), JSON bodies that carry a `signature`
+  field: the hex HMAC-SHA256, under `SERVICE_AUTH_SECRET_TEAMS_BOT`, of the JSON of the body without
+  that field (the same scheme the Slack and Linear bots verify with
+  `verifyCallbackFromControlPlane`). The bot rejects a body whose signature does not match, and
+  dedupes accepted callbacks by `(messageId, kind)` in SQLite because the control plane retries
+  deliveries.
 - **Bot to Teams.** Replies and edits go through the Bot Framework REST connector on the activity's
   `serviceUrl`, with a client-credentials token for the bot app (scope
   `https://api.botframework.com/.default`, the single tenant's token endpoint).

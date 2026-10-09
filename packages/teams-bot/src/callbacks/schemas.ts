@@ -85,3 +85,27 @@ export const threadClosedCallbackSchema = z.looseObject({
   timestamp: z.number().int().nonnegative(),
   context: threadCoordinatesSchema,
 });
+
+/** `kind` of a direct message the control plane asks the bot to deliver. */
+export const MSTEAMS_DIRECT_MESSAGE_KIND = "msteams.direct_message";
+
+/** Teams caps a message at about 28 KB; a notice is a few lines. */
+export const MAX_DIRECT_MESSAGE_CHARS = 8_000;
+
+/**
+ * `POST /callbacks/direct_message`: a notice for one person, delivered to
+ * their one-to-one chat with the bot (the auth-home expiry notice and the
+ * weekly digest). It belongs to no session. `notificationId` makes a retried
+ * delivery a no-op; `recipientAadObjectId` is the person's Entra object id,
+ * which the control plane read from their linked Microsoft identity.
+ */
+export const directMessageCallbackSchema = z.looseObject({
+  kind: z.literal(MSTEAMS_DIRECT_MESSAGE_KIND),
+  notificationId: z.string().min(1).max(256),
+  recipientAadObjectId: z
+    .string()
+    .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
+  text: z.string().min(1).max(MAX_DIRECT_MESSAGE_CHARS),
+  timestamp: z.number().int().nonnegative(),
+  signature: z.string().min(1),
+});

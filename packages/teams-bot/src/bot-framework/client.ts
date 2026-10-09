@@ -32,6 +32,16 @@ interface SentActivity {
   id: string;
 }
 
+/** A one-to-one chat between the bot and a tenant user, named by the user's Entra object id. */
+export interface DirectMessageTarget {
+  serviceUrl: string;
+  /** The bot registration's application id; the bot's channel account is `28:<appId>`. */
+  botAppId: string;
+  tenantId: string;
+  /** The user's Microsoft Entra object id (`aadObjectId`). */
+  aadObjectId: string;
+}
+
 export class ServiceUrlNotAllowedError extends Error {
   constructor(readonly serviceUrl: unknown) {
     super("serviceUrl is not on the allowlist");
@@ -68,6 +78,12 @@ export interface BotFrameworkClient {
   updateActivity(address: ActivityAddress, activityId: string, text: string): Promise<void>;
   /** Post from a stored reference, for completions that arrive after a restart. */
   sendProactive(reference: StoredConversationReference, text: string): Promise<SentActivity>;
+  /**
+   * Post `text` to the user's one-to-one chat with the bot. The connector's
+   * create-conversation call returns the existing chat when there is one,
+   * so repeating it opens nothing new. Needs the app installed for the user.
+   */
+  sendDirectMessage(target: DirectMessageTarget, text: string): Promise<SentActivity>;
   /** The post/update pair the reply sink drives, bound to one thread. */
   replyPort(address: ActivityAddress, replyToId: string | undefined): ReplySinkPort;
 }
@@ -115,11 +131,15 @@ export function createBotFrameworkClient(options: BotFrameworkClientOptions): Bo
   const fetchFn = options.fetch ?? fetch;
 
   function conversationUrl(address: ActivityAddress, suffix: string): string {
-    if (!isAllowedServiceUrl(address.serviceUrl, options.allowedServiceUrlHosts)) {
-      throw new ServiceUrlNotAllowedError(address.serviceUrl);
-    }
-    const base = normalizeServiceUrl(address.serviceUrl);
+    const base = allowedBase(address.serviceUrl);
     return `${base}v3/conversations/${encodeURIComponent(address.conversationId)}/activities${suffix}`;
+  }
+
+  function allowedBase(serviceUrl: string): string {
+    if (!isAllowedServiceUrl(serviceUrl, options.allowedServiceUrlHosts)) {
+      throw new ServiceUrlNotAllowedError(serviceUrl);
+    }
+    return normalizeServiceUrl(serviceUrl);
   }
 
   async function send(
@@ -167,6 +187,26 @@ export function createBotFrameworkClient(options: BotFrameworkClientOptions): Bo
         return client.replyToActivity(address, reference.activityId, text);
       }
       return client.sendToConversation(address, text);
+    },
+    async sendDirectMessage(target, text) {
+      const bot = { id: `28:${target.botAppId}` };
+      const created = await send(
+        "createConversation",
+        "POST",
+        `${allowedBase(target.serviceUrl)}v3/conversations`,
+        {
+          bot,
+          members: [{ id: target.aadObjectId }],
+          channelData: { tenant: { id: target.tenantId } },
+          tenantId: target.tenantId,
+          isGroup: false,
+        }
+      );
+      if (!created.id) throw new BotFrameworkRequestError("createConversation", 502);
+      return client.sendToConversation(
+        { serviceUrl: target.serviceUrl, conversationId: created.id, bot },
+        text
+      );
     },
     replyPort(address, replyToId) {
       return {

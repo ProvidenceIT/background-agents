@@ -57,6 +57,8 @@ function main(): void {
   });
   const callbacks = createCallbacksRouter({
     secret: config.serviceAuthSecret,
+    appId: config.appId,
+    tenantId: config.tenantId,
     store,
     bot,
     controlPlane,
