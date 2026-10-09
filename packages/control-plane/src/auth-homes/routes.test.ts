@@ -230,6 +230,9 @@ describe("auth-home routes", () => {
 
   it("lists every home as metadata without volume names for auth_homes.read_all only", async () => {
     await call("owner", "PUT", "/me/auth-home", registration);
+    // The list is ordered by registration time; ids are random, so the two
+    // registrations must not share an instant.
+    vi.setSystemTime(FIXED_NOW + 1);
     await call("member", "PUT", "/me/auth-home", {
       pvcName: "sf-home-u2",
       nodeName: "agent.dokman.io",
