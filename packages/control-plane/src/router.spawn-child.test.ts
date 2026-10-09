@@ -16,8 +16,39 @@ import { TeamStore } from "./db/teams";
 import { resolveRepoOrError } from "./routes/shared";
 import type * as SharedRoutes from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
+import type * as SessionBindingModule from "./auth-homes/session-binding";
+import type * as AuthHomeAuditModule from "./auth-homes/audit";
 
 const environmentMocks = vi.hoisted(() => ({ getById: vi.fn() }));
+
+/** A served home binding a test installs; null keeps the real (not-in-force) resolution. */
+const authHomeBinding = vi.hoisted(() => ({ current: null as unknown }));
+const authHomeAudits = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }));
+
+vi.mock("./auth-homes/session-binding", async (importOriginal) => {
+  const actual = await importOriginal<typeof SessionBindingModule>();
+  return {
+    ...actual,
+    bindSessionAuthHome: (...args: Parameters<typeof actual.bindSessionAuthHome>) =>
+      authHomeBinding.current
+        ? Promise.resolve(authHomeBinding.current)
+        : actual.bindSessionAuthHome(...args),
+  };
+});
+vi.mock("./auth-homes/audit", async (importOriginal) => {
+  const actual = await importOriginal<typeof AuthHomeAuditModule>();
+  const record =
+    (name: string) =>
+    (input: unknown): unknown => {
+      authHomeAudits.calls.push([name, input]);
+      return { run: async () => undefined };
+    };
+  return {
+    ...actual,
+    bindAuthHomeMountedAudit: record("mounted"),
+    bindAuthHomePromptAudit: record("prompt"),
+  };
+});
 
 const integrationSettingsMocks = vi.hoisted(() => ({
   resolveCodeServerEnabled: vi.fn().mockResolvedValue(false),
@@ -153,7 +184,59 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     integrationSettingsMocks.resolveVncEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({});
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    authHomeBinding.current = null;
+    authHomeAudits.calls = [];
+  });
+
+  it("audits the child's first prompt as a turn served from its home", async () => {
+    const store = makeStore("canonical-user-123");
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    authHomeBinding.current = {
+      kind: "served",
+      provider: "anthropic",
+      home: { id: "H1", providers: ["anthropic"] },
+      resolution: { kind: "own", homeId: "H1", homeOwnerUserId: "canonical-user-123" },
+    };
+    const parentStub: DurableObjectStub = {
+      fetch: vi.fn(async () => Response.json(spawnContext)),
+    } as never;
+    const childStub: DurableObjectStub = {
+      fetch: vi.fn(async (request: Request) =>
+        new URL(request.url).pathname === SessionInternalPaths.prompt
+          ? Response.json({ messageId: "msg-1", status: "queued" })
+          : Response.json({ status: "ok" })
+      ),
+    } as never;
+    const db = authorizedDb();
+    const env = {
+      ...TEST_SERVICE_SECRETS,
+      SCM_PROVIDER: "github",
+      DB: db,
+      SESSION: fakeSessionRuntimeDispatch((request, sessionId) =>
+        (sessionId === parentId ? parentStub : childStub).fetch(request)
+      ),
+    };
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<{ sessionId: string }>();
+    expect(authHomeAudits.calls.map(([name]) => name)).toEqual(["mounted", "prompt"]);
+    expect(authHomeAudits.calls[1]![1]).toMatchObject({
+      sessionId,
+      actorUserId: "canonical-user-123",
+      triggerKind: "child",
+      homeId: "H1",
+      homeOwnerUserId: "canonical-user-123",
+      selection: "own",
+      channel: "child_spawn",
+    });
+    expect(db.batch).toHaveBeenCalledOnce();
+  });
 
   it("copies the exact parent provider auth snapshot with immediate inheritance", async () => {
     const store = makeStore();
@@ -1130,5 +1213,6 @@ function authorizedDb(
       };
       return statement;
     }),
+    batch: vi.fn(async () => []),
   };
 }

@@ -136,12 +136,19 @@ export function bindAuthHomePromptAudit(
     homeOwnerUserId: string;
     selection: AuthHomeSelection;
     /** Which entry point admitted the turn. */
-    channel: "prompt" | "ws_token" | "ws_prompt" | "sandbox_access" | "slack_steer";
+    channel:
+      | "prompt"
+      | "ws_token"
+      | "ws_prompt"
+      | "sandbox_access"
+      | "slack_steer"
+      | "child_spawn"
+      | "scheduled_run";
   }
 ): SqlStatement {
   return bindAuthHomeAuditEvent(input.db, {
     requestId: input.requestId,
-    actorUserId: input.actorUserId,
+    actorUserId: principalOf(input),
     action: "credential.auth_home_prompt",
     resourceType: "session",
     resourceId: input.sessionId,

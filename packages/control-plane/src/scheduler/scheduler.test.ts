@@ -163,6 +163,8 @@ vi.mock("../auth-homes/audit", async (importOriginal) => {
       actual.bindAuthHomeMountedAudit({ ...input, db: authHomeDb.current ?? input.db }),
     bindUnattendedBlockedAudit: (input: Parameters<typeof actual.bindUnattendedBlockedAudit>[0]) =>
       actual.bindUnattendedBlockedAudit({ ...input, db: authHomeDb.current ?? input.db }),
+    bindAuthHomePromptAudit: (input: Parameters<typeof actual.bindAuthHomePromptAudit>[0]) =>
+      actual.bindAuthHomePromptAudit({ ...input, db: authHomeDb.current ?? input.db }),
   };
 });
 
@@ -4323,6 +4325,19 @@ describe("Scheduler", () => {
             trigger_kind: "schedule",
             work_item_author: COLLEAGUE,
             provider: "anthropic",
+          }),
+        },
+      ]);
+      // The run's prompt is the first turn the home serves; a service row.
+      expect(await auditRows("credential.auth_home_prompt")).toEqual([
+        {
+          principal: "service",
+          service: "control-plane",
+          metadata: expect.objectContaining({
+            actor: OWNER,
+            home_owner: OWNER,
+            trigger_kind: "schedule",
+            channel: "scheduled_run",
           }),
         },
       ]);

@@ -52,7 +52,11 @@ import {
   authHomeRefusalResponse,
   bindSessionAuthHome,
 } from "../auth-homes/session-binding";
-import { bindAuthHomeMountedAudit, bindUnattendedBlockedAudit } from "../auth-homes/audit";
+import {
+  bindAuthHomeMountedAudit,
+  bindAuthHomePromptAudit,
+  bindUnattendedBlockedAudit,
+} from "../auth-homes/audit";
 import { repositoriesArePrivate } from "../auth-homes/repo-visibility";
 
 const logger = createLogger("router:session-child-spawn");
@@ -414,7 +418,7 @@ export async function handleSpawnChild(
   }
   await sessionStore.releaseChildAdmissionLease(admissionLease);
   if (authHome.kind === "served") {
-    await bindAuthHomeMountedAudit({
+    const served = {
       db: ctx.db,
       requestId: ctx.request_id,
       actorUserId: triggerActorUserId,
@@ -424,8 +428,15 @@ export async function handleSpawnChild(
       homeId: authHome.home.id,
       homeOwnerUserId: authHome.resolution.homeOwnerUserId,
       selection: authHome.resolution.kind,
-      workItemAuthorUserId: parentSession?.workItemAuthorUserId ?? null,
-    }).run();
+    } as const;
+    // The child's first prompt below is a turn served from the home too.
+    await ctx.db.batch([
+      bindAuthHomeMountedAudit({
+        ...served,
+        workItemAuthorUserId: parentSession?.workItemAuthorUserId ?? null,
+      }),
+      bindAuthHomePromptAudit({ ...served, channel: "child_spawn" }),
+    ]);
   }
 
   let promptResponse: Response;

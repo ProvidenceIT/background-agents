@@ -126,7 +126,11 @@ import {
   applyAuthHomeToProviderAuth,
   bindSessionAuthHome,
 } from "../auth-homes/session-binding";
-import { bindAuthHomeMountedAudit, bindUnattendedBlockedAudit } from "../auth-homes/audit";
+import {
+  bindAuthHomeMountedAudit,
+  bindAuthHomePromptAudit,
+  bindUnattendedBlockedAudit,
+} from "../auth-homes/audit";
 import { repositoriesArePrivate } from "../auth-homes/repo-visibility";
 
 /** Max automations to process per tick (backpressure). */
@@ -2018,7 +2022,7 @@ export class Scheduler {
 
     await initializeSession(this.env, sessionInput, ctx);
     if (authHome.kind === "served") {
-      await bindAuthHomeMountedAudit({
+      const served = {
         db: this.db,
         requestId: run.id,
         actorUserId: triggerActorUserId,
@@ -2029,8 +2033,10 @@ export class Scheduler {
         homeId: authHome.home.id,
         homeOwnerUserId: authHome.resolution.homeOwnerUserId,
         selection: authHome.resolution.kind,
-        workItemAuthorUserId,
-      }).run();
+      } as const;
+      // The run's prompt is the first turn served from the home.
+      await bindAuthHomeMountedAudit({ ...served, workItemAuthorUserId }).run();
+      await bindAuthHomePromptAudit({ ...served, channel: "scheduled_run" }).run();
     }
   }
 
