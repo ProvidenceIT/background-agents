@@ -163,13 +163,25 @@ export class AuthHomeLeaseStore {
     // The acquiring session's own pods are its previous generation, which
     // the launch replaces; every other pod is someone else's Codex.
     const foreign = pods.filter((pod) => pod.sessionId !== sessionId);
-    const lease = await this.get(homeId, provider);
+    let lease = await this.get(homeId, provider);
 
     if (lease && lease.sessionId === sessionId) {
-      if (foreign.length > 0) return this.wait(request, "claim_mounted", sessionId);
-      await this.heartbeat(request);
-      await this.leaveQueue(sessionId, homeId, provider);
-      return { kind: "granted", seat: (await this.get(homeId, provider)) ?? lease };
+      if (lease.fencedAt === null) {
+        if (foreign.length > 0) return this.wait(request, "claim_mounted", sessionId);
+        await this.heartbeat(request);
+        await this.leaveQueue(sessionId, homeId, provider);
+        return { kind: "granted", seat: (await this.get(homeId, provider)) ?? lease };
+      }
+      // Fenced while silent: the seat is lost. Retire the row and queue
+      // again behind anyone already waiting.
+      await this.db
+        .prepare(
+          `DELETE FROM auth_home_leases
+           WHERE home_id = ? AND provider = ? AND session_id = ? AND fenced_at IS NOT NULL`
+        )
+        .bind(homeId, provider, sessionId)
+        .run();
+      lease = null;
     }
 
     if (lease) {
@@ -201,7 +213,12 @@ export class AuthHomeLeaseStore {
     return this.grantInOrder(request);
   }
 
-  /** Renew the holder's heartbeat; false when the session does not hold the seat. */
+  /**
+   * Renew the holder's heartbeat; false when the session does not hold the
+   * seat, or was fenced: a fenced holder's pods are being deleted, and a late
+   * heartbeat from one of them during its grace period must not make the
+   * seat look live again.
+   */
   async heartbeat(request: {
     homeId: string;
     provider: string;
@@ -211,8 +228,8 @@ export class AuthHomeLeaseStore {
     const result = await this.db
       .prepare(
         `UPDATE auth_home_leases
-         SET heartbeat_at = ?, fenced_at = NULL, pod_name = COALESCE(?, pod_name)
-         WHERE home_id = ? AND provider = ? AND session_id = ?`
+         SET heartbeat_at = ?, pod_name = COALESCE(?, pod_name)
+         WHERE home_id = ? AND provider = ? AND session_id = ? AND fenced_at IS NULL`
       )
       .bind(
         this.now(),
@@ -225,13 +242,13 @@ export class AuthHomeLeaseStore {
     return result.meta.changes > 0;
   }
 
-  /** Renew every seat the session holds; false when it holds none. */
+  /** Renew every unfenced seat the session holds; false when it holds none. */
   async heartbeatSession(sessionId: string, podName?: string | null): Promise<boolean> {
     const result = await this.db
       .prepare(
         `UPDATE auth_home_leases
-         SET heartbeat_at = ?, fenced_at = NULL, pod_name = COALESCE(?, pod_name)
-         WHERE session_id = ?`
+         SET heartbeat_at = ?, pod_name = COALESCE(?, pod_name)
+         WHERE session_id = ? AND fenced_at IS NULL`
       )
       .bind(this.now(), podName ?? null, sessionId)
       .run();

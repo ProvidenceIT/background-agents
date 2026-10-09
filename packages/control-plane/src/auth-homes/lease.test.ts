@@ -217,6 +217,40 @@ describe("AuthHomeLeaseStore (the fenced Codex seat)", () => {
     });
   });
 
+  it("ignores a fenced holder's late heartbeat, so its seat moves on once its pod is gone", async () => {
+    await leases.acquire(request("S1"), fence);
+    fence.mount("pod-s1", "S1");
+    now += AUTH_HOME_LEASE_EXPIRY_MS + 1;
+    expect(await leases.acquire(request("S2"), fence)).toMatchObject({ reason: "fencing" });
+    const fencedAt = now;
+
+    // The terminating pod's bridge still sends one heartbeat in its grace period.
+    now += 5_000;
+    expect(await leases.heartbeatSession("S1", "pod-s1")).toBe(false);
+    expect(await leases.heartbeat({ homeId: H1, provider: CODEX_SEAT, sessionId: "S1" })).toBe(
+      false
+    );
+    expect(await leases.get(H1, CODEX_SEAT)).toMatchObject({ sessionId: "S1", fencedAt });
+
+    fence.gone("pod-s1");
+    expect(await leases.acquire(request("S2"), fence)).toMatchObject({ kind: "granted" });
+  });
+
+  it("queues a fenced holder that asks again behind the session already waiting", async () => {
+    await leases.acquire(request("S1"), fence);
+    fence.mount("pod-s1", "S1");
+    now += AUTH_HOME_LEASE_EXPIRY_MS + 1;
+    await leases.acquire(request("S2"), fence);
+    now += 30_000;
+
+    expect(await leases.acquire(request("S1"), fence)).toMatchObject({
+      kind: "waiting",
+      reason: "held",
+      position: 2,
+    });
+    expect(await leases.get(H1, CODEX_SEAT)).toBeNull();
+  });
+
   it("lets a fenced holder that comes back keep nothing it lost", async () => {
     await leases.acquire(request("S1"), fence);
     fence.mount("pod-s1", "S1");
