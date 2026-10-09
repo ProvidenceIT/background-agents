@@ -251,9 +251,27 @@ export async function authHomeKeepsSessionsPrivate(
 ): Promise<boolean> {
   if (!homeId) return false;
   const home = await new UserAuthHomeStore(db).getById(homeId);
-  if (!home) return false;
+  return home ? homeKeepsSessionsPrivate(db, home) : false;
+}
+
+async function homeKeepsSessionsPrivate(db: SqlDatabase, home: AuthHome): Promise<boolean> {
   if (!home.shared) return true;
   return (await new SubscriptionSharingStore(db).get()) !== "household";
+}
+
+/**
+ * The visibility a new session gets: what was asked for, unless it is bound
+ * to a home that keeps its sessions private (`authHomeKeepsSessionsPrivate`).
+ * Nobody else may take a turn on such a session, so it is not listed to them
+ * either. Applied at create, child spawn and scheduled run.
+ */
+export async function authHomeSessionVisibility<V extends string>(
+  db: SqlDatabase,
+  binding: SessionAuthHomeBinding,
+  requested: V
+): Promise<V | "private"> {
+  if (binding.kind !== "served") return requested;
+  return (await homeKeepsSessionsPrivate(db, binding.home)) ? "private" : requested;
 }
 
 /** The 409 for widening a session that `authHomeKeepsSessionsPrivate` holds private. */

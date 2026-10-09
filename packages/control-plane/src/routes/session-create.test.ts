@@ -16,7 +16,7 @@ import {
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
 } from "../router.test-support";
-import { UserAuthHomeStore } from "../auth-homes/store";
+import { SubscriptionSharingStore, UserAuthHomeStore } from "../auth-homes/store";
 import { sessionCreateRoutes } from "./session-create";
 
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
@@ -163,6 +163,37 @@ describe("POST /sessions with auth homes", () => {
       provider: "anthropic",
     });
     expect(runtimeInits).toEqual([sessionId]);
+  });
+
+  it("keeps a session private while its home is unshared or the workspace is owner_only", async () => {
+    const visibilityOf = async (response: Response) => {
+      expect(response.status).toBe(201);
+      const { sessionId } = (await response.json()) as { sessionId: string };
+      return (
+        await store
+          .prepare("SELECT visibility FROM sessions WHERE id = ?")
+          .bind(sessionId)
+          .first<{ visibility: string }>()
+      )?.visibility;
+    };
+
+    // Shared under household: the requested (default) visibility stands.
+    expect(await visibilityOf(await post(OWNER, { model: MODEL, harness: "claude" }))).toBe(
+      "workspace"
+    );
+
+    await new SubscriptionSharingStore(store).set("owner_only", OWNER);
+    expect(
+      await visibilityOf(
+        await post(OWNER, { model: MODEL, harness: "claude", visibility: "workspace" })
+      )
+    ).toBe("private");
+
+    await new SubscriptionSharingStore(store).set("household", OWNER);
+    await new UserAuthHomeStore(store).update("H1", { shared: false, sharingConsentAt: null });
+    expect(await visibilityOf(await post(OWNER, { model: MODEL, harness: "claude" }))).toBe(
+      "private"
+    );
   });
 
   it("creates a Codex session on the owner's home, bound to it for OpenAI", async () => {

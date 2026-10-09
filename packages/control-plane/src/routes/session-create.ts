@@ -33,6 +33,7 @@ import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/
 import {
   applyAuthHomeToProviderAuth,
   authHomeRefusalResponse,
+  authHomeSessionVisibility,
   bindSessionAuthHome,
 } from "../auth-homes/session-binding";
 import { bindAuthHomeMountedAudit, bindUnattendedBlockedAudit } from "../auth-homes/audit";
@@ -339,7 +340,7 @@ export async function handleCreateSession(
   const input: SessionInitInput = {
     memory: resolvedPin(memorySelection),
     ownerTeamId: teamId,
-    visibility,
+    visibility: await authHomeSessionVisibility(ctx.db, authHome, visibility),
     sessionId,
     repoOwner,
     repoName,

@@ -4313,6 +4313,8 @@ describe("Scheduler", () => {
           workItemAuthorUserId: COLLEAGUE,
           authHomeId: "H1",
           authHomeSelection: "own",
+          // H1 is not shared: nobody else may take a turn, so nobody else sees it.
+          visibility: "private",
         })
       );
       expect(await auditRows("credential.auth_home_mounted")).toEqual([

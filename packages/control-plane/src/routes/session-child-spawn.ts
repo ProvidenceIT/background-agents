@@ -50,6 +50,7 @@ import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-ta
 import {
   applyAuthHomeToProviderAuth,
   authHomeRefusalResponse,
+  authHomeSessionVisibility,
   bindSessionAuthHome,
 } from "../auth-homes/session-binding";
 import {
@@ -352,7 +353,11 @@ export async function handleSpawnChild(
 
   const input: SessionInitInput = {
     ownerTeamId: teamId,
-    visibility: parentSession?.visibility ?? "workspace",
+    visibility: await authHomeSessionVisibility(
+      ctx.db,
+      authHome,
+      parentSession?.visibility ?? "workspace"
+    ),
     sessionId: childId,
     repoOwner: spawnContext.repoOwner,
     repoName: spawnContext.repoName,

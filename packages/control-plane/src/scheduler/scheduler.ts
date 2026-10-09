@@ -124,6 +124,7 @@ import { authHomesInForce } from "../auth-homes/resolver";
 import {
   admitAuthHomeTurn,
   applyAuthHomeToProviderAuth,
+  authHomeSessionVisibility,
   bindSessionAuthHome,
 } from "../auth-homes/session-binding";
 import {
@@ -1987,7 +1988,11 @@ export class Scheduler {
     const sessionInput: SessionInitInput = {
       memory: resolvedPin(memorySelection),
       ownerTeamId: automation.owner_team_id,
-      visibility: team?.defaultVisibility ?? "workspace",
+      visibility: await authHomeSessionVisibility(
+        this.db,
+        authHome,
+        team?.defaultVisibility ?? "workspace"
+      ),
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,
