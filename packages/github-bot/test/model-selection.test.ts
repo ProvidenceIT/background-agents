@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ValidModel } from "@open-inspect/shared/models";
-import { applyInlineModelOverrides } from "../src/model-selection";
+import type { Logger } from "../src/logger";
+import { applyInlineModelOverrides, resolveModelSelection } from "../src/model-selection";
+import type { Env } from "../src/types";
 
 const defaults = { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "low" };
 const enabledModels = [
@@ -86,6 +88,48 @@ describe("applyInlineModelOverrides", () => {
     expect(applyInlineModelOverrides({ model: "a`b" }, defaults, enabledModels)).toEqual({
       ok: false,
       message: "Unknown model `` a`b ``.",
+    });
+  });
+});
+
+describe("resolveModelSelection with the Codex harness", () => {
+  const env = {} as unknown as Env;
+  const log = () =>
+    ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }) as unknown as Logger;
+
+  it("keeps Codex for an OpenAI model", async () => {
+    const logger = log();
+    const result = await resolveModelSelection(
+      env,
+      logger,
+      "trace-codex",
+      { model: "openai/gpt-6-sol", harness: "codex", reasoningEffort: null },
+      undefined
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      selection: { model: "openai/gpt-6-sol", harness: "codex", reasoningEffort: null },
+      overridden: false,
+    });
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("falls back to OpenCode, as today, for a model Codex cannot run", async () => {
+    const logger = log();
+    const result = await resolveModelSelection(
+      env,
+      logger,
+      "trace-codex-anthropic",
+      { model: "anthropic/claude-sonnet-4-6", harness: "codex", reasoningEffort: null },
+      undefined
+    );
+
+    expect(result.ok && result.selection.harness).toBe("opencode");
+    expect(logger.warn).toHaveBeenCalledWith("config.harness_model_mismatch", {
+      harness: "codex",
+      model: "anthropic/claude-sonnet-4-6",
+      fallback: "opencode",
     });
   });
 });
