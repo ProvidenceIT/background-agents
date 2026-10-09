@@ -39,11 +39,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(241);
+    expect(routes).toHaveLength(247);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(183);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(241);
+    expect(new Set(paths).size).toBe(186);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(247);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
@@ -63,6 +63,25 @@ describe("route policy table", () => {
         allOf: [{ kind: "permission", permission: "usage_quotas.manage" }],
         service: { kind: "deny" },
       });
+    }
+  });
+
+  it("keeps a subscription home to its owner and the registry and policy to administrators", () => {
+    for (const [method, path, permission] of [
+      ["GET", "/me/auth-home", "auth_homes.manage_own"],
+      ["PUT", "/me/auth-home", "auth_homes.manage_own"],
+      ["DELETE", "/me/auth-home", "auth_homes.manage_own"],
+      ["GET", "/subscription-sharing", "auth_homes.manage_own"],
+      ["GET", "/auth-homes", "auth_homes.read_all"],
+      ["PUT", "/subscription-sharing", "subscription_sharing.manage"],
+    ] as const) {
+      const route = routeFor(method, path);
+      expect(route?.authorization, `${method} ${path}`).toMatchObject({
+        kind: "active-user",
+        allOf: [{ kind: "permission", permission }],
+        service: { kind: "deny" },
+      });
+      expect(route?.cacheControl, `${method} ${path}`).toBe("private, no-store");
     }
   });
 
