@@ -184,7 +184,7 @@ Layers, from the inside out:
    missing `get` on Secrets keeps the control plane from reading them back through the API, but it
    is not a confidentiality boundary: anything that may create pods could mount a Secret, which is
    what the next layer prevents.
-5. **Admission.** Two ValidatingAdmissionPolicies pin every pod and claim in the namespace: the
+5. **Admission.** Three ValidatingAdmissionPolicies pin every pod and claim in the namespace: the
    runtime class, exact image references, no token, the default ServiceAccount, no host namespaces,
    `hostAliases`, `imagePullSecrets` or `nodeName`; no ephemeral containers; only claim and emptyDir
    volumes; claims start empty (no `dataSource` clones). A pod is either a sandbox or the egress
@@ -192,7 +192,10 @@ Layers, from the inside out:
    A sandbox pod carries exactly the provider's three labels, may mount only its own claim and read
    only its own Secret, and only the control plane's ServiceAccount may create one. A proxy pod is
    created only by the ReplicaSet controller for a ReplicaSet it owns, runs the pinned command, and
-   reads no Secret.
+   reads no Secret. The one addition is a subscription auth home (below): a sandbox pod may also
+   mount at most one `sf-home-<name>` claim, and wears `sf.dokman.io/auth-home-owner=<name>` exactly
+   when it does; neither the control plane nor the garbage collector may create, change or delete
+   such a claim (the DELETE rule is its own policy, since a DELETE carries only `oldObject`).
 
 A fully compromised control plane can therefore create only unprivileged, sandboxed pods running the
 pinned image, each reading one session's Secret and volume, with egress limited to the allowlist.
@@ -231,6 +234,30 @@ Every resume and preserve-stop re-stamps a missing create-complete mark, so a lo
 expose a preserved workspace to the partial-create rule. A drained node's sandboxes keep the full
 retention. A claim is annotated with a resourceVersion precondition before it is deleted, and the
 provider treats a claimed volume as gone, so a resume and the collector cannot both win.
+Subscription home claims (`sf-home-*`) are never collected, and a pod is never judged orphaned by
+one: only its workspace claim counts.
+
+### Subscription auth homes
+
+A session the control plane resolved to a subscription home (`sessions.auth_home_id`, written by the
+resolver) gets that home mounted: an operator-made claim named `sf-home-<name>`, pre-bound to a
+volume on the node that holds the subscriber's own provider login. The provider mounts it read-write
+at `/home/sandbox/.sf-auth` in the sandbox container only, sets `SF_AUTH_HOME` and
+`SF_AUTH_HOME_PROVIDERS`, labels the pod `sf.dokman.io/auth-home-owner=<name>`, and records the
+claim and the owner's user id as annotations (hints only) on the workspace claim and pod. The
+control plane never reads the volume.
+
+- Every create and resume reads the session's binding afresh, so a resume follows the resolver's
+  latest verdict for whoever is acting; what the stopped sandbox mounted is never reused.
+- A launch whose home claim is missing, not `Bound` or being deleted is refused
+  (`auth_home_unavailable`) before anything is created; so is a binding to a removed or disabled
+  home. There is no key to fall back on.
+- Inside the sandbox, the Claude harness runs on `$SF_AUTH_HOME/claude/oauth-token`, read by its
+  launch wrapper at each exec (never `--bare`), and refuses to start without it; OpenCode gets the
+  allowlisted provider keys of `$SF_AUTH_HOME/env`; the ready event reports whether the home is
+  mounted and `claude/expires_at`, never a value.
+- The claim carries `app.kubernetes.io/managed-by=open-inspect` (the claims policy requires it) and
+  no `openinspect.dev/role` label.
 
 ## Operations
 
@@ -247,9 +274,12 @@ provider treats a claimed volume as gone, so a resume and the collector cannot b
 - Unit tests: `npm test -w @open-inspect/control-plane` (the REST client, the manifests, the
   provider against an in-memory API, the factory, the token reader), and
   `npm run test:kubernetes-gc` (the garbage collector's script against fixtures and a fake
-  `kubectl`).
+  `kubectl`), and `npm run test:kubernetes-admission-policy` (the policies' operations and which
+  object each expression reads).
 - Live: [`scripts/kubernetes-smoke.sh`](../scripts/kubernetes-smoke.sh) drives the provider against
   a cluster with the control plane's own identity and checks isolation, egress, admission (including
   the label and ephemeral-container bypasses), and that the workspace survives preserve, resume and
   a forced pod loss. Point `KUBERNETES_SANDBOX_IMAGE` at an image whose runtime idles, since no
-  control plane answers it.
+  control plane answers it. With `--auth-home` it also mounts an existing `Bound` home claim
+  (`SMOKE_AUTH_HOME_CLAIM`, default `sf-home-bram`) and probes the home rules with server-side dry
+  runs.
