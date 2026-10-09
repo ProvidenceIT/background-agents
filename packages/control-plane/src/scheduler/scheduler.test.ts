@@ -21,6 +21,7 @@ import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import type * as SessionAdmissionModule from "../authorization/session-admission";
 import type * as SessionBindingModule from "../auth-homes/session-binding";
 import type * as AuthHomeAuditModule from "../auth-homes/audit";
+import type * as ResolverModule from "../auth-homes/resolver";
 import type * as GitHubEventAdmissionModule from "../automation/github-event-admission";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, resolve } from "node:path";
@@ -143,6 +144,15 @@ vi.mock("../auth-homes/session-binding", async (importOriginal) => {
       db: SqlDatabase,
       input: Parameters<typeof actual.bindSessionAuthHome>[1]
     ) => actual.bindSessionAuthHome(authHomeDb.current ?? db, input),
+    admitAuthHomeTurn: (input: Parameters<typeof actual.admitAuthHomeTurn>[0]) =>
+      actual.admitAuthHomeTurn({ ...input, db: authHomeDb.current ?? input.db }),
+  };
+});
+vi.mock("../auth-homes/resolver", async (importOriginal) => {
+  const actual = await importOriginal<typeof ResolverModule>();
+  return {
+    ...actual,
+    authHomesInForce: (db: SqlDatabase) => actual.authHomesInForce(authHomeDb.current ?? db),
   };
 });
 vi.mock("../auth-homes/audit", async (importOriginal) => {
@@ -4221,6 +4231,51 @@ describe("Scheduler", () => {
             automation_id: "auto-1",
           }),
         },
+      ]);
+    });
+
+    it("gates a Slack thread steer on the session's home and audits the served turn", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        sampleRunRow({ session_id: "sess-on-home" })
+      );
+      // The owner's run, on the owner's unshared home.
+      mockSessionStoreGet.mockResolvedValue({
+        authHomeId: "H1",
+        model: "anthropic/claude-sonnet-4-6",
+        triggerKind: "schedule",
+      });
+      const stub = createMockSessionStub();
+      const fetchMock = vi.mocked(stub.fetch);
+
+      // A colleague's reply in the thread: not the owner's, and nothing shared.
+      expect(await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())).toEqual({
+        triggered: 0,
+        skipped: 0,
+        steered: 0,
+        invocationIds: [],
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      expect(await auditRows("credential.auth_home_prompt")).toEqual([]);
+
+      // The owner's own reply is served and audited.
+      mockUserStoreGetIdentity.mockImplementation(async (provider: string) =>
+        provider === "slack" ? { userId: OWNER } : null
+      );
+      mockGetEffectiveAuthorization.mockResolvedValue(steeringAuthorization({ userId: OWNER }));
+      expect(
+        await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())
+      ).toMatchObject({ steered: 1 });
+      expect(await auditRows("credential.auth_home_prompt")).toEqual([
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            actor: OWNER,
+            home_owner: OWNER,
+            channel: "slack_steer",
+            trigger_kind: "mention",
+          }),
+        }),
       ]);
     });
 

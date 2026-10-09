@@ -120,7 +120,12 @@ import {
   authHomeRefusalMessage,
   type AuthHomeRefusalReason,
 } from "@open-inspect/shared/types/auth-homes";
-import { applyAuthHomeToProviderAuth, bindSessionAuthHome } from "../auth-homes/session-binding";
+import { authHomesInForce } from "../auth-homes/resolver";
+import {
+  admitAuthHomeTurn,
+  applyAuthHomeToProviderAuth,
+  bindSessionAuthHome,
+} from "../auth-homes/session-binding";
 import { bindAuthHomeMountedAudit, bindUnattendedBlockedAudit } from "../auth-homes/audit";
 import { repositoriesArePrivate } from "../auth-homes/repo-visibility";
 
@@ -1336,6 +1341,30 @@ export class Scheduler {
               automation_id: automation.id,
               session_id: steerable.session_id,
               slack_actor_id: event.actorUserId,
+            });
+            continue;
+          }
+          // The reply is a later turn on the session's subscription home, by
+          // the Slack actor: the same per-turn gate and audit as an HTTP or
+          // socket prompt. A refusal is final, like the prompt route's; the
+          // reply is not re-read as a new trigger.
+          // Without a registered home there is nothing to gate (and no extra session read).
+          const authHomeRefusal = !(await authHomesInForce(this.db))
+            ? null
+            : await admitAuthHomeTurn({
+                db: this.db,
+                requestId: `slack:${event.channelId}:${event.ts}`,
+                sessionId: steerable.session_id,
+                actorUserId: actor.authorization.userId,
+                triggerKind: "mention",
+                channel: "slack_steer",
+              });
+          if (authHomeRefusal) {
+            this.log.warn("Blocked slack steering on a subscription home", {
+              event: "scheduler.slack_steer_auth_home_refused",
+              automation_id: automation.id,
+              session_id: steerable.session_id,
+              reason: authHomeRefusal.reason,
             });
             continue;
           }
