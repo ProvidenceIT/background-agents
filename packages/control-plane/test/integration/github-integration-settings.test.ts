@@ -44,7 +44,7 @@ describe("GitHub integration settings harness", () => {
       wrap({ harness: "claude", model: "anthropic/claude-sonnet-4-6" })
     );
     expect(accepted.status).toBe(200);
-    expect((await put(url, wrap({ harness: "codex" }))).status).toBe(400);
+    expect((await put(url, wrap({ harness: "pi" }))).status).toBe(400);
   });
 
   it("accepts a harness and model that only disagree across levels", async () => {
