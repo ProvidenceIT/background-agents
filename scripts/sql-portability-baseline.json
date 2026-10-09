@@ -56,6 +56,12 @@
         "occurrences": ["CREATE TRIGGER", "CREATE TRIGGER"],
         "reason": "Fence private team-default inserts and updates from the previous Worker between migration commit and deployment. New store validation cannot constrain old binaries; SQLite cannot narrow the existing CHECK in place, and rebuilding the referenced teams table risks deleting dependents. A Postgres migration would ALTER the CHECK instead."
       }
+    },
+    "terraform/d1/migrations/0091_session_trigger_fields.sql": {
+      "create-trigger": {
+        "occurrences": ["CREATE TRIGGER"],
+        "reason": "sessions_seed_legacy_provider_auth from 0076 is re-created verbatim: widening the auth_mode CHECK on session_model_provider_auth needs a table rebuild, and SQLite refuses to rename the rebuilt table while a trigger references the dropped name. The trigger itself is pre-existing deploy-window cover; a Postgres migration would ALTER the CHECK and keep no trigger."
+      }
     }
   },
   "grandfatheredMigrations": [
