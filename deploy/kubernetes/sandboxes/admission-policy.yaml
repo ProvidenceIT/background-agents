@@ -11,11 +11,19 @@
 # a sandbox wearing the proxy's label would get the proxy's direct egress.
 # Ephemeral containers are refused outright.
 #
+# Subscription homes: a sandbox pod may also mount at most one operator-made
+# claim named sf-home-<name> (a person's provider login, on a local volume),
+# and wears sf.dokman.io/auth-home-owner=<name> exactly when it does, so a
+# pod cannot carry one home's name while mounting another's. Neither the
+# control plane nor the sandbox GC may create, change or delete such a claim:
+# the CREATE/UPDATE claims policy refuses them, and a separate DELETE policy
+# does too (it reads oldObject, the only object a DELETE carries).
+#
 # What this does not cover: a compromise of the node itself (a runtime
 # escape, or another privileged workload on the same node can read every
 # Secret and volume there). See docs/KUBERNETES_SANDBOX_PROVIDER.md.
 #
-# Cluster-scoped objects: two ValidatingAdmissionPolicies and their bindings.
+# Cluster-scoped objects: three ValidatingAdmissionPolicies and their bindings.
 # The deployment's values (runtime class, image references, the control
 # plane's identity) are the first four variables, which an overlay replaces.
 # They are not a params ConfigMap: on k3s v1.36.5 the API server did not
@@ -63,6 +71,14 @@ spec:
       expression: "variables.labels[?'openinspect.dev/sandbox'].orValue('')"
     - name: containers
       expression: "object.spec.containers + object.spec.?initContainers.orValue([])"
+    # The subscription home label, and the sf-home-* claims the pod mounts.
+    - name: authHomeOwnerLabel
+      expression: "'sf.dokman.io/auth-home-owner'"
+    - name: authHomeClaims
+      expression: >-
+        object.spec.?volumes.orValue([])
+          .filter(v, has(v.persistentVolumeClaim) && v.persistentVolumeClaim.claimName.startsWith('sf-home-'))
+          .map(v, v.persistentVolumeClaim.claimName)
     - name: allowedImages
       expression: >-
         variables.isSandbox ? variables.sandboxImages : [variables.proxyImage]
@@ -98,8 +114,9 @@ spec:
          object.spec.?volumes.orValue([]).all(v, !has(v.persistentVolumeClaim)))
       message: "the only non-sandbox pod allowed here is the egress proxy, and it mounts no claims"
     - expression: >-
-        variables.isSandbox || !variables.labels.exists(k, k.startsWith('openinspect.dev/'))
-      message: "the egress proxy carries no openinspect.dev labels"
+        variables.isSandbox ||
+        !variables.labels.exists(k, k.startsWith('openinspect.dev/') || k.startsWith('sf.dokman.io/'))
+      message: "the egress proxy carries no openinspect.dev or sf.dokman.io labels"
     - expression: >-
         variables.isSandbox || request.operation != 'CREATE' ||
         (request.userInfo.username == variables.proxyCreator &&
@@ -116,8 +133,8 @@ spec:
     - expression: >-
         !variables.isSandbox ||
         variables.labels.all(k, k in ['app.kubernetes.io/managed-by', 'openinspect.dev/role',
-          'openinspect.dev/sandbox'])
-      message: "sandbox pods carry only the managed-by, role and sandbox labels"
+          'openinspect.dev/sandbox', variables.authHomeOwnerLabel])
+      message: "sandbox pods carry only the managed-by, role and sandbox labels, and the auth-home owner label"
     - expression: >-
         !variables.isSandbox || request.operation != 'CREATE' ||
         request.userInfo.username == variables.controlPlaneUser
@@ -130,8 +147,22 @@ spec:
     - expression: >-
         !variables.isSandbox ||
         object.spec.?volumes.orValue([]).all(v, !has(v.persistentVolumeClaim) ||
-          v.persistentVolumeClaim.claimName == 'oi-' + variables.sandboxHash)
-      message: "a sandbox pod may mount only its own workspace claim"
+          v.persistentVolumeClaim.claimName == 'oi-' + variables.sandboxHash ||
+          v.persistentVolumeClaim.claimName.startsWith('sf-home-'))
+      message: "a sandbox pod may mount only its own workspace claim and a subscription home"
+    - expression: "!variables.isSandbox || variables.authHomeClaims.size() <= 1"
+      message: "a sandbox pod may mount at most one subscription home (sf-home-*) claim"
+    # Checked on UPDATE too: labels can change after create, volumes cannot.
+    - expression: >-
+        !variables.isSandbox ||
+        (variables.authHomeClaims.size() == 0
+          ? !(variables.authHomeOwnerLabel in variables.labels)
+          : variables.labels[?variables.authHomeOwnerLabel].orValue('') != '' &&
+            variables.authHomeClaims.all(c,
+              c == 'sf-home-' + variables.labels[?variables.authHomeOwnerLabel].orValue('')))
+      messageExpression: >-
+        'a sandbox pod wears ' + variables.authHomeOwnerLabel +
+        ' exactly when it mounts an sf-home-<name> claim, equal to that <name>'
     - expression: >-
         !variables.isSandbox ||
         variables.containers.all(c,
@@ -179,6 +210,16 @@ spec:
         object.metadata.labels[?'app.kubernetes.io/managed-by'].orValue('') == 'open-inspect' &&
         !has(object.spec.dataSource) && !has(object.spec.dataSourceRef)
       message: "claims here are Open-Inspect workspaces and start empty (no dataSource clones)"
+    # Subscription homes are the operator's. The identities in this list are
+    # the controlPlaneUser of the pods policy and the GC CronJob's
+    # ServiceAccount; an overlay that renames either edits it here and in
+    # open-inspect-sandbox-auth-home-claims-delete too.
+    - expression: >-
+        !object.metadata.name.startsWith('sf-home-') ||
+        !(request.userInfo.username in [
+          'system:serviceaccount:open-inspect:open-inspect-control-plane',
+          'system:serviceaccount:open-inspect:open-inspect-sandbox-gc'])
+      message: "subscription home claims (sf-home-*) are created and changed only by an operator"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -188,6 +229,47 @@ metadata:
     app.kubernetes.io/part-of: open-inspect
 spec:
   policyName: open-inspect-sandbox-claims
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: open-inspect-sandboxes
+---
+# DELETE gets its own policy: on a DELETE only oldObject is set, so the
+# claims policy above (which reads object) cannot match it without its
+# expression erroring, and with failurePolicy Fail that would refuse every
+# claim delete in the namespace, the GC's and the destroy path's included.
+# This one reads only oldObject and admits every other delete.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: open-inspect-sandbox-auth-home-claims-delete
+  labels:
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["DELETE"]
+        resources: ["persistentvolumeclaims"]
+  validations:
+    - expression: >-
+        !oldObject.metadata.name.startsWith('sf-home-') ||
+        !(request.userInfo.username in [
+          'system:serviceaccount:open-inspect:open-inspect-control-plane',
+          'system:serviceaccount:open-inspect:open-inspect-sandbox-gc'])
+      message: "subscription home claims (sf-home-*) are deleted only by an operator"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: open-inspect-sandbox-auth-home-claims-delete
+  labels:
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  policyName: open-inspect-sandbox-auth-home-claims-delete
   validationActions: ["Deny"]
   matchResources:
     namespaceSelector:

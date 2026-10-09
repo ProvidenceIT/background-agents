@@ -21,6 +21,7 @@
     "test:deploy-aws": "node --test scripts/deploy-aws.test.mjs",
     "test:kubernetes-gc": "node --test scripts/kubernetes-gc.test.mjs",
     "test:kubernetes-egress-proxy": "node --test scripts/kubernetes-egress-proxy.test.mjs",
+    "test:kubernetes-admission-policy": "node --test scripts/kubernetes-admission-policy.test.mjs",
     "test:rbac-bootstrap-owner": "node --experimental-transform-types --test scripts/bootstrap-workspace-owner.test.ts",
     "test:user-merge-cli": "node --experimental-transform-types --test scripts/merge-split-users.test.ts",
     "test:cf-logs-cli": "node --test scripts/cf-logs.test.ts",

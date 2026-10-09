@@ -132,6 +132,9 @@ jobs:
       - name: Test Kubernetes egress proxy config
         run: npm run test:kubernetes-egress-proxy
 
+      - name: Test Kubernetes sandbox admission policy
+        run: npm run test:kubernetes-admission-policy
+
       - name: Test Owner bootstrap CLI
         run: npm run test:rbac-bootstrap-owner
 
