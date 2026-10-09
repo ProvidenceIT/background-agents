@@ -400,6 +400,18 @@ Automations:
 - `running_sandboxes`: the live-sandbox register behind `max_running_sandboxes` — one row per
   session, taken when a launch is admitted, re-asserted while the sandbox reports a live status,
   released when it reports a dead one, and bounded by the sandbox's own lifetime.
+- `user_auth_homes`: the subscription auth-home registry — per enrolled person, the owner user ids
+  (JSON array; the first is the home owner), the `sf-home-*` volume claim and node that carry the
+  home, the providers whose credential files it holds, the trigger kinds allowed to run on it, the
+  background and sharing consent timestamps, the concurrency cap and whether the home is `shared`
+  with the other enrolled people. No credential is stored here: the provider's CLI reads it from the
+  mounted volume. Managed by `/me/auth-home` (self only) and read as metadata by `/auth-homes`.
+- `subscription_sharing`: the single-row (`id = 'global'`) workspace policy, `household` (default,
+  read when the row is absent) or `owner_only`, managed by `/subscription-sharing`.
+- `sessions.trigger_actor_user_id`, `trigger_kind`, `work_item_author_user_id`, `auth_home_id` and
+  `auth_home_selection`: who and what started a session and which home the resolver chose for it;
+  `model_provider_accounts.owner_user_id` names the one user whose activity may spend a connected
+  account.
 
 ## Browser Authentication
 
