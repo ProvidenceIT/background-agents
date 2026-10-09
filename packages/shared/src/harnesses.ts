@@ -41,9 +41,9 @@ export const HARNESS_CATALOG = {
     label: "OpenCode",
     modelFamilies: "any",
     providerAuth: {
-      anthropic: ["api_key"],
-      openai: ["api_key", "provider_account"],
-      xai: ["api_key", "provider_account"],
+      anthropic: ["api_key", "auth_home"],
+      openai: ["api_key", "provider_account", "auth_home"],
+      xai: ["api_key", "provider_account", "auth_home"],
     },
     resume: "session_id",
   },
@@ -51,7 +51,7 @@ export const HARNESS_CATALOG = {
     label: "Claude Agent",
     modelFamilies: ["anthropic"],
     providerAuth: {
-      anthropic: ["api_key", "provider_account"],
+      anthropic: ["api_key", "provider_account", "auth_home"],
     },
     resume: "session_id",
   },

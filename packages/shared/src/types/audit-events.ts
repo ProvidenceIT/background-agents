@@ -115,6 +115,19 @@ export const AUDIT_OPERATION_ACTIONS = [
   "budget.blocked",
   "budget.warned",
   "budget.quota_changed",
+  // Subscription auth homes: which home served a turn, which turn was refused.
+  "credential.auth_home_mounted",
+  "credential.auth_home_prompt",
+  "credential.unattended_blocked",
+  "auth_home.registered",
+  "auth_home.removed",
+  "auth_home.consent_changed",
+  "auth_home.sharing_changed",
+  "subscription_sharing.changed",
+  "provider_account.connected",
+  "provider_account.denied",
+  "provider_account.expiring",
+  "provider_account.revoked",
 ] as const;
 
 export const AUTHORIZATION_DECISION_METADATA_SCHEMA = "authorization_decision.v1";

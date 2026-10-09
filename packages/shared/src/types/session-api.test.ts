@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  createSessionInputSchema,
+  createSessionRequestSchema,
   linearCallbackContextSchema,
   linearCompletionCallbackSchema,
   linearStartCallbackSchema,
@@ -78,5 +80,27 @@ describe("Linear callback channel context", () => {
     expect(
       linearCallbackContextSchema.safeParse({ ...legacyContext, teamId: "internal-team-1" }).success
     ).toBe(false);
+  });
+});
+
+describe("session creation trigger fields", () => {
+  const body = {
+    repoOwner: "acme",
+    repoName: "widgets",
+    triggerKind: "issue_label",
+    workItemAuthorScmUserId: "63718501",
+  };
+
+  it("carries the trigger kind and work-item author on the service input only", () => {
+    expect(createSessionInputSchema.parse(body)).toMatchObject({
+      triggerKind: "issue_label",
+      workItemAuthorScmUserId: "63718501",
+    });
+    expect(createSessionInputSchema.safeParse({ ...body, triggerKind: "user" }).success).toBe(
+      false
+    );
+    const publicBody = createSessionRequestSchema.parse(body);
+    expect(publicBody).not.toHaveProperty("triggerKind");
+    expect(publicBody).not.toHaveProperty("workItemAuthorScmUserId");
   });
 });

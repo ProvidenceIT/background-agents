@@ -13,6 +13,7 @@ import {
   modelProviderAccountStatusSchema,
   modelProviderSelectionsSchema,
   providerAuthModeSchema,
+  providerUnattendedModeSchema,
   reconnectModelProviderAccountRequestSchema,
   providerDeviceAuthorizationStatusResponseSchema,
   startProviderDeviceAuthorizationRequestSchema,
@@ -79,13 +80,17 @@ describe("provider account write requests", () => {
       "disabled",
       "reconnect_required",
     ]);
-    expect(providerAuthModeSchema.options).toEqual(["provider_account", "api_key"]);
-    expect(
-      modelProviderAccountDefaultRequestSchema.safeParse({
-        providerAccountId: ACCOUNT_ID,
-        unattendedMode: "legacy_scoped_oauth",
-      }).success
-    ).toBe(false);
+    expect(providerAuthModeSchema.options).toEqual(["provider_account", "api_key", "auth_home"]);
+    expect(providerUnattendedModeSchema.options).toEqual(["provider_account", "api_key"]);
+    for (const unattendedMode of ["legacy_scoped_oauth", "auth_home"]) {
+      expect(
+        modelProviderAccountDefaultRequestSchema.safeParse({
+          providerAccountId: ACCOUNT_ID,
+          unattendedMode,
+        }).success,
+        unattendedMode
+      ).toBe(false);
+    }
     expect(
       modelProviderAccountDefaultRequestSchema.parse({
         providerAccountId: ACCOUNT_ID,
@@ -214,6 +219,7 @@ describe("provider account response schemas", () => {
     displayName: "Team ChatGPT",
     externalAccountId: "acct_external",
     status: "active",
+    ownerUserId: "user-1",
     createdBy: "user-1",
     updatedBy: "user-1",
     lastVerifiedAt: 10,
@@ -269,6 +275,11 @@ describe("provider account response schemas", () => {
             provider: "xai",
             authMode: "legacy_scoped_oauth",
             selectionSource: "legacy_fallback",
+          },
+          {
+            provider: "anthropic",
+            authMode: "auth_home",
+            selectionSource: "auth_home_own",
           },
         ],
       }).success

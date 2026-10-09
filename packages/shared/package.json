@@ -154,6 +154,10 @@
       "import": "./dist/types/provider-accounts.js",
       "types": "./dist/types/provider-accounts.d.ts"
     },
+    "./types/auth-homes": {
+      "import": "./dist/types/auth-homes.js",
+      "types": "./dist/types/auth-homes.d.ts"
+    },
     "./types/websocket": {
       "import": "./dist/types/websocket.js",
       "types": "./dist/types/websocket.d.ts"

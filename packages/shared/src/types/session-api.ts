@@ -6,6 +6,7 @@ import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
 import { MAX_WEB_PROMPT_CHARS, promptContentSchema } from "./prompts";
 import { modelProviderSelectionsSchema } from "./provider-accounts";
+import { triggerKindSchema } from "./auth-homes";
 import { sessionVisibilitySchema } from "./teams";
 import {
   messageSourceSchema,
@@ -306,6 +307,18 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     actorDisplayName: z.string().optional(),
     actorEmail: z.string().optional(),
     actorAvatarUrl: z.string().optional(),
+    /**
+     * What started the session; set by the bots and the scheduler, defaulted
+     * to `prompt` for a human. The public request schema strips it, and the
+     * route rejects it from a human principal.
+     */
+    triggerKind: triggerKindSchema.optional(),
+    /**
+     * The SCM user id (GitHub `issue.user.id` / `pull_request.user.id`) of the
+     * work item a bot is acting on, audited as `work_item_author_user_id` once
+     * resolved to a workspace user. Never the actor: that is `sender.id`.
+     */
+    workItemAuthorScmUserId: z.string().trim().min(1).max(64).optional(),
   })
   .refine(hasMatchingRepositoryIdentifiers, {
     message: "repoOwner and repoName must be provided together",

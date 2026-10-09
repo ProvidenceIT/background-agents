@@ -59,9 +59,23 @@ export const providerAuthSelectionSchema = z.discriminatedUnion("mode", [
   z.strictObject({ mode: z.literal("api_key") }),
 ]);
 export type ProviderAuthSelection = z.infer<typeof providerAuthSelectionSchema>;
-export const providerAuthModeSchema = z.enum(["provider_account", "api_key"]);
+/**
+ * How a session authenticates to a provider. `auth_home` means the
+ * provider's own CLI reads the subscriber's credential from an auth home
+ * mounted into the sandbox (see `./auth-homes`); the control plane holds no
+ * token for it, so it is resolver-assigned per turn and never selectable.
+ */
+export const providerAuthModeSchema = z.enum(["provider_account", "api_key", "auth_home"]);
 export type ProviderAuthMode = z.infer<typeof providerAuthModeSchema>;
 export type SessionProviderAuthMode = ProviderAuthMode | "legacy_scoped_oauth";
+/**
+ * The modes an installation default may name for unattended runs. A home is
+ * resolved from the acting user, so it is never a workspace-wide default; and
+ * the store refuses `provider_account` because an unattended run must not
+ * spend a connected account that belongs to one person.
+ */
+export const providerUnattendedModeSchema = z.enum(["provider_account", "api_key"]);
+export type ProviderUnattendedMode = z.infer<typeof providerUnattendedModeSchema>;
 
 /** Closed, bounded map: one optional selection for each supported subscription provider. */
 export const modelProviderSelectionsSchema = z.strictObject({
@@ -84,6 +98,12 @@ export const modelProviderAccountSchema = z.strictObject({
   displayName: z.string().min(1).max(100),
   externalAccountId: z.string().min(1).nullable(),
   status: modelProviderAccountStatusSchema,
+  /**
+   * The one user whose activity may spend this account; the selection policy
+   * refuses every other actor. Null only for accounts created before ownership
+   * was recorded whose creator is gone, which nobody can select.
+   */
+  ownerUserId: z.string().min(1).nullable(),
   createdBy: z.string().min(1).nullable(),
   updatedBy: z.string().min(1).nullable(),
   lastVerifiedAt: z.number().int().nonnegative().nullable(),
@@ -134,7 +154,7 @@ export type ModelProviderAccountsResponse = z.infer<typeof modelProviderAccounts
 export const modelProviderAccountDefaultSchema = z.strictObject({
   provider: subscriptionProviderIdSchema,
   providerAccountId: modelProviderAccountIdSchema,
-  unattendedMode: providerAuthModeSchema,
+  unattendedMode: providerUnattendedModeSchema,
   createdBy: z.string().min(1).nullable(),
   updatedBy: z.string().min(1).nullable(),
   createdAt: z.number().int().nonnegative(),
@@ -151,7 +171,7 @@ export type ModelProviderAccountDefaultResponse = z.infer<
 
 export const modelProviderAccountDefaultRequestSchema = z.strictObject({
   providerAccountId: modelProviderAccountIdSchema,
-  unattendedMode: providerAuthModeSchema,
+  unattendedMode: providerUnattendedModeSchema,
 });
 
 export const modelProviderAccountDefaultsResponseSchema = z.strictObject({
@@ -180,6 +200,16 @@ export const sessionModelProviderAuthSchema = z.discriminatedUnion("authMode", [
   z.strictObject({
     provider: subscriptionProviderIdSchema,
     authMode: z.literal("legacy_scoped_oauth"),
+    ...sessionModelProviderAuthRoutingSchema,
+  }),
+  /**
+   * Served from the auth home recorded on the session (`sessions.auth_home_id`);
+   * `selectionSource` is `auth_home_own` or `auth_home_shared`. No account id:
+   * the control plane holds nothing for this provider.
+   */
+  z.strictObject({
+    provider: subscriptionProviderIdSchema,
+    authMode: z.literal("auth_home"),
     ...sessionModelProviderAuthRoutingSchema,
   }),
 ]);

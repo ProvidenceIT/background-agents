@@ -5,6 +5,7 @@ import { eventResponseSchema } from "./sandbox-events";
 import { sessionListRepositorySchema, type SessionListRepository } from "./repositories";
 import type { PullRequestLifecycleState } from "./artifacts";
 import type { SessionCapabilities } from "./session-access";
+import type { TriggerKind } from "./auth-homes";
 
 /**
  * A session's conversation lifecycle: durable, user-visible, and independent
@@ -250,6 +251,15 @@ export interface Session {
   parentSessionId: string | null;
   spawnSource: SpawnSource;
   spawnDepth: number;
+  /**
+   * What started the session and who: the trigger actor is the person whose
+   * subscription home the resolver considers first, checked on every turn.
+   * Absent on sessions created before the fields existed.
+   */
+  triggerKind?: TriggerKind | null;
+  triggerActorUserId?: string | null;
+  /** Owner of the auth home serving the session; differs from the actor on a shared home. */
+  authHomeOwnerUserId?: string | null;
   createdAt: number;
   updatedAt: number;
   /**

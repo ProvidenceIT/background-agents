@@ -63,7 +63,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(47);
+    expect(PERMISSION_IDS).toHaveLength(50);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
@@ -126,6 +126,19 @@ describe("RBAC registry", () => {
     expect(permissionsForBuiltInRole("administrator")).toContain("workspace.audit.read");
     expect(permissionsForBuiltInRole("member")).not.toContain("workspace.audit.read");
     expect(permissionsForBuiltInRole("viewer")).not.toContain("workspace.audit.read");
+  });
+
+  it("gives every active user their own subscription home and reserves the registry and policy", () => {
+    for (const role of ["owner", "administrator", "member", "viewer"] as const) {
+      expect(permissionsForBuiltInRole(role)).toContain("auth_homes.manage_own");
+    }
+    for (const permission of ["auth_homes.read_all", "subscription_sharing.manage"] as const) {
+      expect(permissionsForBuiltInRole("owner")).toContain(permission);
+      expect(permissionsForBuiltInRole("administrator")).toContain(permission);
+      expect(permissionsForBuiltInRole("member")).not.toContain(permission);
+      expect(permissionsForBuiltInRole("viewer")).not.toContain(permission);
+      expect(isCustomRolePermission(permission)).toBe(true);
+    }
   });
 
   it("reserves bulk archiving for Owner and Administrator", () => {

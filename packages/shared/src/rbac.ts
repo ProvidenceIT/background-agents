@@ -42,6 +42,8 @@ export function isWorkspaceAdmin(roleKey: string | null | undefined): boolean {
 /** Canonical permission identifiers accepted by the RBAC policy and persistence layers. */
 export const PERMISSION_IDS = [
   "analytics.read",
+  "auth_homes.manage_own",
+  "auth_homes.read_all",
   "automations.create",
   "automations.manage.any",
   "automations.manage.own",
@@ -82,6 +84,7 @@ export const PERMISSION_IDS = [
   "skill_profiles.manage_own",
   "skills.manage",
   "skills.read",
+  "subscription_sharing.manage",
   "usage_quotas.manage",
   "workspace.audit.read",
   "workspace.members.manage",
@@ -149,6 +152,8 @@ export function hasScopedPermission(
 
 const VIEWER_PERMISSIONS = new Set<PermissionId>([
   "analytics.read",
+  // Every active user registers and manages their own subscription home.
+  "auth_homes.manage_own",
   "automations.read",
   "environments.read",
   "image_builds.read",
