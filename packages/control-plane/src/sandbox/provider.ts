@@ -112,6 +112,12 @@ export interface SandboxAuthHome {
   ownerUserId: string;
   /** Providers whose credential files the home carries (`SF_AUTH_HOME_PROVIDERS`). */
   providers: readonly string[];
+  /**
+   * Mount the claim read-write. Only a home's Codex claim needs it: Codex
+   * rewrites its own login and state there. A home's own claim is mounted
+   * read-only, since the agent shares the sandbox with the files.
+   */
+  writable?: boolean;
 }
 
 /**

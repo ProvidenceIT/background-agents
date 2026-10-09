@@ -47,15 +47,17 @@ describe("createSessionAuthHomeLookup", () => {
       pvcName: "sf-home-bram",
       ownerUserId: "u1",
       providers: ["anthropic", "openai"],
+      writable: false,
     });
   });
 
-  it("mounts the home's Codex claim, carrying only the Codex login, for a Codex session", async () => {
+  it("mounts the home's Codex claim read-write, carrying only the Codex login, for a Codex session", async () => {
     await session("s1", "ah_bram", "codex");
     await expect(lookup.getForSession("s1")).resolves.toEqual({
       pvcName: "sf-home-bram-codex",
       ownerUserId: "u1",
       providers: ["openai"],
+      writable: true,
     });
   });
 

@@ -371,7 +371,8 @@ export interface SandboxPodInput {
   /** The address that probe must fail to reach; DEFAULT_EGRESS_PROBE_HOST when unset. */
   egressProbeHost?: string;
   /**
-   * A subscription home to mount read-write at AUTH_HOME_MOUNT_PATH, with the
+   * A subscription home to mount at AUTH_HOME_MOUNT_PATH (read-only unless
+   * `writable`), with the
    * owner label the admission policy requires and the env the runtime reads.
    * Absent, the pod is exactly what it was before homes existed.
    */
@@ -423,14 +424,19 @@ export function buildSandboxPod(input: SandboxPodInput): Record<string, unknown>
     sandboxMounts.push({ name: CA_VOLUME, mountPath: CA_MOUNT_PATH, readOnly: true });
   }
   if (input.authHome) {
-    // Read-write: the provider CLIs rewrite their own files (Codex refreshes
-    // auth.json in place). Only the sandbox container sees it; the prepare
-    // step has no business there.
+    // Read-only unless the claim asks otherwise: only Codex rewrites its own
+    // files (it refreshes auth.json in place), and it has a claim of its own.
+    // Only the sandbox container sees it; the prepare step has no business
+    // there.
     volumes.push({
       name: AUTH_HOME_VOLUME,
       persistentVolumeClaim: { claimName: input.authHome.pvcName },
     });
-    sandboxMounts.push({ name: AUTH_HOME_VOLUME, mountPath: AUTH_HOME_MOUNT_PATH });
+    sandboxMounts.push({
+      name: AUTH_HOME_VOLUME,
+      mountPath: AUTH_HOME_MOUNT_PATH,
+      ...(input.authHome.writable ? {} : { readOnly: true }),
+    });
   }
 
   const { resources } = input;

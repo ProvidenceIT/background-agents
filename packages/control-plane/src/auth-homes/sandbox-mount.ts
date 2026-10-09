@@ -30,8 +30,9 @@ export interface SessionAuthHomeLookup {
 
 /**
  * The claim a launch mounts. A Codex session mounts the home's own Codex
- * claim (`sf-home-<u>-codex`), which carries the Codex login the seat
- * serializes and nothing else; every other harness mounts the home's claim.
+ * claim (`sf-home-<u>-codex`) read-write, which carries the Codex login the
+ * seat serializes and nothing else; every other harness mounts the home's
+ * claim read-only, since nothing there needs to write it.
  */
 function toSandboxAuthHome(home: AuthHome, harness: string | null): SandboxAuthHome {
   if (harness === CODEX_SEAT) {
@@ -39,12 +40,14 @@ function toSandboxAuthHome(home: AuthHome, harness: string | null): SandboxAuthH
       pvcName: codexClaimName(home.pvcName),
       ownerUserId: authHomeOwnerUserId(home),
       providers: [CODEX_PROVIDER],
+      writable: true,
     };
   }
   return {
     pvcName: home.pvcName,
     ownerUserId: authHomeOwnerUserId(home),
     providers: [...home.providers],
+    writable: false,
   };
 }
 

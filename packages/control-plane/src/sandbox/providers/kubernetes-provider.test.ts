@@ -883,6 +883,7 @@ describe("subscription auth homes", () => {
     expect(spec.containers[0]!.volumeMounts).toContainEqual({
       name: "sf-auth",
       mountPath: "/home/sandbox/.sf-auth",
+      readOnly: true,
     });
     expect(pod.metadata.labels).toMatchObject({ "sf.dokman.io/auth-home-owner": "bram" });
     expect(pod.metadata.annotations).toMatchObject({

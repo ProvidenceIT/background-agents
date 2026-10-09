@@ -237,7 +237,7 @@ describe("buildSandboxPod with a subscription home", () => {
   const pod = buildSandboxPod(podInput()) as unknown as PodLike;
   const withHome = buildSandboxPod(podInput({ authHome })) as unknown as PodLike;
 
-  it("mounts the home's claim read-write into the sandbox container only", () => {
+  it("mounts the home's claim read-only into the sandbox container only", () => {
     const homeVolumes = withHome.spec.volumes.filter(
       (volume) =>
         (volume.persistentVolumeClaim as { claimName: string } | undefined)?.claimName ===
@@ -247,11 +247,30 @@ describe("buildSandboxPod with a subscription home", () => {
       { name: "sf-auth", persistentVolumeClaim: { claimName: "sf-home-bram" } },
     ]);
     const mounts = withHome.spec.containers[0]!.volumeMounts as Array<Record<string, unknown>>;
-    expect(mounts).toContainEqual({ name: "sf-auth", mountPath: AUTH_HOME_MOUNT_PATH });
-    expect(mounts.find((mount) => mount.name === "sf-auth")!.readOnly).toBeUndefined();
+    expect(mounts).toContainEqual({
+      name: "sf-auth",
+      mountPath: AUTH_HOME_MOUNT_PATH,
+      readOnly: true,
+    });
     expect(AUTH_HOME_MOUNT_PATH).toBe("/home/sandbox/.sf-auth");
     const prepareMounts = withHome.spec.initContainers[0]!.volumeMounts as Array<{ name: string }>;
     expect(prepareMounts.map((mount) => mount.name)).not.toContain("sf-auth");
+  });
+
+  it("mounts a writable claim (a home's Codex claim) read-write", () => {
+    const codex = buildSandboxPod(
+      podInput({
+        authHome: {
+          pvcName: "sf-home-bram-codex",
+          ownerUserId: "u1",
+          providers: ["openai"],
+          writable: true,
+        },
+      })
+    ) as unknown as PodLike;
+    const mounts = codex.spec.containers[0]!.volumeMounts as Array<Record<string, unknown>>;
+    expect(mounts).toContainEqual({ name: "sf-auth", mountPath: AUTH_HOME_MOUNT_PATH });
+    expect(mounts.find((mount) => mount.name === "sf-auth")!.readOnly).toBeUndefined();
   });
 
   it("wears the home's name as the owner label, the admission policy's tie to the claim", () => {

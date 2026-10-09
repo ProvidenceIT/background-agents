@@ -241,11 +241,11 @@ one: only its workspace claim counts.
 
 A session the control plane resolved to a subscription home (`sessions.auth_home_id`, written by the
 resolver) gets that home mounted: an operator-made claim named `sf-home-<name>`, pre-bound to a
-volume on the node that holds the subscriber's own provider login. The provider mounts it read-write
-at `/home/sandbox/.sf-auth` in the sandbox container only, sets `SF_AUTH_HOME` and
-`SF_AUTH_HOME_PROVIDERS`, labels the pod `sf.dokman.io/auth-home-owner=<name>`, and records the
-claim and the owner's user id as annotations (hints only) on the workspace claim and pod. The
-control plane never reads the volume.
+volume on the node that holds the subscriber's own provider login. The provider mounts it read-only
+at `/home/sandbox/.sf-auth` in the sandbox container only (nothing in a session writes there), sets
+`SF_AUTH_HOME` and `SF_AUTH_HOME_PROVIDERS`, labels the pod `sf.dokman.io/auth-home-owner=<name>`,
+and records the claim and the owner's user id as annotations (hints only) on the workspace claim and
+pod. The control plane never reads the volume.
 
 A user can register a home only on a claim an operator assigned to them
 (`PUT /auth-home-claims/<claim>` with `{"ownerUserId": ...}`, permission `auth_homes.assign`), and
@@ -267,14 +267,14 @@ in `-codex` are Codex claims (below) and are never registered as a home.
 
 #### Codex sessions and the Codex seat
 
-A session on the `codex` harness mounts a second claim of the same home, `sf-home-<name>-codex`
-(label `sf.dokman.io/auth-home-owner=<name>-codex`), with `SF_AUTH_HOME_PROVIDERS=openai`. It holds
-one directory, `codex/`, which is the session's `CODEX_HOME`: the owner's own
-`codex login --device-auth` login (`codex/auth.json`, never a copy of a login from elsewhere),
-Codex's state databases and its `sessions/` rollouts, from which a later turn or a restored sandbox
-resumes the conversation. The operator creates and binds this claim like the home's own claim; a
-missing one refuses the launch with `auth_home_unavailable`, a missing `codex/auth.json` stops the
-harness with a request to log in again.
+A session on the `codex` harness mounts a second claim of the same home, read-write,
+`sf-home-<name>-codex` (label `sf.dokman.io/auth-home-owner=<name>-codex`), with
+`SF_AUTH_HOME_PROVIDERS=openai`. It holds one directory, `codex/`, which is the session's
+`CODEX_HOME`: the owner's own `codex login --device-auth` login (`codex/auth.json`, never a copy of
+a login from elsewhere), Codex's state databases and its `sessions/` rollouts, from which a later
+turn or a restored sandbox resumes the conversation. The operator creates and binds this claim like
+the home's own claim; a missing one refuses the launch with `auth_home_unavailable`, a missing
+`codex/auth.json` stops the harness with a request to log in again.
 
 Codex refreshes the login's single-use token itself, so two sandboxes must never run Codex on the
 same claim. The control plane holds a per-home **Codex seat** (`auth_home_leases`, with the FIFO
