@@ -188,6 +188,14 @@ export class FakeKubernetesApi implements KubernetesApi {
 
   listNetworkPolicies = vi.fn(async () => structuredClone(this.networkPolicies));
 
+  /** Seed a claim the provider does not create, e.g. an operator's subscription home. */
+  seedPvc(name: string, status: { phase: string }, labels: Record<string, string> = {}) {
+    this.pvcs.set(name, {
+      metadata: { name, uid: `uid-${++this.uid}`, resourceVersion: "1", labels, annotations: {} },
+      status,
+    });
+  }
+
   /** Seed a pod that is not the provider's own, e.g. a previous generation. */
   seedPod(name: string, labels: Record<string, string>, annotations: Record<string, string>) {
     this.pods.set(name, {

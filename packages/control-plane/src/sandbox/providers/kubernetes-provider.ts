@@ -46,6 +46,7 @@ import {
   MANAGED_BY,
   parseSandboxObjectId,
   PREPARE_CONTAINER_NAME,
+  podMountsClaim,
   podName,
   SANDBOX_CONTAINER_NAME,
   SANDBOX_ROLE,
@@ -62,6 +63,7 @@ import {
   scmCloneIdentity,
 } from "../sandbox-env";
 import {
+  AuthHomeUnavailableError,
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
@@ -73,6 +75,7 @@ import {
   type ResolveSandboxResult,
   type ResumeConfig,
   type ResumeResult,
+  type SandboxAuthHome,
   type SandboxLifetime,
   type SandboxProvider,
   type SandboxProviderCapabilities,
@@ -169,6 +172,7 @@ export class KubernetesSandboxProvider implements SandboxProvider {
     supportsRestore: false,
     supportsPersistentResume: true,
     supportsExplicitStop: true,
+    supportsAuthHomeMounts: true,
   };
 
   private readonly pollIntervalMs: number;
@@ -261,6 +265,9 @@ export class KubernetesSandboxProvider implements SandboxProvider {
     let created: { claim?: OwnerClaim; pod?: string } = {};
     try {
       await this.ensureEgressPolicy();
+      // Before anything is made: a home that cannot be mounted is a refusal,
+      // and a refusal leaves no workspace behind.
+      await this.ensureAuthHomeBound(config.authHome);
       const claim = await this.ensureWorkspaceClaim(config, names);
       created = { claim };
       await this.replaceEnvSecret(names, claim, this.buildEnv(config));
@@ -313,6 +320,9 @@ export class KubernetesSandboxProvider implements SandboxProvider {
     try {
       // Most starts in a long session are resumes: they get the same check.
       await this.ensureEgressPolicy();
+      // The caller resolved this home for whoever is resuming; the claim's own
+      // hint annotation is never read back into a mount.
+      await this.ensureAuthHomeBound(config.authHome);
       const pvc = await this.api.getPvc(names.base);
       // Gone, destroy-stopped, or claimed by the garbage collector.
       if (!pvc || isReleasedClaim(pvc.metadata)) return released;
@@ -353,6 +363,7 @@ export class KubernetesSandboxProvider implements SandboxProvider {
             sandboxId: config.sandboxId,
             timeoutSeconds: config.timeoutSeconds,
             sandboxSettings: config.sandboxSettings,
+            authHome: config.authHome,
           },
           names,
           claim,
@@ -516,6 +527,7 @@ export class KubernetesSandboxProvider implements SandboxProvider {
       storageClassName: this.config.storageClassName,
       size: this.config.workspaceSize,
       nowMs: Date.now(),
+      authHome: config.authHome,
     });
     try {
       return claimRef(await this.api.createPvc(body));
@@ -603,7 +615,7 @@ export class KubernetesSandboxProvider implements SandboxProvider {
   private podSpec(
     config: Pick<
       CreateSandboxConfig,
-      "sessionId" | "sandboxId" | "timeoutSeconds" | "sandboxSettings"
+      "sessionId" | "sandboxId" | "timeoutSeconds" | "sandboxSettings" | "authHome"
     >,
     names: SandboxObjectNames,
     claim: OwnerClaim,
@@ -628,6 +640,7 @@ export class KubernetesSandboxProvider implements SandboxProvider {
       dnsless: this.dnsless(),
       verifyEgressDenied: this.config.requireNetworkPolicy,
       egressProbeHost: this.config.egressProbeHost,
+      authHome: config.authHome,
     });
   }
 
@@ -681,6 +694,22 @@ export class KubernetesSandboxProvider implements SandboxProvider {
   // -----------------------------------------------------------------------
   // Pods
   // -----------------------------------------------------------------------
+
+  /**
+   * Every pod of the provider's, of any sandbox, whose spec names the claim:
+   * what a lease that must not be granted while a home is mounted elsewhere
+   * looks at. Terminating pods are included; they still hold the mount until
+   * they are gone, and the caller reads `metadata.deletionTimestamp`.
+   */
+  async listPodsMountingClaim(pvcName: string, signal?: AbortSignal): Promise<KubernetesPod[]> {
+    let pods: KubernetesPod[];
+    try {
+      pods = await this.api.listPods(`${LABELS.managedBy}=${MANAGED_BY}`, signal);
+    } catch (error) {
+      throw classifyKubernetesError(`Failed to list pods mounting ${pvcName}`, error);
+    }
+    return pods.filter((pod) => podMountsClaim(pod, pvcName));
+  }
 
   /** Delete the sandbox's pods (optionally only up to a generation); returns the names deleted. */
   private async deleteSandboxPods(
@@ -780,6 +809,41 @@ export class KubernetesSandboxProvider implements SandboxProvider {
       );
     }
     passedPreflights.set(this.api.namespace, { checkedAtMs: Date.now() });
+  }
+
+  /**
+   * A launch that names a subscription home starts only on a claim that is
+   * Bound and staying. The claim is the operator's (pre-bound to a local PV
+   * on the node that holds the home); the provider never creates, patches or
+   * deletes it, and the admission policy refuses it if it tried.
+   */
+  private async ensureAuthHomeBound(authHome: SandboxAuthHome | undefined): Promise<void> {
+    if (!authHome) return;
+    let pvc: KubernetesPvc | null;
+    try {
+      pvc = await this.api.getPvc(authHome.pvcName);
+    } catch (error) {
+      throw classifyKubernetesError(
+        `Failed to look up subscription home claim ${authHome.pvcName}`,
+        error
+      );
+    }
+    if (!pvc) {
+      throw new AuthHomeUnavailableError(
+        `Subscription home claim ${authHome.pvcName} does not exist in namespace ${this.api.namespace}`
+      );
+    }
+    if (pvc.metadata.deletionTimestamp) {
+      throw new AuthHomeUnavailableError(
+        `Subscription home claim ${authHome.pvcName} is being deleted`
+      );
+    }
+    const phase = pvc.status?.phase;
+    if (phase !== "Bound") {
+      throw new AuthHomeUnavailableError(
+        `Subscription home claim ${authHome.pvcName} is ${phase ?? "not bound"}, not Bound`
+      );
+    }
   }
 
   private async cleanupFailedCreate(
@@ -1005,15 +1069,16 @@ function isEmptySelector(selector: LabelSelector): boolean {
 
 /**
  * Whether a selector could match a sandbox pod, whose labels are exactly the
- * managed-by, role and sandbox labels (the admission policy refuses a sandbox
- * pod with any other). Expressions are not evaluated: a selector with any is
+ * managed-by, role and sandbox labels, plus the auth-home owner label on pods
+ * that mount a subscription home (the admission policy refuses a sandbox pod
+ * with any other). Expressions are not evaluated: a selector with any is
  * assumed to match, which only makes the check stricter.
  */
 function mayMatchSandboxPods(selector: LabelSelector): boolean {
   return Object.entries(selector.matchLabels ?? {}).every(([key, value]) => {
     if (key === LABELS.managedBy) return value === MANAGED_BY;
     if (key === LABELS.role) return value === SANDBOX_ROLE;
-    return key === LABELS.sandbox;
+    return key === LABELS.sandbox || key === LABELS.authHomeOwner;
   });
 }
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   ANNOTATIONS,
+  AUTH_HOME_MOUNT_PATH,
+  authHomeSuffix,
   buildEnvSecret,
   buildSandboxPod,
   buildWorkspaceClaim,
@@ -8,6 +10,7 @@ import {
   LABELS,
   parseSandboxObjectId,
   PERSISTED_PATHS,
+  podMountsClaim,
   podName,
   prepareScript,
   SANDBOX_UID,
@@ -226,6 +229,105 @@ describe("buildSandboxPod", () => {
       ) as unknown as PodLike
     ).spec;
     expect(spec.nodeSelector).toEqual({ "kubernetes.io/hostname": "n1" });
+  });
+});
+
+describe("buildSandboxPod with a subscription home", () => {
+  const authHome = { pvcName: "sf-home-bram", ownerUserId: "u1", providers: ["anthropic"] };
+  const pod = buildSandboxPod(podInput()) as unknown as PodLike;
+  const withHome = buildSandboxPod(podInput({ authHome })) as unknown as PodLike;
+
+  it("mounts the home's claim read-write into the sandbox container only", () => {
+    const homeVolumes = withHome.spec.volumes.filter(
+      (volume) =>
+        (volume.persistentVolumeClaim as { claimName: string } | undefined)?.claimName ===
+        "sf-home-bram"
+    );
+    expect(homeVolumes).toEqual([
+      { name: "sf-auth", persistentVolumeClaim: { claimName: "sf-home-bram" } },
+    ]);
+    const mounts = withHome.spec.containers[0]!.volumeMounts as Array<Record<string, unknown>>;
+    expect(mounts).toContainEqual({ name: "sf-auth", mountPath: AUTH_HOME_MOUNT_PATH });
+    expect(mounts.find((mount) => mount.name === "sf-auth")!.readOnly).toBeUndefined();
+    expect(AUTH_HOME_MOUNT_PATH).toBe("/home/sandbox/.sf-auth");
+    const prepareMounts = withHome.spec.initContainers[0]!.volumeMounts as Array<{ name: string }>;
+    expect(prepareMounts.map((mount) => mount.name)).not.toContain("sf-auth");
+  });
+
+  it("wears the home's name as the owner label, the admission policy's tie to the claim", () => {
+    expect(withHome.metadata.labels).toEqual({
+      [LABELS.managedBy]: "open-inspect",
+      [LABELS.role]: "sandbox",
+      [LABELS.sandbox]: names.hash,
+      [LABELS.authHomeOwner]: "bram",
+    });
+    expect(LABELS.authHomeOwner).toBe("sf.dokman.io/auth-home-owner");
+    // The owner's canonical id is an annotation: label values cannot carry arbitrary ids.
+    expect(withHome.metadata.annotations).toMatchObject({
+      [ANNOTATIONS.authHomePvc]: "sf-home-bram",
+      [ANNOTATIONS.authHomeOwner]: "u1",
+    });
+  });
+
+  it("tells the runtime where the home is and which providers it carries", () => {
+    expect(withHome.spec.containers[0]!.env).toEqual([
+      { name: "SANDBOX_TIMEOUT_SECONDS", value: "3600" },
+      { name: "SF_AUTH_HOME", value: "/home/sandbox/.sf-auth" },
+      { name: "SF_AUTH_HOME_PROVIDERS", value: "anthropic" },
+    ]);
+    const two = buildSandboxPod(
+      podInput({ authHome: { ...authHome, providers: ["anthropic", "openai"] } })
+    ) as unknown as PodLike;
+    expect(two.spec.containers[0]!.env).toContainEqual({
+      name: "SF_AUTH_HOME_PROVIDERS",
+      value: "anthropic,openai",
+    });
+  });
+
+  it("changes nothing about scheduling or the runtime class", () => {
+    expect(withHome.spec.nodeSelector).toBeUndefined();
+    expect(withHome.spec.runtimeClassName).toBe("gvisor");
+    expect(withHome.spec.securityContext).toEqual(pod.spec.securityContext);
+  });
+
+  it("without a home the pod is exactly the pod it always was", () => {
+    expect(buildSandboxPod(podInput({ authHome: undefined }))).toEqual(pod);
+    expect(JSON.stringify(pod)).not.toContain("sf-");
+  });
+
+  it("refuses a claim that is not a subscription home", () => {
+    expect(authHomeSuffix("sf-home-bram")).toBe("bram");
+    expect(() => authHomeSuffix("oi-0123456789abcdef0123")).toThrow(/not named sf-home-/);
+  });
+
+  it("records the home on the workspace claim as a hint", () => {
+    const pvc = buildWorkspaceClaim({
+      names,
+      sessionId: "sess-1",
+      sandboxId: "sandbox-1",
+      repo: null,
+      size: "20Gi",
+      nowMs: 5,
+      authHome,
+    }) as { metadata: { annotations: Record<string, string> } };
+    expect(pvc.metadata.annotations).toEqual({
+      [ANNOTATIONS.sessionId]: "sess-1",
+      [ANNOTATIONS.sandboxId]: "sandbox-1",
+      [ANNOTATIONS.lastActiveAtMs]: "5",
+      [ANNOTATIONS.authHomePvc]: "sf-home-bram",
+      [ANNOTATIONS.authHomeOwner]: "u1",
+    });
+  });
+
+  it("finds the claim in a pod's volumes", () => {
+    expect(podMountsClaim(withHome as { spec: Record<string, unknown> }, "sf-home-bram")).toBe(
+      true
+    );
+    expect(podMountsClaim(withHome as { spec: Record<string, unknown> }, "sf-home-rob")).toBe(
+      false
+    );
+    expect(podMountsClaim(pod as { spec: Record<string, unknown> }, "sf-home-bram")).toBe(false);
+    expect(podMountsClaim({ spec: undefined }, "sf-home-bram")).toBe(false);
   });
 });
 

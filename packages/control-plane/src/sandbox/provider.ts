@@ -64,6 +64,8 @@ export interface SandboxProviderCapabilities {
   supportsExplicitStop?: boolean;
   /** An ordinary checkpoint must enter the terminal shutdown flow first. */
   snapshotRequiresShutdown?: boolean;
+  /** Whether the provider mounts a subscription auth home (`CreateSandboxConfig.authHome`). */
+  supportsAuthHomeMounts?: boolean;
 }
 
 export type SandboxLifetime =
@@ -94,6 +96,21 @@ export interface SessionRepositoryInfo {
   baseBranch: string;
   /** Immutable session-start commit used by the Changes capture protocol. */
   baseSha?: string | null;
+}
+
+/**
+ * The subscription auth home a launch mounts: a volume on a node its owner
+ * administers, from which the provider's own CLI reads the subscriber's
+ * credential. The control plane never reads the volume; it only names it.
+ * Resolved per launch (create, resume) for the acting user by the caller.
+ */
+export interface SandboxAuthHome {
+  /** The `sf-home-<suffix>` claim in the sandbox namespace. */
+  pvcName: string;
+  /** Canonical user id of the home's owner, for audit; not a Kubernetes identifier. */
+  ownerUserId: string;
+  /** Providers whose credential files the home carries (`SF_AUTH_HOME_PROVIDERS`). */
+  providers: readonly string[];
 }
 
 /**
@@ -163,6 +180,12 @@ export interface CreateSandboxConfig {
    * (pull-request-service) and travel in per-repo push specs.
    */
   repositories?: SessionRepositoryInfo[];
+  /**
+   * The subscription home this launch may mount, or none. Only a provider
+   * declaring `supportsAuthHomeMounts` is handed one; the Kubernetes provider
+   * refuses to start when the named claim is not bound (`AuthHomeUnavailableError`).
+   */
+  authHome?: SandboxAuthHome;
 }
 
 /** Complete browser-desktop access credential returned by sandbox providers. */
@@ -355,6 +378,12 @@ export interface ResumeConfig {
   sandboxSettings?: SandboxSettings;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
+  /**
+   * The subscription home the resumed generation may mount, resolved by the
+   * caller for the resuming actor. Never taken from what the stopped sandbox
+   * mounted: absent, the new generation mounts no home.
+   */
+  authHome?: SandboxAuthHome;
 }
 
 /**
@@ -540,6 +569,23 @@ export class PrebuiltImageUnavailableError extends SandboxProviderError {
   constructor(message: string, cause?: Error) {
     super(message, "permanent", cause);
     this.name = "PrebuiltImageUnavailableError";
+  }
+}
+
+/** Error code carried by `AuthHomeUnavailableError`; also an auth-home refusal reason. */
+export const AUTH_HOME_UNAVAILABLE = "auth_home_unavailable" as const;
+
+/**
+ * The launch named a subscription home whose volume claim is missing, not
+ * bound or being deleted. A refusal, not a retry: there is no key to fall
+ * back on, and the operator has to look at the node. Nothing was created.
+ */
+export class AuthHomeUnavailableError extends SandboxProviderError {
+  readonly code = AUTH_HOME_UNAVAILABLE;
+
+  constructor(message: string, cause?: Error) {
+    super(message, "permanent", cause);
+    this.name = "AuthHomeUnavailableError";
   }
 }
 

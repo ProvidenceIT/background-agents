@@ -8,6 +8,9 @@
  * runtime class, what is persisted) is unit-tested directly.
  */
 
+import { AUTH_HOME_PVC_NAME_PREFIX } from "@open-inspect/shared/types/auth-homes";
+import type { SandboxAuthHome } from "./provider";
+
 /** Value of the `app.kubernetes.io/managed-by` label on everything the provider creates. */
 export const MANAGED_BY = "open-inspect";
 
@@ -16,6 +19,13 @@ export const LABELS = {
   role: "openinspect.dev/role",
   /** Hash naming one sandbox lineage (a session's sandbox id); selects its pods. */
   sandbox: "openinspect.dev/sandbox",
+  /**
+   * On a pod that mounts a subscription home: the home's name, the suffix of
+   * its `sf-home-<suffix>` claim. The admission policy requires exactly this
+   * label on exactly the pods that mount one such claim, equal to the suffix,
+   * so a pod cannot wear one home's name while mounting another's.
+   */
+  authHomeOwner: "sf.dokman.io/auth-home-owner",
 } as const;
 
 export const ANNOTATIONS = {
@@ -32,6 +42,14 @@ export const ANNOTATIONS = {
   destroyRequestedAtMs: "openinspect.dev/destroy-requested-at-ms",
   /** Set by the garbage collector before it deletes an idle workspace. */
   gcClaimedAtMs: "openinspect.dev/gc-claimed-at-ms",
+  /**
+   * Which subscription home a sandbox was created with: the claim's name on
+   * the workspace claim and on each pod that mounts it, and the home owner's
+   * canonical user id on both. Hints for an operator reading the namespace;
+   * a resume never mounts from them, it resolves the home again.
+   */
+  authHomePvc: "sf.dokman.io/auth-home-pvc",
+  authHomeOwner: "sf.dokman.io/auth-home-owner",
 } as const;
 
 /** Whether a workspace claim has been given up: deleting, destroy-stopped, or claimed by GC. */
@@ -47,6 +65,36 @@ export function isReleasedClaim(metadata: {
 }
 
 export const SANDBOX_ROLE = "sandbox";
+
+/** Where a mounted subscription home appears inside the sandbox (`SF_AUTH_HOME`). */
+export const AUTH_HOME_MOUNT_PATH = "/home/sandbox/.sf-auth";
+const AUTH_HOME_VOLUME = "sf-auth";
+/** The env the runtime reads to find the home and the providers it carries. */
+export const AUTH_HOME_ENV = {
+  path: "SF_AUTH_HOME",
+  providers: "SF_AUTH_HOME_PROVIDERS",
+} as const;
+
+/** The home's name: `sf-home-bram` -> `bram`. The claim name is validated upstream. */
+export function authHomeSuffix(pvcName: string): string {
+  if (!pvcName.startsWith(AUTH_HOME_PVC_NAME_PREFIX)) {
+    throw new Error(
+      `Subscription home claim ${pvcName} is not named ${AUTH_HOME_PVC_NAME_PREFIX}*`
+    );
+  }
+  return pvcName.slice(AUTH_HOME_PVC_NAME_PREFIX.length);
+}
+
+/** Whether a pod spec names the claim in any of its volumes. */
+export function podMountsClaim(
+  pod: { spec?: Record<string, unknown> | null },
+  claimName: string
+): boolean {
+  const volumes = (pod.spec?.volumes ?? []) as Array<{
+    persistentVolumeClaim?: { claimName?: string } | null;
+  }>;
+  return volumes.some((volume) => volume.persistentVolumeClaim?.claimName === claimName);
+}
 
 /** The runtime user the kubernetes image target pins (packages/sandbox-images/targets.json). */
 export const SANDBOX_UID = 1000;
@@ -228,6 +276,17 @@ export interface WorkspaceClaimInput {
   storageClassName?: string;
   size: string;
   nowMs: number;
+  /** Recorded as hint annotations only; see ANNOTATIONS.authHomePvc. */
+  authHome?: SandboxAuthHome;
+}
+
+function authHomeAnnotations(authHome: SandboxAuthHome | undefined): Record<string, string> {
+  return authHome
+    ? {
+        [ANNOTATIONS.authHomePvc]: authHome.pvcName,
+        [ANNOTATIONS.authHomeOwner]: authHome.ownerUserId,
+      }
+    : {};
 }
 
 export function buildWorkspaceClaim(input: WorkspaceClaimInput): Record<string, unknown> {
@@ -235,6 +294,7 @@ export function buildWorkspaceClaim(input: WorkspaceClaimInput): Record<string, 
     [ANNOTATIONS.sessionId]: input.sessionId,
     [ANNOTATIONS.sandboxId]: input.sandboxId,
     [ANNOTATIONS.lastActiveAtMs]: String(input.nowMs),
+    ...authHomeAnnotations(input.authHome),
   };
   if (input.repo) annotations[ANNOTATIONS.repo] = input.repo;
   return {
@@ -310,6 +370,12 @@ export interface SandboxPodInput {
   verifyEgressDenied?: boolean;
   /** The address that probe must fail to reach; DEFAULT_EGRESS_PROBE_HOST when unset. */
   egressProbeHost?: string;
+  /**
+   * A subscription home to mount read-write at AUTH_HOME_MOUNT_PATH, with the
+   * owner label the admission policy requires and the env the runtime reads.
+   * Absent, the pod is exactly what it was before homes existed.
+   */
+  authHome?: SandboxAuthHome;
 }
 
 const RESTRICTED_CONTAINER_SECURITY = {
@@ -333,6 +399,12 @@ export function buildSandboxPod(input: SandboxPodInput): Record<string, unknown>
     }
     env.push({ name: "NODE_EXTRA_CA_CERTS", value: EXTRA_CA_PATH });
   }
+  if (input.authHome) {
+    env.push(
+      { name: AUTH_HOME_ENV.path, value: AUTH_HOME_MOUNT_PATH },
+      { name: AUTH_HOME_ENV.providers, value: input.authHome.providers.join(",") }
+    );
+  }
 
   const volumes: Array<Record<string, unknown>> = [
     { name: WORKSPACE_VOLUME, persistentVolumeClaim: { claimName: input.claim.name } },
@@ -350,6 +422,16 @@ export function buildSandboxPod(input: SandboxPodInput): Record<string, unknown>
     prepareMounts.push({ name: CA_VOLUME, mountPath: CA_MOUNT_PATH });
     sandboxMounts.push({ name: CA_VOLUME, mountPath: CA_MOUNT_PATH, readOnly: true });
   }
+  if (input.authHome) {
+    // Read-write: the provider CLIs rewrite their own files (Codex refreshes
+    // auth.json in place). Only the sandbox container sees it; the prepare
+    // step has no business there.
+    volumes.push({
+      name: AUTH_HOME_VOLUME,
+      persistentVolumeClaim: { claimName: input.authHome.pvcName },
+    });
+    sandboxMounts.push({ name: AUTH_HOME_VOLUME, mountPath: AUTH_HOME_MOUNT_PATH });
+  }
 
   const { resources } = input;
   return {
@@ -357,11 +439,17 @@ export function buildSandboxPod(input: SandboxPodInput): Record<string, unknown>
     kind: "Pod",
     metadata: {
       name: podName(input.names, input.generationCreatedAtMs),
-      labels: baseLabels(input.names),
+      labels: {
+        ...baseLabels(input.names),
+        ...(input.authHome
+          ? { [LABELS.authHomeOwner]: authHomeSuffix(input.authHome.pvcName) }
+          : {}),
+      },
       annotations: {
         [ANNOTATIONS.sessionId]: input.sessionId,
         [ANNOTATIONS.sandboxId]: input.sandboxId,
         [ANNOTATIONS.generationCreatedAtMs]: String(input.generationCreatedAtMs),
+        ...authHomeAnnotations(input.authHome),
       },
       ownerReferences: ownedBy(input.claim),
     },

@@ -6,6 +6,7 @@ import {
   type KubernetesNetworkPolicy,
 } from "../kubernetes-rest-client";
 import {
+  AuthHomeUnavailableError,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
   providerResumesAfterStop,
@@ -75,6 +76,7 @@ describe("KubernetesSandboxProvider capabilities", () => {
       supportsRestore: false,
       supportsPersistentResume: true,
       supportsExplicitStop: true,
+      supportsAuthHomeMounts: true,
     });
     expect(providerResumesAfterStop(provider)).toBe(true);
   });
@@ -849,6 +851,188 @@ describe("resumeSandbox", () => {
     api.pods.clear();
     await expect(provider.resumeSandbox(resume)).resolves.toMatchObject({ success: true });
     expect(api.pods.get(podName(names, G2))!.status).toEqual(RUNNING_STATUS);
+  });
+});
+
+describe("subscription auth homes", () => {
+  const authHome = { pvcName: "sf-home-bram", ownerUserId: "u1", providers: ["anthropic"] };
+  const resume = {
+    providerObjectId: names.base,
+    sessionId: "sess-1",
+    sandboxId: baseCreateConfig.sandboxId,
+    timeoutSeconds: 1800,
+    generationCreatedAtMs: G2,
+  };
+  type HomePodSpec = {
+    runtimeClassName?: string;
+    nodeSelector?: Record<string, string>;
+    containers: Array<{ volumeMounts: Array<{ name: string; mountPath: string }> }>;
+    volumes: Array<{ name: string; persistentVolumeClaim?: { claimName: string } }>;
+  };
+  const homeVolumes = (spec: HomePodSpec) =>
+    spec.volumes.filter((v) => v.persistentVolumeClaim?.claimName === "sf-home-bram");
+
+  it("mounts the resolved home, labels the pod with its name and points the runtime at it", async () => {
+    const { api, provider } = setup();
+    api.seedPvc("sf-home-bram", { phase: "Bound" });
+    await provider.createSandbox({ ...baseCreateConfig, authHome });
+
+    const pod = api.pods.get(podName(names, G1))!;
+    const spec = pod.spec as HomePodSpec;
+    expect(homeVolumes(spec)).toHaveLength(1);
+    expect(spec.containers[0]!.volumeMounts).toContainEqual({
+      name: "sf-auth",
+      mountPath: "/home/sandbox/.sf-auth",
+    });
+    expect(pod.metadata.labels).toMatchObject({ "sf.dokman.io/auth-home-owner": "bram" });
+    expect(pod.metadata.annotations).toMatchObject({
+      "sf.dokman.io/auth-home-pvc": "sf-home-bram",
+      "sf.dokman.io/auth-home-owner": "u1",
+    });
+    expect(podEnv(api, G1)).toEqual({
+      SANDBOX_TIMEOUT_SECONDS: "3600",
+      SF_AUTH_HOME: "/home/sandbox/.sf-auth",
+      SF_AUTH_HOME_PROVIDERS: "anthropic",
+    });
+    // No scheduling or runtime change: the runtime class already pins the node.
+    expect(spec.nodeSelector).toBeUndefined();
+    expect(spec.runtimeClassName).toBe("gvisor");
+    // The Secret is the session's env; the home is never written into it.
+    expect(JSON.stringify(secretEnv(api))).not.toContain("SF_AUTH_HOME");
+    // The workspace claim remembers the home, as a hint for operators.
+    expect(api.pvcs.get(names.base)!.metadata.annotations).toMatchObject({
+      "sf.dokman.io/auth-home-pvc": "sf-home-bram",
+      "sf.dokman.io/auth-home-owner": "u1",
+    });
+    // The home's claim is the operator's: never created, patched or deleted here.
+    expect(api.calls.filter((call) => call.endsWith("sf-home-bram"))).toEqual([]);
+  });
+
+  it.each([
+    ["Pending", (api: FakeKubernetesApi) => api.seedPvc("sf-home-bram", { phase: "Pending" })],
+    ["Lost", (api: FakeKubernetesApi) => api.seedPvc("sf-home-bram", { phase: "Lost" })],
+    ["missing", () => {}],
+    [
+      "being deleted",
+      (api: FakeKubernetesApi) => {
+        api.seedPvc("sf-home-bram", { phase: "Bound" });
+        api.pvcs.get("sf-home-bram")!.metadata.deletionTimestamp = "2026-01-01T00:00:00Z";
+      },
+    ],
+  ])("refuses to create anything when the home's claim is %s", async (_state, arrange) => {
+    const { api, provider } = setup();
+    arrange(api);
+    const error = await provider
+      .createSandbox({ ...baseCreateConfig, authHome })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AuthHomeUnavailableError);
+    expect(error).toMatchObject({ code: "auth_home_unavailable", errorType: "permanent" });
+    expect((error as Error).message).toContain("sf-home-bram");
+    expect(api.pods.size).toBe(0);
+    expect(api.secrets.size).toBe(0);
+    expect(api.pvcs.has(names.base)).toBe(false);
+  });
+
+  it("classifies a failed look-up of the home's claim without inventing a refusal", async () => {
+    const { api, provider } = setup();
+    api.getPvc.mockRejectedValueOnce(new KubernetesTransportError("get pvc", "lost"));
+    const error = await provider
+      .createSandbox({ ...baseCreateConfig, authHome })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SandboxProviderError);
+    expect(error).not.toBeInstanceOf(AuthHomeUnavailableError);
+    expect(error).toMatchObject({ errorType: "transient" });
+    expect(api.pvcs.size).toBe(0);
+  });
+
+  it("resume mounts only the home the caller resolved, never the one the claim remembers", async () => {
+    const { api, provider } = setup();
+    api.seedPvc("sf-home-bram", { phase: "Bound" });
+    await provider.createSandbox({ ...baseCreateConfig, authHome });
+    await provider.stopSandbox(preserveG1);
+
+    // The resolver refused the resuming actor: the generation runs without a home.
+    await expect(provider.resumeSandbox(resume)).resolves.toMatchObject({ success: true });
+    const pod = api.pods.get(podName(names, G2))!;
+    expect(homeVolumes(pod.spec as HomePodSpec)).toEqual([]);
+    expect(pod.metadata.labels).not.toHaveProperty("sf.dokman.io/auth-home-owner");
+    expect(podEnv(api, G2)).toEqual({
+      SANDBOX_TIMEOUT_SECONDS: "1800",
+      RESTORED_FROM_SNAPSHOT: "true",
+    });
+    // The workspace stays, hint and all.
+    const pvc = api.pvcs.get(names.base)!;
+    expect(pvc.metadata.deletionTimestamp).toBeUndefined();
+    expect(pvc.metadata.annotations).toMatchObject({
+      "sf.dokman.io/auth-home-pvc": "sf-home-bram",
+    });
+
+    // Resolved again for an eligible actor: mounted again.
+    const G3 = G2 + 60_000;
+    await expect(
+      provider.resumeSandbox({ ...resume, generationCreatedAtMs: G3, authHome })
+    ).resolves.toMatchObject({ success: true });
+    const third = api.pods.get(podName(names, G3))!;
+    expect(homeVolumes(third.spec as HomePodSpec)).toHaveLength(1);
+    expect(third.metadata.labels).toMatchObject({ "sf.dokman.io/auth-home-owner": "bram" });
+    expect(podEnv(api, G3).SF_AUTH_HOME).toBe("/home/sandbox/.sf-auth");
+  });
+
+  it("resume refuses an unbound home before touching the stopped sandbox", async () => {
+    const { api, provider } = setup();
+    api.seedPvc("sf-home-bram", { phase: "Bound" });
+    await provider.createSandbox({ ...baseCreateConfig, authHome });
+    await provider.stopSandbox(preserveG1);
+    api.pvcs.get("sf-home-bram")!.status = { phase: "Pending" };
+    const stamped = api.pvcs.get(names.base)!.metadata.annotations?.[ANNOTATIONS.stoppedAtMs];
+
+    await expect(provider.resumeSandbox({ ...resume, authHome })).rejects.toMatchObject({
+      code: "auth_home_unavailable",
+    });
+    expect(api.pods.size).toBe(0);
+    expect(api.pvcs.get(names.base)!.metadata.annotations?.[ANNOTATIONS.stoppedAtMs]).toBe(stamped);
+    expect(api.secrets.has(names.base)).toBe(true);
+  });
+
+  it("lists every pod of the provider's that mounts a claim, terminating ones included", async () => {
+    const { api, provider } = setup();
+    api.seedPvc("sf-home-bram", { phase: "Bound" });
+    api.seedPvc("sf-home-rob", { phase: "Bound" });
+    await provider.createSandbox({ ...baseCreateConfig, authHome });
+    await provider.createSandbox({ ...baseCreateConfig, sessionId: "sess-2", authHome });
+    await provider.createSandbox({
+      ...baseCreateConfig,
+      sessionId: "sess-3",
+      authHome: { ...authHome, pvcName: "sf-home-rob" },
+    });
+    await provider.createSandbox({ ...baseCreateConfig, sessionId: "sess-4" });
+
+    const mounting = await provider.listPodsMountingClaim("sf-home-bram");
+    expect(mounting.map((pod) => pod.metadata.name).sort()).toEqual(
+      [names, await sandboxObjectNames("sess-2", baseCreateConfig.sandboxId)]
+        .map((n) => podName(n, G1))
+        .sort()
+    );
+    expect(await provider.listPodsMountingClaim("sf-home-rob")).toHaveLength(1);
+    expect(await provider.listPodsMountingClaim("sf-home-nobody")).toEqual([]);
+
+    api.podsLinger = true;
+    await provider.stopSandbox({ ...preserveG1, deadlineAtMs: Date.now() - 1 });
+    const afterStop = await provider.listPodsMountingClaim("sf-home-bram");
+    expect(afterStop.map((pod) => !!pod.metadata.deletionTimestamp).sort()).toEqual([false, true]);
+  });
+
+  it("the egress preflight does not skip a policy that selects pods by their home", () => {
+    const [deny] = defaultNetworkPolicies();
+    const byHome = {
+      metadata: { name: "home-egress" },
+      spec: {
+        podSelector: { matchLabels: { "sf.dokman.io/auth-home-owner": "bram" } },
+        policyTypes: ["Egress"],
+        egress: [{ to: [{ ipBlock: { cidr: "0.0.0.0/0" } }] }],
+      },
+    };
+    expect(evaluateEgressPolicies([deny!, byHome])).toMatch(/ipBlock/);
   });
 });
 
