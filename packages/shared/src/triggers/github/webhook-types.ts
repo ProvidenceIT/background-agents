@@ -147,6 +147,7 @@ export function isGitHubConditionSupported(
 // dropped as malformed.
 
 const userSchema = z.object({
+  id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
   login: z.string().optional(),
 });
 

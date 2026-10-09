@@ -158,6 +158,11 @@ export const githubAutomationEventSchema = z.object({
   targetBranch: z.string().optional(),
   labels: z.array(z.string()).optional(),
   actor: z.string().optional(),
+  /**
+   * Numeric GitHub user id of the issue or pull request author the event is
+   * about. Audited as the work-item author; never the actor.
+   */
+  workItemAuthorScmUserId: z.string().optional(),
   changedFiles: z.array(z.string()).optional(),
   conclusion: z.string().optional(),
   /** Compatibility field for independently deployed pre-conclusion producers and consumers. */

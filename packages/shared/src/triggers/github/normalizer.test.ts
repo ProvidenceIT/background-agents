@@ -926,3 +926,28 @@ describe("GITHUB_WEBHOOK_EVENT_CATALOG supportedConditions", () => {
     }
   );
 });
+
+describe("work-item author on GitHub events", () => {
+  it("carries the issue or pull request author's id, never the sender's", () => {
+    const issue = normalizeGitHubEvent("issues", {
+      ...issuesLabeledPayload,
+      sender: { id: 7, login: "labeler" },
+      issue: { ...issuesLabeledPayload.issue, user: { id: 101, login: "issue-author" } },
+    });
+    expect(issue?.actor).toBe("labeler");
+    expect(issue?.workItemAuthorScmUserId).toBe("101");
+
+    const pr = normalizeGitHubEvent("pull_request", {
+      ...pullRequestOpenedPayload,
+      sender: { id: 7, login: "pusher" },
+      pull_request: { ...basePR, user: { id: 202, login: "pr-author" } },
+    });
+    expect(pr?.workItemAuthorScmUserId).toBe("202");
+  });
+
+  it("omits the author when the payload has no user id", () => {
+    expect(
+      normalizeGitHubEvent("issues", issuesLabeledPayload)?.workItemAuthorScmUserId
+    ).toBeUndefined();
+  });
+});

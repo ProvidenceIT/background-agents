@@ -55,6 +55,11 @@ function getActor(payload: GitHubEventBase): string | undefined {
   return payload.sender?.login;
 }
 
+/** The author of the issue or pull request an event concerns, as a GitHub user id string. */
+function getWorkItemAuthor(item: { user?: { id?: number } }): string | undefined {
+  return item.user?.id === undefined ? undefined : String(item.user.id);
+}
+
 function getPRLabels(pr: PullRequestPayload["pull_request"]): string[] | undefined {
   const names = pr.labels?.map((l) => l.name).filter((name): name is string => Boolean(name));
   return names?.length ? names : undefined;
@@ -191,6 +196,7 @@ function normalizePullRequest(
     targetBranch,
     labels: getPRLabels(pr),
     actor: getActor(payload),
+    workItemAuthorScmUserId: getWorkItemAuthor(pr),
     pullRequest: getPullRequestFacts(pr),
     contextBlock: buildPullRequestContextBlock(eventType, payload),
     meta: {
@@ -217,6 +223,7 @@ function normalizeIssueComment(
     repoOwner: getRepoOwner(payload),
     repoName: getRepoName(payload),
     actor: getActor(payload),
+    workItemAuthorScmUserId: getWorkItemAuthor(payload.issue),
     contextBlock: buildIssueCommentContextBlock(payload),
     meta: {
       commentId,
@@ -244,6 +251,7 @@ function normalizeReviewComment(
     branch: pr.head?.ref,
     targetBranch,
     actor: getActor(payload),
+    workItemAuthorScmUserId: getWorkItemAuthor(pr),
     contextBlock: buildReviewCommentContextBlock(payload),
     meta: {
       commentId,
@@ -327,6 +335,7 @@ function normalizeIssue(
     repoName: getRepoName(payload),
     labels: getIssueLabels(issue),
     actor: getActor(payload),
+    workItemAuthorScmUserId: getWorkItemAuthor(issue),
     contextBlock: buildIssueContextBlock(eventType, payload),
     meta: {
       issueNumber: issue.number,
