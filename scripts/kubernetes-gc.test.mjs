@@ -25,7 +25,16 @@ args=" $* "
 log() { printf '%s\\n' "$*" >> "$FIXTURES/calls.log"; }
 case "$args" in
   *" get pods -l app.kubernetes.io/managed-by=open-inspect -o json "*) cat "$FIXTURES/pods.json" ;;
-  *" get pvc "*" -o json "*) cat "$FIXTURES/claims.json" ;;
+  *" get pvc -l "*" -o json "*)
+    # Honour the label selector like the API server would, unless a test
+    # asks to see what the script does with every claim in the namespace.
+    if [ -n "\${IGNORE_SELECTOR:-}" ]; then cat "$FIXTURES/claims.json"; exit 0; fi
+    selector="\${args#* get pvc -l }"
+    selector="\${selector%% *}"
+    jq --arg sel "$selector" '.items |= map(select(
+      (.metadata.labels // {}) as $l
+      | $sel | split(",") | all(split("=") as [$k, $v] | $l[$k] == $v)))' \
+      "$FIXTURES/claims.json" ;;
   *" get pods -l openinspect.dev/sandbox="*" -o name "*) ;;
   *" annotate pvc "*"gc-claimed-at-ms-"*) log "release $5" ;;
   *" annotate pvc "*)
@@ -41,14 +50,20 @@ function iso(msAgo) {
   return new Date(Date.now() - msAgo).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
-function sandboxPod(name, hash, { phase = "Running", startedAgo = HOUR_MS, status = {} } = {}) {
+function sandboxPod(
+  name,
+  hash,
+  { phase = "Running", startedAgo = HOUR_MS, status = {}, authHome = null } = {}
+) {
+  const volumes = [{ name: "workspace", persistentVolumeClaim: { claimName: `oi-${hash}` } }];
+  if (authHome) volumes.push({ name: "sf-auth", persistentVolumeClaim: { claimName: authHome } });
   return {
     metadata: {
       name,
       labels: { "openinspect.dev/sandbox": hash },
       creationTimestamp: iso(startedAgo),
     },
-    spec: { volumes: [{ name: "workspace", persistentVolumeClaim: { claimName: `oi-${hash}` } }] },
+    spec: { volumes },
     status: { phase, startTime: iso(startedAgo), ...status },
   };
 }
@@ -58,9 +73,27 @@ function claim(hash, { createdAgo = HOUR_MS / 2, annotations = {} } = {}) {
     metadata: {
       name: `oi-${hash}`,
       resourceVersion: "1",
-      labels: { "openinspect.dev/sandbox": hash },
+      labels: {
+        "app.kubernetes.io/managed-by": "open-inspect",
+        "openinspect.dev/role": "sandbox",
+        "openinspect.dev/sandbox": hash,
+      },
       creationTimestamp: iso(createdAgo),
       annotations,
+    },
+  };
+}
+
+// An operator's subscription home: managed-by open-inspect so the claims
+// policy admits it, but no role label, and never the provider's.
+function authHomeClaim(name, { createdAgo = 30 * 24 * HOUR_MS } = {}) {
+  return {
+    metadata: {
+      name,
+      resourceVersion: "1",
+      labels: { "app.kubernetes.io/managed-by": "open-inspect" },
+      creationTimestamp: iso(createdAgo),
+      annotations: {},
     },
   };
 }
@@ -69,7 +102,7 @@ function ms(msAgo) {
   return String(Date.now() - msAgo);
 }
 
-function runGc({ pods = [], claims = [], conflicts = [] }) {
+function runGc({ pods = [], claims = [], conflicts = [], ignoreSelector = false }) {
   const dir = mkdtempSync(join(tmpdir(), "oi-gc-"));
   try {
     writeFileSync(join(dir, "kubectl"), FAKE_KUBECTL);
@@ -88,6 +121,7 @@ function runGc({ pods = [], claims = [], conflicts = [] }) {
         SANDBOX_NAMESPACE: NS,
         RETENTION_HOURS: "168",
         DESTROY_GRACE_HOURS: "24",
+        IGNORE_SELECTOR: ignoreSelector ? "1" : "",
       },
     });
     assert.equal(result.status, 0, result.stderr);
@@ -188,3 +222,30 @@ test("rule 3: a claim that changed since it was read is skipped", () => {
   });
   assert.deepEqual(calls, []);
 });
+
+for (const ignoreSelector of [false, true]) {
+  const how = ignoreSelector ? "by its name alone" : "by the role selector";
+  test(`a subscription home claim is never a GC candidate (${how})`, () => {
+    const calls = runGc({
+      ignoreSelector,
+      claims: [
+        authHomeClaim("sf-home-bram"),
+        claim("e1", { createdAgo: 9 * 24 * HOUR_MS, annotations: {} }),
+      ],
+    });
+    assert.deepEqual(calls, ["claim oi-e1", "delete pvc oi-e1"]);
+  });
+
+  test(`a pod mounting a subscription home is not orphaned by it (${how})`, () => {
+    const calls = runGc({
+      ignoreSelector,
+      pods: [
+        sandboxPod("oi-f1-x", "f1", { authHome: "sf-home-bram" }),
+        // Its workspace is gone: deleted for that, as before.
+        sandboxPod("oi-f2-x", "f2", { authHome: "sf-home-bram" }),
+      ],
+      claims: [authHomeClaim("sf-home-bram"), claim("f1")],
+    });
+    assert.deepEqual(calls, ["delete pod oi-f2-x"]);
+  });
+}

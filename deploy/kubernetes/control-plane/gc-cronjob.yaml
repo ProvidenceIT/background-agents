@@ -16,6 +16,10 @@
 # A claim is first annotated with a resourceVersion precondition, so a resume
 # that touched it in between wins, and the provider treats a claimed volume
 # as gone.
+#
+# Subscription home claims (sf-home-*) are the operator's: never a candidate
+# for rule 3, and never the claim that orphans a pod under rule 2. The
+# admission policy also refuses this ServiceAccount any write to them.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -52,12 +56,15 @@ data:
         // ((.status.conditions // []) | map(select(.type == "Ready")) | .[0].lastTransitionTime)
         // .status.startTime // .metadata.creationTimestamp;
       ($claims.items | map(select(.metadata.deletionTimestamp == null) | .metadata.name)) as $live
+      # A mounted subscription home is not the workspace of the pod: only
+      # the workspace claim decides whether the pod is orphaned.
       | .items[]
       | select(.metadata.deletionTimestamp == null)
       | select(
           ((.status.phase == "Failed" or .status.phase == "Succeeded")
             and ($now - (ended_at | fromdateiso8601 * 1000)) > 3600000)
-          or ((.spec.volumes // []) | map(.persistentVolumeClaim.claimName // empty)
+          or ((.spec.volumes // []) | map(.persistentVolumeClaim.claimName // empty
+                  | select(startswith("sf-home-") | not))
                 | any(. as $c | $live | index($c) | not)))
       | .metadata.name' |
     while read -r pod; do
@@ -73,6 +80,9 @@ data:
         | .metadata.labels["openinspect.dev/sandbox"])) as $busy
       | .items[]
       | select(.metadata.deletionTimestamp == null)
+      # The role selector already leaves subscription homes out; say so by
+      # name too, so a mislabelled home is still never collected.
+      | select(.metadata.name | startswith("sf-home-") | not)
       | select((.metadata.labels["openinspect.dev/sandbox"]) as $h | $busy | index($h) | not)
       | (.metadata.annotations // {}) as $a
       | ((.metadata.creationTimestamp | fromdateiso8601) * 1000) as $created
