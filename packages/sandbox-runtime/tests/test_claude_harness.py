@@ -118,6 +118,78 @@ class TestOpen:
             await h.harness.open()
 
 
+class TestAuthHome:
+    def _home(self, tmp_path: Path, *, token: bool = True) -> Path:
+        home = tmp_path / "sf-auth"
+        (home / "claude").mkdir(parents=True)
+        (home / "claude" / "expires_at").write_text("1790000000000")
+        if token:
+            (home / "claude" / "oauth-token").write_text("sk-ant-oat01-subscriber")
+        return home
+
+    @pytest.mark.asyncio
+    async def test_a_mounted_anthropic_home_wins_and_carries_no_secret(self, tmp_path: Path):
+        home = self._home(tmp_path)
+        credential_client = FakeCredentialClient(Issued())
+        h = Harness(
+            tmp_path,
+            oauth_managed=True,
+            credential_client=credential_client,
+            environ={
+                "ANTHROPIC_API_KEY": "sk-ant-platform-key",
+                "SF_AUTH_HOME": str(home),
+                "SF_AUTH_HOME_PROVIDERS": "anthropic",
+            },
+        )
+        await h.harness.open()
+        assert credential_client.calls == 0
+        credential = h.harness.credential
+        assert credential is not None
+        assert credential.mode is ClaudeAuthMode.AUTH_HOME
+        assert dict(credential.env) == {}
+        assert credential.token_file == home / "claude" / "oauth-token"
+        assert h.harness.wrapper_path is not None
+        assert "sk-ant" not in h.harness.wrapper_path.read_text()
+        await h.harness.create_session()
+        options = h.harness.build_options("claude-sonnet-4-6", None)
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in options["env"]
+        assert "ANTHROPIC_API_KEY" not in options["env"]
+        assert "--bare" not in json.dumps(options, default=str)
+
+    @pytest.mark.asyncio
+    async def test_a_home_without_the_token_refuses_and_says_only_that(self, tmp_path: Path):
+        home = self._home(tmp_path, token=False)
+        h = Harness(
+            tmp_path,
+            environ={
+                "ANTHROPIC_API_KEY": "sk-ant-platform-key",
+                "SF_AUTH_HOME": str(home),
+                "SF_AUTH_HOME_PROVIDERS": "anthropic",
+            },
+        )
+        with pytest.raises(HarnessStartError) as raised:
+            await h.harness.open()
+        message = str(raised.value)
+        assert message == "subscription home mounted but claude/oauth-token missing"
+        assert "expires_at" not in message
+        assert "sk-ant" not in message
+
+    @pytest.mark.asyncio
+    async def test_a_home_for_another_provider_leaves_claude_alone(self, tmp_path: Path):
+        home = self._home(tmp_path)
+        h = Harness(
+            tmp_path,
+            environ={
+                "ANTHROPIC_API_KEY": "sk-ant-key",
+                "SF_AUTH_HOME": str(home),
+                "SF_AUTH_HOME_PROVIDERS": "openai",
+            },
+        )
+        await h.harness.open()
+        assert h.harness.credential is not None
+        assert h.harness.credential.mode is ClaudeAuthMode.API_KEY
+
+
 class TestSession:
     @pytest.mark.asyncio
     async def test_fresh_session_gets_a_new_id_and_connects_with_session_id(self, tmp_path: Path):

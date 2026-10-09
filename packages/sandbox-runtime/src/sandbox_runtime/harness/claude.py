@@ -37,8 +37,10 @@ from .base import (
     TurnOutcome,
 )
 from .claude_env import (
+    AUTH_HOME_TOKEN_MISSING,
     CLAUDE_POLICY_SETTINGS,
     ClaudeCredential,
+    auth_home_claude_token_file,
     bundled_claude_binary,
     harness_env,
     resolve_api_key_credential,
@@ -246,7 +248,10 @@ class ClaudeHarness:
         self.credential = await self._resolve_credential()
         binary = self._binary or bundled_claude_binary()
         self.wrapper_path = write_clean_env_wrapper(
-            self.config.config_dir / "bin", mode=self.credential.mode, binary=binary
+            self.config.config_dir / "bin",
+            mode=self.credential.mode,
+            binary=binary,
+            token_file=self.credential.token_file,
         )
         if self.config.tools is not None and self._tool_client is None:
             self._tool_client = ControlPlaneToolClient(self.config.tools, self.log)
@@ -258,6 +263,14 @@ class ClaudeHarness:
         )
 
     async def _resolve_credential(self) -> ClaudeCredential:
+        # A mounted subscription home is the resolver's verdict for this
+        # session: it wins over every other source, and a home without the
+        # token is a refusal, never a fall back to a key.
+        token_file = auth_home_claude_token_file(self.environ)
+        if token_file is not None:
+            if not token_file.is_file():
+                raise HarnessStartError(AUTH_HOME_TOKEN_MISSING)
+            return ClaudeCredential.auth_home(token_file)
         if self.config.oauth_managed:
             if self.credential_client is None:
                 raise HarnessStartError(

@@ -6,8 +6,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from sandbox_runtime.harness.claude_env import (
     API_KEY_CREDENTIAL_VARS,
+    AUTH_HOME_TOKEN_MISSING,
     BASH_DEFAULT_TIMEOUT_ENV_VAR,
     BASH_MAX_TIMEOUT_ENV_VAR,
     CLAUDE_POLICY_SETTINGS,
@@ -16,6 +19,7 @@ from sandbox_runtime.harness.claude_env import (
     STREAM_SILENCE_MARGIN_SECONDS,
     ClaudeAuthMode,
     ClaudeCredential,
+    auth_home_claude_token_file,
     bash_timeout_ceiling_seconds,
     clean_child_env,
     denylist_for,
@@ -135,11 +139,110 @@ class TestSentinel:
         assert "sk-ant" not in text
 
 
+class TestAuthHome:
+    """The subscription home: the wrapper reads the subscriber's token from the mount at exec."""
+
+    TOKEN = "sk-ant-oat01-subscriber-token"
+
+    def _home(self, tmp_path: Path, token: str | None = TOKEN) -> Path:
+        home = tmp_path / "sf-auth"
+        (home / "claude").mkdir(parents=True)
+        (home / "codex").mkdir()
+        (home / "codex" / "auth.json").write_text("{}")
+        if token is not None:
+            (home / "claude" / "oauth-token").write_text(token + "\n")
+        return home
+
+    def _wrapper(self, tmp_path: Path, home: Path) -> Path:
+        credential = ClaudeCredential.auth_home(home / "claude" / "oauth-token")
+        assert credential.mode is ClaudeAuthMode.AUTH_HOME
+        assert dict(credential.env) == {}
+        return write_clean_env_wrapper(
+            tmp_path / "bin",
+            mode=credential.mode,
+            binary=_fake_binary(tmp_path),
+            token_file=credential.token_file,
+        )
+
+    def test_the_child_gets_the_file_token_and_no_api_key(self, tmp_path: Path) -> None:
+        home = self._home(tmp_path)
+        wrapper = self._wrapper(tmp_path, home)
+        parent = _polluted_parent_env(
+            ANTHROPIC_BASE_URL="https://gateway.example",
+            CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-stray",
+            SF_AUTH_HOME=str(home),
+            SF_AUTH_HOME_PROVIDERS="anthropic",
+        )
+        options_env = harness_env(tmp_path / "cfg", ClaudeCredential.auth_home(home))
+        result = _run_wrapper(wrapper, {**parent, **options_env}, "--print", "--bare", "-v")
+        child = result["env"]
+
+        assert child["CLAUDE_CODE_OAUTH_TOKEN"] == self.TOKEN
+        for stripped in API_KEY_CREDENTIAL_VARS:
+            assert stripped not in child
+        expected = clean_child_env(parent, ClaudeAuthMode.AUTH_HOME, options_env)
+        assert child == {**expected, "CLAUDE_CODE_OAUTH_TOKEN": self.TOKEN}
+        assert result["argv"] == ["--print", "-v"]
+
+    def test_a_rotated_token_reaches_the_next_child(self, tmp_path: Path) -> None:
+        home = self._home(tmp_path)
+        wrapper = self._wrapper(tmp_path, home)
+        (home / "claude" / "oauth-token").write_text("sk-ant-oat01-rotated")
+        child = _run_wrapper(wrapper, _polluted_parent_env())["env"]
+        assert child["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-rotated"
+
+    def test_the_wrapper_names_the_file_never_the_token(self, tmp_path: Path) -> None:
+        home = self._home(tmp_path)
+        text = self._wrapper(tmp_path, home).read_text()
+        assert str(home / "claude" / "oauth-token") in text
+        assert "sk-ant" not in text
+        assert "--bare" in text
+
+    def test_a_missing_or_empty_token_stops_the_child_without_saying_more(
+        self, tmp_path: Path
+    ) -> None:
+        for token in (None, "  \n"):
+            case = tmp_path / ("missing" if token is None else "empty")
+            home = self._home(case, token)
+            wrapper = self._wrapper(case, home)
+            completed = subprocess.run(
+                [str(wrapper), "-v"],
+                env=_polluted_parent_env(),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert completed.returncode == 78
+            assert completed.stdout == ""
+            assert completed.stderr == AUTH_HOME_TOKEN_MISSING + "\n"
+            assert "codex" not in completed.stderr
+            assert "sk-ant" not in completed.stderr
+
+    def test_auth_home_mode_needs_a_token_file(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="token file"):
+            write_clean_env_wrapper(
+                tmp_path / "bin", mode=ClaudeAuthMode.AUTH_HOME, binary=_fake_binary(tmp_path)
+            )
+
+    def test_the_token_file_is_found_only_for_an_anthropic_home(self) -> None:
+        assert auth_home_claude_token_file({}) is None
+        assert (
+            auth_home_claude_token_file(
+                {"SF_AUTH_HOME": "/home/sandbox/.sf-auth", "SF_AUTH_HOME_PROVIDERS": "openai"}
+            )
+            is None
+        )
+        assert auth_home_claude_token_file(
+            {"SF_AUTH_HOME": "/home/sandbox/.sf-auth", "SF_AUTH_HOME_PROVIDERS": "openai,anthropic"}
+        ) == Path("/home/sandbox/.sf-auth/claude/oauth-token")
+
+
 class TestDenylist:
     def test_modes_are_mutually_exclusive(self) -> None:
         assert set(API_KEY_CREDENTIAL_VARS).isdisjoint(OAUTH_CREDENTIAL_VARS)
         assert denylist_for(ClaudeAuthMode.OAUTH_TOKEN) == API_KEY_CREDENTIAL_VARS
         assert denylist_for(ClaudeAuthMode.API_KEY) == OAUTH_CREDENTIAL_VARS
+        assert denylist_for(ClaudeAuthMode.AUTH_HOME) == API_KEY_CREDENTIAL_VARS
 
     def test_only_anthropic_credentials_are_ever_stripped(self) -> None:
         stripped = set(API_KEY_CREDENTIAL_VARS) | set(OAUTH_CREDENTIAL_VARS)

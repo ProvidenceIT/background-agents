@@ -13,6 +13,13 @@ token, ``SESSION_CONFIG`` and user secrets are what ``oi-git-sign``,
 ``oi-git-credentials``, ``upload-media`` and the agent's own commands need.
 The wrapper carries variable *names* only. Credential values travel through
 ``ClaudeAgentOptions.env`` in process memory and are never written to disk.
+
+A subscription auth home is the exception to "values in memory": the token is
+already on disk, in the home the control plane mounted at ``$SF_AUTH_HOME``
+(the subscriber's own ``claude setup-token`` output). In that mode the bridge
+never reads it; the wrapper reads ``claude/oauth-token`` at each exec into
+``CLAUDE_CODE_OAUTH_TOKEN``, so a token the owner rotates is picked up by the
+next child, and the wrapper names only the file's path.
 """
 
 from __future__ import annotations
@@ -44,6 +51,17 @@ OAUTH_TOKEN_ENV_VAR: Final = "CLAUDE_CODE_OAUTH_TOKEN"
 API_KEY_ENV_VAR: Final = "ANTHROPIC_API_KEY"
 OAUTH_MANAGED_ENV_VAR: Final = "ANTHROPIC_OAUTH_MANAGED"
 CONFIG_DIR_ENV_VAR: Final = "CLAUDE_CONFIG_DIR"
+
+# The subscription auth home, as the Kubernetes provider mounts it.
+AUTH_HOME_ENV_VAR: Final = "SF_AUTH_HOME"
+AUTH_HOME_PROVIDERS_ENV_VAR: Final = "SF_AUTH_HOME_PROVIDERS"
+AUTH_HOME_CLAUDE_TOKEN: Final = "claude/oauth-token"
+AUTH_HOME_CLAUDE_EXPIRES_AT: Final = "claude/expires_at"
+# Claude Code's bare mode skips OAuth and reads only an API key; an auth-home
+# child must never run in it.
+BARE_FLAG: Final = "--bare"
+# Names the file, never its contents or the home's listing.
+AUTH_HOME_TOKEN_MISSING: Final = f"subscription home mounted but {AUTH_HOME_CLAUDE_TOKEN} missing"
 
 WRAPPER_NAME: Final = "claude-clean-env"
 
@@ -113,6 +131,8 @@ def _milliseconds_as_seconds(raw: str | None) -> float | None:
 class ClaudeAuthMode(StrEnum):
     API_KEY = "api_key"
     OAUTH_TOKEN = "oauth_token"
+    # The subscriber's token, read from the mounted home by the wrapper.
+    AUTH_HOME = "auth_home"
 
 
 @dataclass(frozen=True)
@@ -122,6 +142,8 @@ class ClaudeCredential:
     mode: ClaudeAuthMode
     # Variables to pass through ``ClaudeAgentOptions.env``; never logged.
     env: Mapping[str, str]
+    # AUTH_HOME only: the file the wrapper reads the token from at exec time.
+    token_file: Path | None = None
 
     @classmethod
     def api_key(cls, environ: Mapping[str, str]) -> ClaudeCredential | None:
@@ -137,9 +159,35 @@ class ClaudeCredential:
     def oauth_token(cls, token: str) -> ClaudeCredential:
         return cls(ClaudeAuthMode.OAUTH_TOKEN, {OAUTH_TOKEN_ENV_VAR: token})
 
+    @classmethod
+    def auth_home(cls, token_file: Path) -> ClaudeCredential:
+        """The home's token, by path: no value passes through the bridge."""
+        return cls(ClaudeAuthMode.AUTH_HOME, {}, token_file)
+
+
+def auth_home_claude_token_file(environ: Mapping[str, str] = os.environ) -> Path | None:
+    """Where the mounted home keeps the Claude token, when it carries Anthropic.
+
+    ``None`` when no home is mounted or the home is not for Anthropic; the
+    file itself may still be missing, which the caller refuses.
+    """
+    home = environ.get(AUTH_HOME_ENV_VAR)
+    if not home:
+        return None
+    providers = {
+        provider.strip() for provider in environ.get(AUTH_HOME_PROVIDERS_ENV_VAR, "").split(",")
+    }
+    if "anthropic" not in providers:
+        return None
+    return Path(home) / AUTH_HOME_CLAUDE_TOKEN
+
 
 def denylist_for(mode: ClaudeAuthMode) -> tuple[str, ...]:
-    """The credential family the child must never see in ``mode``."""
+    """The credential family the child must never see in ``mode``.
+
+    An auth-home child gets its OAuth token from the home's file only, so
+    the API-key family is stripped and any inherited token is replaced.
+    """
     return OAUTH_CREDENTIAL_VARS if mode is ClaudeAuthMode.API_KEY else API_KEY_CREDENTIAL_VARS
 
 
@@ -173,6 +221,7 @@ def write_clean_env_wrapper(
     mode: ClaudeAuthMode,
     binary: Path,
     python_executable: str | None = None,
+    token_file: Path | None = None,
 ) -> Path:
     """Generate the wrapper set as ``ClaudeAgentOptions.cli_path``.
 
@@ -180,9 +229,32 @@ def write_clean_env_wrapper(
     exactly (no word splitting, no accidental empty exports). It re-executes
     ``binary`` with its own environment, which is the SDK's merged
     ``os.environ`` + ``options.env``, minus the other mode's credentials.
+
+    In ``AUTH_HOME`` mode it also reads ``token_file`` at each exec into
+    ``CLAUDE_CODE_OAUTH_TOKEN`` and drops ``--bare``; a missing or empty file
+    stops the child with a message that names neither the token nor the
+    home's contents.
     """
     python = python_executable or sys.executable
     names = denylist_for(mode)
+    if mode is ClaudeAuthMode.AUTH_HOME:
+        if token_file is None:
+            raise ValueError("auth_home mode needs the home's token file")
+        handoff = [
+            f"TOKEN_FILE = {str(token_file)!r}",
+            "try:",
+            "    with open(TOKEN_FILE, encoding='utf-8') as handle:",
+            "        token = handle.read().strip()",
+            "except OSError:",
+            "    token = ''",
+            "if not token:",
+            f"    sys.stderr.write({AUTH_HOME_TOKEN_MISSING + chr(10)!r})",
+            "    sys.exit(78)",
+            f"env[{OAUTH_TOKEN_ENV_VAR!r}] = token",
+            f"args = [arg for arg in sys.argv[1:] if arg != {BARE_FLAG!r}]",
+        ]
+    else:
+        handoff = ["args = sys.argv[1:]"]
     script = "\n".join(
         [
             f"#!{python}",
@@ -194,7 +266,8 @@ def write_clean_env_wrapper(
             f"DENYLIST = frozenset({names!r})",
             "",
             "env = {name: value for name, value in os.environ.items() if name not in DENYLIST}",
-            "os.execve(BINARY, [BINARY, *sys.argv[1:]], env)",
+            *handoff,
+            "os.execve(BINARY, [BINARY, *args], env)",
             "",
         ]
     )
