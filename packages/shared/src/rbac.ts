@@ -42,6 +42,7 @@ export function isWorkspaceAdmin(roleKey: string | null | undefined): boolean {
 /** Canonical permission identifiers accepted by the RBAC policy and persistence layers. */
 export const PERMISSION_IDS = [
   "analytics.read",
+  "auth_homes.assign",
   "auth_homes.manage_own",
   "auth_homes.read_all",
   "automations.create",

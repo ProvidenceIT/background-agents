@@ -72,8 +72,10 @@ describe("authHomeSchema", () => {
 
   it("requires the sf-home- claim prefix and rejects duplicate owners or providers", () => {
     expect(authHomePvcNameSchema.safeParse("sf-home-bram").success).toBe(true);
-    expect(authHomePvcNameSchema.safeParse("sf-home-rob-codex").success).toBe(true);
+    expect(authHomePvcNameSchema.safeParse("sf-home-codexer").success).toBe(true);
     for (const name of [
+      // A home's Codex claim is derived from the home, never registered as one.
+      "sf-home-rob-codex",
       "bram",
       "sf-home-",
       "sf-home-Bram",

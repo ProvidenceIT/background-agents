@@ -39,11 +39,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(248);
+    expect(routes).toHaveLength(251);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(187);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(248);
+    expect(new Set(paths).size).toBe(189);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(251);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
@@ -75,6 +75,9 @@ describe("route policy table", () => {
       ["GET", "/subscription-sharing", "auth_homes.manage_own"],
       ["GET", "/auth-homes", "auth_homes.read_all"],
       ["PUT", "/subscription-sharing", "subscription_sharing.manage"],
+      ["GET", "/auth-home-claims", "auth_homes.assign"],
+      ["PUT", "/auth-home-claims/sf-home-u1", "auth_homes.assign"],
+      ["DELETE", "/auth-home-claims/sf-home-u1", "auth_homes.assign"],
     ] as const) {
       const route = routeFor(method, path);
       expect(route?.authorization, `${method} ${path}`).toMatchObject({

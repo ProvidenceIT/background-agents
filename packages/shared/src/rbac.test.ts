@@ -63,7 +63,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(50);
+    expect(PERMISSION_IDS).toHaveLength(51);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
@@ -132,7 +132,11 @@ describe("RBAC registry", () => {
     for (const role of ["owner", "administrator", "member", "viewer"] as const) {
       expect(permissionsForBuiltInRole(role)).toContain("auth_homes.manage_own");
     }
-    for (const permission of ["auth_homes.read_all", "subscription_sharing.manage"] as const) {
+    for (const permission of [
+      "auth_homes.assign",
+      "auth_homes.read_all",
+      "subscription_sharing.manage",
+    ] as const) {
       expect(permissionsForBuiltInRole("owner")).toContain(permission);
       expect(permissionsForBuiltInRole("administrator")).toContain(permission);
       expect(permissionsForBuiltInRole("member")).not.toContain(permission);

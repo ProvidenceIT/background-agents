@@ -76,7 +76,19 @@ export type AuthHomeSelectionSource =
  */
 export const AUTH_HOME_PVC_NAME_PREFIX = "sf-home-";
 export const AUTH_HOME_PVC_NAME_PATTERN = /^sf-home-[a-z0-9]([a-z0-9-]{0,53}[a-z0-9])?$/;
-export const authHomePvcNameSchema = z.string().regex(AUTH_HOME_PVC_NAME_PATTERN);
+/**
+ * The suffix of a home's Codex claim (`sf-home-<u>-codex`), which carries
+ * the Codex login only and is mounted for Codex sessions under the seat. It
+ * is derived from the home's claim and never registered as a home itself.
+ */
+export const AUTH_HOME_CODEX_CLAIM_SUFFIX = "-codex";
+export const authHomePvcNameSchema = z
+  .string()
+  .regex(AUTH_HOME_PVC_NAME_PATTERN)
+  .refine(
+    (name) => !name.endsWith(AUTH_HOME_CODEX_CLAIM_SUFFIX),
+    `A home's claim may not end in ${AUTH_HOME_CODEX_CLAIM_SUFFIX}: that is a Codex claim`
+  );
 
 export const AUTH_HOME_MAX_OWNERS = 8;
 export const AUTH_HOME_DEFAULT_MAX_CONCURRENT = 3;
@@ -165,8 +177,10 @@ export type AuthHomesResponse = z.infer<typeof authHomesResponseSchema>;
 
 /**
  * `PUT /me/auth-home`: registers or replaces the caller's own home. The
- * owner is the caller, never a body field. Consent is sent as a boolean and
- * stored as the time it was first given; sending false withdraws it.
+ * owner is the caller, never a body field. The claim must have been
+ * assigned to the caller by an operator (`PUT /auth-home-claims/:pvcName`)
+ * and is fixed once registered. Consent is sent as a boolean and stored as
+ * the time it was first given; sending false withdraws it.
  */
 export const putAuthHomeRequestSchema = z.strictObject({
   pvcName: authHomePvcNameSchema,
@@ -290,3 +304,28 @@ export type AuthHomeSeat = z.infer<typeof authHomeSeatSchema>;
 /** `GET /me/auth-home/lease`: the Codex seat of the caller's own home. */
 export const authHomeSeatResponseSchema = z.strictObject({ seat: authHomeSeatSchema });
 export type AuthHomeSeatResponse = z.infer<typeof authHomeSeatResponseSchema>;
+
+/**
+ * An operator's assignment of a home claim to the person whose home it is.
+ * Registering a home needs one: a user can only register a claim assigned
+ * to them, so nobody can bind someone else's volume to their own sessions.
+ */
+export const authHomeClaimSchema = z.strictObject({
+  pvcName: authHomePvcNameSchema,
+  ownerUserId: z.string().min(1),
+  assignedBy: z.string().min(1).nullable(),
+  assignedAt: z.number().int().nonnegative(),
+});
+export type AuthHomeClaim = z.infer<typeof authHomeClaimSchema>;
+
+/** `PUT /auth-home-claims/:pvcName`: assign (or reassign) a claim to its owner. */
+export const putAuthHomeClaimRequestSchema = z.strictObject({
+  ownerUserId: z.string().min(1),
+});
+export type PutAuthHomeClaimRequest = z.infer<typeof putAuthHomeClaimRequestSchema>;
+
+export const authHomeClaimResponseSchema = z.strictObject({ claim: authHomeClaimSchema });
+export const authHomeClaimsResponseSchema = z.strictObject({
+  claims: z.array(authHomeClaimSchema),
+});
+export type AuthHomeClaimsResponse = z.infer<typeof authHomeClaimsResponseSchema>;

@@ -247,6 +247,12 @@ at `/home/sandbox/.sf-auth` in the sandbox container only, sets `SF_AUTH_HOME` a
 claim and the owner's user id as annotations (hints only) on the workspace claim and pod. The
 control plane never reads the volume.
 
+A user can register a home only on a claim an operator assigned to them
+(`PUT /auth-home-claims/<claim>` with `{"ownerUserId": ...}`, permission `auth_homes.assign`), and
+the claim of a registered home cannot be changed. The assignment outlives the home, and an
+assignment cannot be moved or withdrawn while the claim is someone's registered home. Claims ending
+in `-codex` are Codex claims (below) and are never registered as a home.
+
 - Every create and resume reads the session's binding afresh, so a resume follows the resolver's
   latest verdict for whoever is acting; what the stopped sandbox mounted is never reused.
 - A launch whose home claim is missing, not `Bound` or being deleted is refused

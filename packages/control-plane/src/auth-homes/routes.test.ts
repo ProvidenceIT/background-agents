@@ -16,7 +16,7 @@ import {
 import { CODEX_SEAT } from "@open-inspect/shared/types/auth-homes";
 import { AuthHomeLeaseStore } from "./lease";
 import { authHomeRoutes } from "./routes";
-import { UserAuthHomeStore } from "./store";
+import { AuthHomeClaimStore, UserAuthHomeStore } from "./store";
 
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
 
@@ -50,6 +50,10 @@ describe("auth-home routes", () => {
         .bind(userId, userId)
         .run();
     }
+    // The operator's assignments: each user's own claim.
+    const claims = new AuthHomeClaimStore(store);
+    await claims.assign({ pvcName: "sf-home-u1", ownerUserId: USER_IDS.owner, assignedBy: "op" });
+    await claims.assign({ pvcName: "sf-home-u2", ownerUserId: USER_IDS.member, assignedBy: "op" });
     mocks.authenticate.mockImplementation(async (request: Request) => ({
       principal: { kind: "user", userId: request.headers.get("x-test-user") ?? USER_IDS.owner },
       request,
@@ -159,6 +163,101 @@ describe("auth-home routes", () => {
       error: expect.stringContaining("pvcName"),
     });
     expect(await new UserAuthHomeStore(store).list()).toEqual([]);
+  });
+
+  it("registers only a claim an operator assigned to the caller, and never a Codex claim", async () => {
+    // Another person's claim, before they register it.
+    const someoneElses = await call("member", "PUT", "/me/auth-home", registration);
+    expect(someoneElses.status).toBe(403);
+    await expect(someoneElses.json()).resolves.toEqual({
+      error: expect.stringContaining("not assigned to you"),
+    });
+    // A claim nobody was assigned.
+    const unassigned = await call("member", "PUT", "/me/auth-home", {
+      ...registration,
+      pvcName: "sf-home-u3",
+    });
+    expect(unassigned.status).toBe(403);
+    // A home's Codex claim is never a home of its own.
+    const codex = await call("member", "PUT", "/me/auth-home", {
+      ...registration,
+      pvcName: "sf-home-u1-codex",
+    });
+    expect(codex.status).toBe(400);
+    expect(await new UserAuthHomeStore(store).list()).toEqual([]);
+
+    // After the owner removes their home, the claim is still theirs.
+    expect((await call("owner", "PUT", "/me/auth-home", registration)).status).toBe(200);
+    expect((await call("owner", "DELETE", "/me/auth-home")).status).toBe(204);
+    expect((await call("member", "PUT", "/me/auth-home", registration)).status).toBe(403);
+    expect(await new UserAuthHomeStore(store).list()).toEqual([]);
+  });
+
+  it("keeps a registered home's claim fixed", async () => {
+    await call("owner", "PUT", "/me/auth-home", registration);
+    const switched = await call("owner", "PUT", "/me/auth-home", {
+      ...registration,
+      pvcName: "sf-home-u2",
+    });
+    expect(switched.status).toBe(409);
+    await expect(switched.json()).resolves.toEqual({
+      error: expect.stringContaining("cannot be changed"),
+    });
+    expect((await new UserAuthHomeStore(store).list()).map((home) => home.pvcName)).toEqual([
+      "sf-home-u1",
+    ]);
+  });
+
+  it("lets only auth_homes.assign assign claims, and never hands a registered home to another", async () => {
+    const denied = await call("member", "PUT", "/auth-home-claims/sf-home-u3", {
+      ownerUserId: USER_IDS.member,
+    });
+    expect(denied.status).toBe(403);
+    await expect(denied.json()).resolves.toMatchObject({ permission: "auth_homes.assign" });
+
+    const assigned = await call("owner", "PUT", "/auth-home-claims/sf-home-u3", {
+      ownerUserId: USER_IDS.member,
+    });
+    expect(assigned.status).toBe(200);
+    await expect(assigned.json()).resolves.toEqual({
+      claim: {
+        pvcName: "sf-home-u3",
+        ownerUserId: "U2",
+        assignedBy: "U1",
+        assignedAt: FIXED_NOW,
+      },
+    });
+    expect(await auditRows("auth_home.claim_assigned")).toMatchObject([
+      { actor_user_id_snapshot: "U1", metadata: { from: null, to: "U2", by: "U1" } },
+    ]);
+    expect(
+      (await call("owner", "PUT", "/auth-home-claims/sf-home-u1-codex", { ownerUserId: "U1" }))
+        .status
+    ).toBe(400);
+    expect(
+      (await call("owner", "PUT", "/auth-home-claims/sf-home-u4", { ownerUserId: "nobody" })).status
+    ).toBe(404);
+
+    await call("owner", "PUT", "/me/auth-home", registration);
+    const takeOver = await call("owner", "PUT", "/auth-home-claims/sf-home-u1", {
+      ownerUserId: USER_IDS.member,
+    });
+    expect(takeOver.status).toBe(409);
+    expect((await call("owner", "DELETE", "/auth-home-claims/sf-home-u1")).status).toBe(409);
+    expect((await new AuthHomeClaimStore(store).get("sf-home-u1"))?.ownerUserId).toBe("U1");
+
+    expect((await call("owner", "DELETE", "/auth-home-claims/sf-home-u3")).status).toBe(204);
+    expect((await call("owner", "DELETE", "/auth-home-claims/sf-home-u3")).status).toBe(404);
+    expect(await auditRows("auth_home.claim_unassigned")).toMatchObject([
+      { metadata: { from: "U2", to: null } },
+    ]);
+    const listed = await call("owner", "GET", "/auth-home-claims");
+    await expect(listed.json()).resolves.toEqual({
+      claims: [
+        expect.objectContaining({ pvcName: "sf-home-u1", ownerUserId: "U1" }),
+        expect.objectContaining({ pvcName: "sf-home-u2", ownerUserId: "U2" }),
+      ],
+    });
   });
 
   it("stamps consent on first grant, keeps it on a repeat, clears it on withdrawal, and audits the flips", async () => {

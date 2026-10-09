@@ -1,10 +1,15 @@
 import { Hono } from "hono";
 import {
+  authHomeClaimResponseSchema,
+  authHomeClaimsResponseSchema,
   authHomeMetadataSchema,
+  authHomeOwnerUserId,
+  authHomePvcNameSchema,
   authHomeResponseSchema,
   authHomeSeatResponseSchema,
   CODEX_SEAT,
   authHomesResponseSchema,
+  putAuthHomeClaimRequestSchema,
   putAuthHomeRequestSchema,
   putSubscriptionSharingRequestSchema,
   subscriptionSharingSchema,
@@ -24,14 +29,21 @@ import {
 } from "../routes/shared";
 import { bindAuthHomeAuditEvent } from "./audit";
 import { AuthHomeLeaseStore } from "./lease";
-import { AuthHomeValidationError, SubscriptionSharingStore, UserAuthHomeStore } from "./store";
+import {
+  AuthHomeClaimStore,
+  AuthHomeValidationError,
+  SubscriptionSharingStore,
+  UserAuthHomeStore,
+} from "./store";
 
 /**
  * Subscription auth-home routes.
  *
  * `/me/auth-home` is the caller's own registration and nothing else: the
  * owner is the admitted user, the body never names one, and no route reads
- * another person's home by id. `/auth-homes` lists metadata (no volume
+ * another person's home by id. The volume claim it names must have been
+ * assigned to the caller by an operator (`/auth-home-claims`), and it is
+ * fixed once registered. `/auth-homes` lists metadata (no volume
  * names) for the roles that administer the workspace. `/subscription-sharing`
  * is the one workspace-wide switch. `/me/auth-home/lease` is the Codex seat of
  * the caller's home: the UI's "waiting for your Codex seat".
@@ -39,6 +51,10 @@ import { AuthHomeValidationError, SubscriptionSharingStore, UserAuthHomeStore } 
 
 const PRIVATE_NO_STORE = "private, no-store" as const;
 const NO_HOME = "No subscription home is registered for you";
+const CLAIM_NOT_YOURS =
+  "That volume claim is not assigned to you; ask an operator to assign your home's claim";
+const CLAIM_FIXED =
+  "A registered home's volume claim cannot be changed; remove the home to register another claim";
 
 function consentAt(current: number | null, consented: boolean, now: number): number | null {
   if (!consented) return null;
@@ -113,6 +129,15 @@ async function putOwnHome(request: Request, _env: Env, _params: object, ctx: Use
   const actorUserId = ctx.principal.userId;
   const now = Date.now();
   const current = await store.findOwnedBy(actorUserId);
+  if (current && current.pvcName !== body.pvcName) return error(CLAIM_FIXED, 409);
+  if (!current) {
+    // The claim names a volume on a node; only the operator who created it
+    // knows whose credentials it holds, so the caller must have been
+    // assigned it. Nothing in the body can make another person's volume
+    // the caller's.
+    const claim = await new AuthHomeClaimStore(ctx.db).get(body.pvcName);
+    if (claim?.ownerUserId !== actorUserId) return error(CLAIM_NOT_YOURS, 403);
+  }
   try {
     const home = current
       ? await replaceHome(store, current, body, now)
@@ -148,7 +173,6 @@ function replaceHome(
   now: number
 ): Promise<AuthHome | null> {
   return store.update(current.id, {
-    pvcName: body.pvcName,
     nodeName: body.nodeName,
     providers: body.providers,
     kindsEnabled: body.kindsEnabled,
@@ -267,6 +291,103 @@ async function putSharing(request: Request, _env: Env, _params: object, ctx: Use
   return json(subscriptionSharingSchema.parse(current));
 }
 
+/** Every claim assignment: which person each home volume belongs to. */
+async function listClaims(_request: Request, _env: Env, _params: object, ctx: UserRouteContext) {
+  const claims = await new AuthHomeClaimStore(ctx.db).list();
+  return json(authHomeClaimsResponseSchema.parse({ claims }));
+}
+
+function parseClaimName(params: { pvcName: string }): string | Response {
+  const parsed = authHomePvcNameSchema.safeParse(params.pvcName);
+  return parsed.success ? parsed.data : error(`pvcName: ${parsed.error.issues[0]?.message}`, 400);
+}
+
+/**
+ * Assign a home claim to the person whose credentials its volume holds. A
+ * claim already registered as someone's home keeps its owner: reassigning
+ * it would hand that person's volume to another.
+ */
+async function putClaim(
+  request: Request,
+  _env: Env,
+  params: { pvcName: string },
+  ctx: UserRouteContext
+) {
+  const pvcName = parseClaimName(params);
+  if (pvcName instanceof Response) return pvcName;
+  const body = await parseBody(request, putAuthHomeClaimRequestSchema, undefined);
+  if (body instanceof Response) return body;
+  const user = await ctx.db
+    .prepare("SELECT id FROM users WHERE id = ?")
+    .bind(body.ownerUserId)
+    .first<{ id: string }>();
+  if (!user) return error("No such user", 404);
+  const claims = new AuthHomeClaimStore(ctx.db);
+  const [before, home] = await Promise.all([
+    claims.get(pvcName),
+    new UserAuthHomeStore(ctx.db).findByPvcName(pvcName),
+  ]);
+  if (home && authHomeOwnerUserId(home) !== body.ownerUserId) {
+    return error("That claim is registered as another person's home", 409);
+  }
+  const claim = await claims.assign({
+    pvcName,
+    ownerUserId: body.ownerUserId,
+    assignedBy: ctx.principal.userId,
+  });
+  if (before?.ownerUserId !== claim.ownerUserId) {
+    await bindAuthHomeAuditEvent(ctx.db, {
+      requestId: ctx.request_id,
+      actorUserId: ctx.principal.userId,
+      action: "auth_home.claim_assigned",
+      resourceType: "auth_home",
+      resourceId: null,
+      targetUserId: claim.ownerUserId,
+      before: { ownerUserId: before?.ownerUserId ?? null },
+      requested: { ownerUserId: body.ownerUserId },
+      after: { ownerUserId: claim.ownerUserId },
+      metadata: {
+        by: ctx.principal.userId,
+        from: before?.ownerUserId ?? null,
+        to: claim.ownerUserId,
+      },
+    }).run();
+  }
+  return json(authHomeClaimResponseSchema.parse({ claim }));
+}
+
+/** Withdraw an assignment; refused while a home is registered on the claim. */
+async function deleteClaim(
+  _request: Request,
+  _env: Env,
+  params: { pvcName: string },
+  ctx: UserRouteContext
+) {
+  const pvcName = parseClaimName(params);
+  if (pvcName instanceof Response) return pvcName;
+  const claims = new AuthHomeClaimStore(ctx.db);
+  const claim = await claims.get(pvcName);
+  if (!claim) return error("That claim is not assigned", 404);
+  if (await new UserAuthHomeStore(ctx.db).findByPvcName(pvcName)) {
+    return error("That claim is registered as a home; its owner must remove the home first", 409);
+  }
+  await ctx.db.batch([
+    ctx.db.prepare("DELETE FROM auth_home_claims WHERE pvc_name = ?").bind(pvcName),
+    bindAuthHomeAuditEvent(ctx.db, {
+      requestId: ctx.request_id,
+      actorUserId: ctx.principal.userId,
+      action: "auth_home.claim_unassigned",
+      resourceType: "auth_home",
+      resourceId: null,
+      targetUserId: claim.ownerUserId,
+      before: { ownerUserId: claim.ownerUserId },
+      after: { ownerUserId: null },
+      metadata: { by: ctx.principal.userId, from: claim.ownerUserId, to: null },
+    }),
+  ]);
+  return new Response(null, { status: 204 });
+}
+
 export const authHomeRoutes = new Hono<ControlPlaneHonoEnv>();
 const self = admit({
   ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
@@ -283,6 +404,11 @@ const manageSharing = admit({
   cacheControl: PRIVATE_NO_STORE,
   authorization: requirePermission("subscription_sharing.manage", { service: "deny" }),
 });
+const assignClaims = admit({
+  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  cacheControl: PRIVATE_NO_STORE,
+  authorization: requirePermission("auth_homes.assign", { service: "deny" }),
+});
 authHomeRoutes.get("/me/auth-home", self, (c) => dispatch(c, getOwnHome));
 authHomeRoutes.put("/me/auth-home", self, (c) => dispatch(c, putOwnHome));
 authHomeRoutes.delete("/me/auth-home", self, (c) => dispatch(c, deleteOwnHome));
@@ -290,3 +416,6 @@ authHomeRoutes.get("/me/auth-home/lease", self, (c) => dispatch(c, getOwnSeat));
 authHomeRoutes.get("/auth-homes", readAll, (c) => dispatch(c, listHomes));
 authHomeRoutes.get("/subscription-sharing", self, (c) => dispatch(c, getSharing));
 authHomeRoutes.put("/subscription-sharing", manageSharing, (c) => dispatch(c, putSharing));
+authHomeRoutes.get("/auth-home-claims", assignClaims, (c) => dispatch(c, listClaims));
+authHomeRoutes.put("/auth-home-claims/:pvcName", assignClaims, (c) => dispatch(c, putClaim));
+authHomeRoutes.delete("/auth-home-claims/:pvcName", assignClaims, (c) => dispatch(c, deleteClaim));

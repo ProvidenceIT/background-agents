@@ -1,4 +1,5 @@
 import {
+  authHomeClaimSchema,
   authHomeSchema,
   authHomeOwnerUserId,
   DEFAULT_SUBSCRIPTION_SHARING_POLICY,
@@ -6,6 +7,7 @@ import {
   subscriptionSharingSchema,
   TRIGGER_KINDS,
   type AuthHome,
+  type AuthHomeClaim,
   type AuthHomeProviderId,
   type AuthHomeStatus,
   type SubscriptionSharing,
@@ -266,6 +268,15 @@ export class UserAuthHomeStore {
     return rows.results.map(toHome).filter((home) => home.ownerUserIds.includes(userId));
   }
 
+  /** The home registered on `pvcName`, if any. */
+  async findByPvcName(pvcName: string): Promise<AuthHome | null> {
+    const row = await this.db
+      .prepare(`SELECT ${HOME_COLUMNS} FROM user_auth_homes WHERE pvc_name = ?`)
+      .bind(pvcName)
+      .first();
+    return row ? toHome(row) : null;
+  }
+
   /** The caller's own home: the oldest one that names them as an owner. */
   async findOwnedBy(userId: string): Promise<AuthHome | null> {
     const homes = await this.listForUser(userId);
@@ -355,5 +366,85 @@ export class SubscriptionSharingStore {
       .bind(policy, byUserId, now)
       .run();
     return { previous, current: { policy, updatedBy: byUserId, updatedAt: now } };
+  }
+}
+
+const claimRowSchema = z.object({
+  pvc_name: z.string(),
+  owner_user_id: z.string(),
+  assigned_by: z.string().nullable(),
+  assigned_at: z.number(),
+});
+
+function toClaim(row: unknown): AuthHomeClaim {
+  const parsed = claimRowSchema.parse(row);
+  return authHomeClaimSchema.parse({
+    pvcName: parsed.pvc_name,
+    ownerUserId: parsed.owner_user_id,
+    assignedBy: parsed.assigned_by,
+    assignedAt: parsed.assigned_at,
+  });
+}
+
+/**
+ * Operator assignments of home claims to their owners. Only an operator
+ * writes here; `PUT /me/auth-home` reads it to refuse a claim that is not
+ * the caller's.
+ */
+export class AuthHomeClaimStore {
+  constructor(private readonly db: SqlDatabase) {}
+
+  async get(pvcName: string): Promise<AuthHomeClaim | null> {
+    const row = await this.db
+      .prepare(
+        "SELECT pvc_name, owner_user_id, assigned_by, assigned_at FROM auth_home_claims WHERE pvc_name = ?"
+      )
+      .bind(pvcName)
+      .first();
+    return row ? toClaim(row) : null;
+  }
+
+  async list(): Promise<AuthHomeClaim[]> {
+    const rows = await this.db
+      .prepare(
+        "SELECT pvc_name, owner_user_id, assigned_by, assigned_at FROM auth_home_claims ORDER BY assigned_at, pvc_name"
+      )
+      .all();
+    return rows.results.map(toClaim);
+  }
+
+  /** Assign `pvcName` to `ownerUserId`, replacing any earlier assignment. */
+  async assign(input: {
+    pvcName: string;
+    ownerUserId: string;
+    assignedBy: string;
+    now?: number;
+  }): Promise<AuthHomeClaim> {
+    const claim = authHomeClaimSchema.parse({
+      pvcName: input.pvcName,
+      ownerUserId: input.ownerUserId,
+      assignedBy: input.assignedBy,
+      assignedAt: input.now ?? Date.now(),
+    });
+    await this.db
+      .prepare(
+        `INSERT INTO auth_home_claims (pvc_name, owner_user_id, assigned_by, assigned_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT (pvc_name) DO UPDATE SET
+           owner_user_id = excluded.owner_user_id,
+           assigned_by = excluded.assigned_by,
+           assigned_at = excluded.assigned_at`
+      )
+      .bind(claim.pvcName, claim.ownerUserId, claim.assignedBy, claim.assignedAt)
+      .run();
+    return claim;
+  }
+
+  async remove(pvcName: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("DELETE FROM auth_home_claims WHERE pvc_name = ?")
+      .bind(pvcName)
+      .run();
+    return result.meta.changes > 0;
   }
 }

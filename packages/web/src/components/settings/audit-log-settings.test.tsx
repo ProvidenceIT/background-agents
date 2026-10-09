@@ -244,6 +244,8 @@ describe("AuditLogSettings", () => {
     ["credential.auth_home_mounted", "Subscription home mounted for a session"],
     ["credential.auth_home_prompt", "Subscription home served a turn"],
     ["credential.unattended_blocked", "Subscription home refused a turn"],
+    ["auth_home.claim_assigned", "Subscription home claim assigned"],
+    ["auth_home.claim_unassigned", "Subscription home claim unassigned"],
     ["auth_home.registered", "Subscription home registered"],
     ["auth_home.removed", "Subscription home removed"],
     ["auth_home.consent_changed", "Subscription home background consent changed"],
