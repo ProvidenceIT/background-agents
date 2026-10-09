@@ -34,6 +34,7 @@ import {
 import { spawnContextSchema } from "../session/spawn-context";
 import type { Env } from "../types";
 import {
+  createRouteSourceControlProvider,
   error,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   json,
@@ -46,6 +47,13 @@ import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 import { inheritedPin } from "../session/pinned";
 import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
+import {
+  applyAuthHomeToProviderAuth,
+  authHomeRefusalResponse,
+  bindSessionAuthHome,
+} from "../auth-homes/session-binding";
+import { bindAuthHomeMountedAudit, bindUnattendedBlockedAudit } from "../auth-homes/audit";
+import { repositoriesArePrivate } from "../auth-homes/repo-visibility";
 
 const logger = createLogger("router:session-child-spawn");
 const MAX_SPAWN_DEPTH = 2;
@@ -277,8 +285,44 @@ export async function handleSpawnChild(
   );
   if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
 
-  const childDepth = parentDepth + 1;
   const childId = generateId();
+  // A child is its parent's trigger actor's activity: the resolver runs again
+  // for that actor, and repository visibility is checked again.
+  const triggerActorUserId =
+    parentSession?.triggerActorUserId ?? parentSession?.userId ?? childOwnerUserId;
+  const authHome = await bindSessionAuthHome(ctx.db, {
+    actorUserId: triggerActorUserId,
+    model,
+    triggerKind: "child",
+    repoPrivate: () =>
+      repositoriesArePrivate(
+        createRouteSourceControlProvider(env),
+        inheritedRepositories.map((repository) => ({
+          repoOwner: repository.owner,
+          repoName: repository.name,
+        }))
+      ),
+  });
+  if (authHome.kind === "refused") {
+    await bindUnattendedBlockedAudit({
+      db: ctx.db,
+      requestId: ctx.request_id,
+      actorUserId: triggerActorUserId,
+      sessionId: null,
+      provider: authHome.provider,
+      triggerKind: "child",
+      reason: authHome.resolution.reason,
+      homeId: authHome.resolution.homeId,
+      homeOwnerUserId: authHome.resolution.homeOwnerUserId,
+    }).run();
+    return authHomeRefusalResponse(authHome.resolution.reason, authHome.provider);
+  }
+  const inheritedProviderAuth = providerAuth.map((auth) => ({
+    ...auth,
+    inheritedFromSessionId: parentId,
+  }));
+
+  const childDepth = parentDepth + 1;
 
   logger.info("Spawning child session", {
     event: "session.spawn_child",
@@ -335,10 +379,15 @@ export async function handleSpawnChild(
     automationRunId: parentSession?.automationRunId ?? null,
     managedSkills: inheritedPin(parentId),
     memory: inheritedPin(parentId),
-    providerAuth: providerAuth.map((auth) => ({
-      ...auth,
-      inheritedFromSessionId: parentId,
-    })),
+    providerAuth:
+      authHome.kind === "served"
+        ? applyAuthHomeToProviderAuth(inheritedProviderAuth, authHome)
+        : inheritedProviderAuth,
+    triggerActorUserId,
+    triggerKind: "child",
+    workItemAuthorUserId: parentSession?.workItemAuthorUserId ?? null,
+    authHomeId: authHome.kind === "served" ? authHome.home.id : null,
+    authHomeSelection: authHome.kind === "served" ? authHome.resolution.kind : null,
   };
 
   const admissionLease = await sessionStore.acquireChildAdmissionLease(
@@ -363,6 +412,20 @@ export async function handleSpawnChild(
     return error("Failed to create child session", 500);
   }
   await sessionStore.releaseChildAdmissionLease(admissionLease);
+  if (authHome.kind === "served") {
+    await bindAuthHomeMountedAudit({
+      db: ctx.db,
+      requestId: ctx.request_id,
+      actorUserId: triggerActorUserId,
+      sessionId: childId,
+      provider: authHome.provider,
+      triggerKind: "child",
+      homeId: authHome.home.id,
+      homeOwnerUserId: authHome.resolution.homeOwnerUserId,
+      selection: authHome.resolution.kind,
+      workItemAuthorUserId: parentSession?.workItemAuthorUserId ?? null,
+    }).run();
+  }
 
   let promptResponse: Response;
   try {

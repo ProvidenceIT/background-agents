@@ -1,4 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as SharedRoutesModule from "./shared";
+import { applyMigrations } from "../node/migrate";
+import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
+import { UserAuthHomeStore } from "../auth-homes/store";
+import { createTestEnv, fakeSessionRuntimeDispatch } from "../router.test-support";
+import { handleSpawnChild } from "./session-child-spawn";
 import { SessionIndexStore } from "../db/session-index";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
 import type { SessionRuntimeClient } from "../session/runtime-client";
@@ -11,6 +20,22 @@ import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 vi.mock("../session/integration-settings-resolution", () => ({
   resolveSandboxSettings: vi.fn(),
+  resolveCodeServerEnabled: vi.fn(async () => false),
+  resolveVncEnabled: vi.fn(async () => false),
+}));
+
+const sourceControl = vi.hoisted(() => ({ isPrivate: true }));
+vi.mock("./shared", async (importOriginal) => ({
+  ...(await importOriginal<typeof SharedRoutesModule>()),
+  createRouteSourceControlProvider: () => ({
+    checkRepositoryAccess: async ({ owner, name }: { owner: string; name: string }) => ({
+      repoId: 1,
+      repoOwner: owner,
+      repoName: name,
+      defaultBranch: "main",
+      isPrivate: sourceControl.isPrivate,
+    }),
+  }),
 }));
 
 function routeMatch(path: string, pattern: string): { id: string; childId: string } {
@@ -543,5 +568,138 @@ describe("handleCancelChild", () => {
       error: "Nested tasks could not be cancelled: deep-failure, shallow-failure",
       cancelledDescendantIds: ["later-success"],
     });
+  });
+});
+
+describe("handleSpawnChild with auth homes", () => {
+  const OWNER = "user-owner";
+  let db: NodeSqlDatabase;
+  let initialized: string[];
+
+  beforeEach(async () => {
+    vi.mocked(resolveSandboxSettings).mockResolvedValue({});
+    sourceControl.isPrivate = true;
+    const sqlite = new DatabaseSync(":memory:");
+    applyMigrations(
+      sqlite,
+      resolve(dirname(fileURLToPath(import.meta.url)), "../../../../terraform/d1/migrations")
+    );
+    db = createNodeSqlDatabase(sqlite);
+    await db
+      .prepare("INSERT INTO users (id, display_name, created_at, updated_at) VALUES (?, ?, 1, 1)")
+      .bind(OWNER, OWNER)
+      .run();
+    await new UserAuthHomeStore(db).register({
+      id: "H1",
+      ownerUserIds: [OWNER],
+      pvcName: "sf-home-owner",
+      nodeName: "agent.dokman.io",
+      providers: ["anthropic", "openai"],
+      backgroundConsentAt: 1,
+    });
+    initialized = [];
+  });
+  afterEach(() => {
+    db.close();
+    vi.restoreAllMocks();
+  });
+
+  async function insertParent(model: string, repo: { owner: string; name: string } | null) {
+    await db
+      .prepare(
+        `INSERT INTO sessions (id, title, repo_owner, repo_name, model, status, user_id, created_at,
+           updated_at, trigger_actor_user_id, trigger_kind, auth_home_id, auth_home_selection)
+         VALUES ('parent', 'Parent', ?, ?, ?, 'active', ?, 1, 1, ?, 'prompt', 'H1', 'own')`
+      )
+      .bind(repo?.owner ?? null, repo?.name ?? null, model, OWNER, OWNER)
+      .run();
+  }
+
+  function spawn(model: string, repo: { owner: string; name: string } | null) {
+    const runtime: SessionRuntimeClient["fetch"] = async (sessionId, path) => {
+      if (path === "/internal/spawn-context") {
+        return Response.json({
+          repoOwner: repo?.owner ?? null,
+          repoName: repo?.name ?? null,
+          repoId: repo ? 1 : null,
+          harness: "opencode",
+          model,
+          reasoningEffort: null,
+          baseBranch: repo ? "main" : null,
+          promptAuthor: { ...defaultPromptAuthor, canonicalUserId: OWNER },
+        });
+      }
+      return Response.json({ messageId: `m-${sessionId}` });
+    };
+    const ctx: SessionRouteContext = {
+      db,
+      metrics: {} as SessionRouteContext["metrics"],
+      request_id: "request-spawn",
+      trace_id: "trace-spawn",
+      executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
+      principal: { kind: "sandbox", sessionId: "parent" },
+      sessionRuntime: { fetch: runtime },
+    };
+    const env = createTestEnv({
+      DB: db,
+      SESSION: fakeSessionRuntimeDispatch(async (_request, sessionId) => {
+        initialized.push(sessionId);
+        return Response.json({ status: "created" });
+      }),
+    });
+    return handleSpawnChild(
+      new Request("https://test.local/sessions/parent/children", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Child", prompt: "Do the thing" }),
+      }),
+      env,
+      { id: "parent" },
+      ctx
+    );
+  }
+
+  it("inherits the parent's trigger actor and resolves to the same home as a child", async () => {
+    await insertParent("anthropic/claude-sonnet-4-6", null);
+    const response = await spawn("anthropic/claude-sonnet-4-6", null);
+    expect(response.status).toBe(201);
+    const { sessionId } = (await response.json()) as { sessionId: string };
+
+    const row = await db
+      .prepare(
+        `SELECT trigger_actor_user_id, trigger_kind, auth_home_id, auth_home_selection
+         FROM sessions WHERE id = ?`
+      )
+      .bind(sessionId)
+      .first();
+    expect(row).toEqual({
+      trigger_actor_user_id: OWNER,
+      trigger_kind: "child",
+      auth_home_id: "H1",
+      auth_home_selection: "own",
+    });
+    const auth = await db
+      .prepare(
+        `SELECT auth_mode, selection_source FROM session_model_provider_auth
+         WHERE session_id = ? AND provider = 'anthropic'`
+      )
+      .bind(sessionId)
+      .first();
+    expect(auth).toEqual({ auth_mode: "auth_home", selection_source: "auth_home_own" });
+    expect(initialized).toEqual([sessionId]);
+  });
+
+  it("refuses a Codex child on a public repository with public_repo", async () => {
+    sourceControl.isPrivate = false;
+    const repo = { owner: "acme", name: "public-site" };
+    await insertParent("openai/gpt-5.5", repo);
+    const response = await spawn("openai/gpt-5.5", repo);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "public_repo", reason: "public_repo" });
+    expect(initialized).toEqual([]);
+    const children = await db
+      .prepare("SELECT COUNT(*) AS n FROM sessions WHERE parent_session_id = 'parent'")
+      .first<{ n: number }>();
+    expect(children?.n).toBe(0);
   });
 });
