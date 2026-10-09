@@ -26,6 +26,9 @@ on:
       - "packages/teams-bot/**"
       - "packages/web/**"
       - "scripts/**"
+      # The Kubernetes manifest tests (admission policy, GC, egress proxy)
+      # read these files, so a manifest-only change must run them.
+      - "deploy/kubernetes/**"
       - "terraform/d1/migrations/**"
       # Unit tests hold the Worker's cron triggers and queue consumers equal
       # to what Terraform declares, so a Terraform-only change must run them.
@@ -64,6 +67,9 @@ on:
       - "packages/teams-bot/**"
       - "packages/web/**"
       - "scripts/**"
+      # The Kubernetes manifest tests (admission policy, GC, egress proxy)
+      # read these files, so a manifest-only change must run them.
+      - "deploy/kubernetes/**"
       - "terraform/d1/migrations/**"
       # Unit tests hold the Worker's cron triggers and queue consumers equal
       # to what Terraform declares, so a Terraform-only change must run them.
