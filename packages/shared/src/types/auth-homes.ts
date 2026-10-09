@@ -132,10 +132,19 @@ export const authHomeSchema = z.strictObject({
   /** When the owner consented to sharing; set exactly when `shared` is on. */
   sharingConsentAt: z.number().int().nonnegative().nullable(),
   status: authHomeStatusSchema,
+  /**
+   * When the Claude setup token in the home expires (epoch ms), as a sandbox
+   * mounting the home last reported it from `claude/expires_at`; null until
+   * one has. Never the token itself.
+   */
+  claudeExpiresAt: z.number().int().nonnegative().nullable(),
   registeredAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
 });
 export type AuthHome = z.infer<typeof authHomeSchema>;
+
+/** How far ahead of a Claude token's expiry its owner is warned (settings and Teams DM). */
+export const AUTH_HOME_EXPIRY_NOTICE_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** The home owner is the first owner id; the others are the same person's merged identities. */
 export function authHomeOwnerUserId(home: Pick<AuthHome, "ownerUserIds">): string {

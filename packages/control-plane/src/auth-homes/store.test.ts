@@ -45,6 +45,7 @@ describe("UserAuthHomeStore", () => {
       shared: false,
       sharingConsentAt: null,
       status: "active",
+      claudeExpiresAt: null,
       registeredAt: FIXED_NOW,
       updatedAt: FIXED_NOW,
     });
@@ -182,5 +183,49 @@ describe("SubscriptionSharingStore", () => {
     expect(
       (await db.prepare("SELECT COUNT(*) AS count FROM subscription_sharing").first())?.count
     ).toBe(1);
+  });
+});
+
+describe("UserAuthHomeStore.recordClaudeExpiryForSession", () => {
+  let db: NodeSqlDatabase;
+  let store: UserAuthHomeStore;
+
+  beforeEach(async () => {
+    const sqlite = new DatabaseSync(":memory:");
+    applyMigrations(
+      sqlite,
+      resolve(dirname(fileURLToPath(import.meta.url)), "../../../../terraform/d1/migrations")
+    );
+    db = createNodeSqlDatabase(sqlite);
+    store = new UserAuthHomeStore(db);
+    await store.register({
+      id: "H1",
+      ownerUserIds: ["U1"],
+      pvcName: "sf-home-u1",
+      nodeName: "agent.dokman.io",
+      providers: ["anthropic"],
+      now: FIXED_NOW,
+    });
+    await db
+      .prepare(
+        `INSERT INTO sessions (id, auth_home_id, created_at, updated_at)
+         VALUES ('s-home', 'H1', 1, 1), ('s-plain', NULL, 1, 1)`
+      )
+      .run();
+  });
+  afterEach(() => db.close());
+
+  it("stores the expiry a sandbox on the session's home reported, once, without touching the owner's fields", async () => {
+    const expiresAt = FIXED_NOW + 13 * 86_400_000;
+
+    await expect(store.recordClaudeExpiryForSession("s-home", expiresAt)).resolves.toBe(true);
+    await expect(store.recordClaudeExpiryForSession("s-home", expiresAt)).resolves.toBe(false);
+    await expect(store.recordClaudeExpiryForSession("s-plain", expiresAt)).resolves.toBe(false);
+    await expect(store.recordClaudeExpiryForSession("s-missing", expiresAt)).resolves.toBe(false);
+
+    await expect(store.getById("H1")).resolves.toMatchObject({
+      claudeExpiresAt: expiresAt,
+      updatedAt: FIXED_NOW,
+    });
   });
 });

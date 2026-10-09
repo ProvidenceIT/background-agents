@@ -47,6 +47,7 @@ const homeRowSchema = z.object({
   shared: z.number(),
   sharing_consent_at: z.number().nullable(),
   status: z.string(),
+  claude_expires_at: z.number().nullable(),
   registered_at: z.number(),
   updated_at: z.number(),
 });
@@ -76,14 +77,15 @@ function toHome(raw: unknown): AuthHome {
     shared: row.shared === 1,
     sharingConsentAt: row.sharing_consent_at,
     status: row.status,
+    claudeExpiresAt: row.claude_expires_at,
     registeredAt: row.registered_at,
     updatedAt: row.updated_at,
   });
 }
 
 const HOME_COLUMNS = `id, owner_user_ids, pvc_name, node_name, providers, kinds_enabled,
-  background_consent_at, max_concurrent, shared, sharing_consent_at, status, registered_at,
-  updated_at`;
+  background_consent_at, max_concurrent, shared, sharing_consent_at, status, claude_expires_at,
+  registered_at, updated_at`;
 
 /** A new registration. Consent fields are the moments consent was given, or null. */
 export interface RegisterAuthHomeInput {
@@ -100,6 +102,8 @@ export interface RegisterAuthHomeInput {
   shared?: boolean;
   sharingConsentAt?: number | null;
   status?: AuthHomeStatus;
+  /** Reported by a sandbox, never by the owner; null when omitted. */
+  claudeExpiresAt?: number | null;
   now?: number;
 }
 
@@ -135,13 +139,14 @@ export class UserAuthHomeStore {
       shared: input.shared ?? false,
       sharingConsentAt: input.sharingConsentAt ?? null,
       status: input.status ?? "active",
+      claudeExpiresAt: input.claudeExpiresAt ?? null,
       registeredAt: now,
       updatedAt: now,
     });
     await this.db
       .prepare(
         `INSERT INTO user_auth_homes (${HOME_COLUMNS})
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         home.id,
@@ -155,6 +160,7 @@ export class UserAuthHomeStore {
         home.shared ? 1 : 0,
         home.sharingConsentAt,
         home.status,
+        home.claudeExpiresAt,
         home.registeredAt,
         home.updatedAt
       )
@@ -207,6 +213,24 @@ export class UserAuthHomeStore {
       )
       .run();
     return result.meta.changes === 1 ? next : null;
+  }
+
+  /**
+   * Record the Claude token expiry a sandbox mounting the session's home
+   * reported at boot. Owner fields and `updatedAt` stay as they are: this is
+   * an observation about the home, not an edit by its owner. False when the
+   * session has no home or the value was already recorded.
+   */
+  async recordClaudeExpiryForSession(sessionId: string, expiresAt: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE user_auth_homes SET claude_expires_at = ?
+         WHERE id = (SELECT auth_home_id FROM sessions WHERE id = ?)
+           AND (claude_expires_at IS NULL OR claude_expires_at <> ?)`
+      )
+      .bind(expiresAt, sessionId, expiresAt)
+      .run();
+    return result.meta.changes > 0;
   }
 
   async getById(id: string): Promise<AuthHome | null> {

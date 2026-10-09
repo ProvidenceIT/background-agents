@@ -29,6 +29,7 @@ const home = {
   shared: true,
   sharingConsentAt: 1_700_000_000_000,
   status: "active",
+  claudeExpiresAt: null,
   registeredAt: 1_700_000_000_000,
   updatedAt: 1_700_000_000_001,
 };

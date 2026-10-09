@@ -406,6 +406,10 @@ Automations:
   background and sharing consent timestamps, the concurrency cap and whether the home is `shared`
   with the other enrolled people. No credential is stored here: the provider's CLI reads it from the
   mounted volume. Managed by `/me/auth-home` (self only) and read as metadata by `/auth-homes`.
+  `claude_expires_at` is the Claude setup token's expiry as a sandbox mounting the home reports it
+  at boot from `claude/expires_at`; never the token.
+- `auth_home_notices`: one row per notice owed to a home owner (the T-14d Claude expiry notice and
+  the weekly digest), claimed before it is posted so each goes out at most once.
 - `subscription_sharing`: the single-row (`id = 'global'`) workspace policy, `household` (default,
   read when the row is absent) or `owner_only`, managed by `/subscription-sharing`.
 - `sessions.trigger_actor_user_id`, `trigger_kind`, `work_item_author_user_id`, `auth_home_id` and

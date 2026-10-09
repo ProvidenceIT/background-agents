@@ -122,6 +122,7 @@ describe("auth-home routes", () => {
       shared: false,
       sharingConsentAt: null,
       status: "active",
+      claudeExpiresAt: null,
       registeredAt: FIXED_NOW,
       updatedAt: FIXED_NOW,
     });

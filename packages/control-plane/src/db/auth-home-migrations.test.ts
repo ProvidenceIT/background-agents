@@ -44,7 +44,7 @@ describe("migrations 0089-0091 (subscription auth homes)", () => {
 
   it("applies on a 0088-level database, backfills owners and keeps every foreign key satisfied", () => {
     const applied = applyMigrations(db, MIGRATIONS);
-    expect(applied).toEqual([
+    expect(applied.filter((name) => name < "0092")).toEqual([
       "0089_provider_account_owner.sql",
       "0090_user_auth_homes.sql",
       "0091_session_trigger_fields.sql",
@@ -138,5 +138,36 @@ describe("migrations 0089-0091 (subscription auth homes)", () => {
          VALUES ('H3', '["u3"]', 'sf-home-u1', 'agent.dokman.io', '[]', '[]', 7, 7)`
       )
     ).toThrow(/UNIQUE constraint failed/);
+  });
+});
+
+describe("migration 0094 (auth-home token expiry and notices)", () => {
+  let db: DatabaseSync;
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    applyThrough(db, "0091");
+    db.exec(
+      `INSERT INTO user_auth_homes (id, owner_user_ids, pvc_name, node_name, providers, kinds_enabled, registered_at, updated_at)
+       VALUES ('H1', '["u1"]', 'sf-home-u1', 'agent.dokman.io', '["anthropic"]', '["prompt"]', 7, 7)`
+    );
+  });
+  afterEach(() => db.close());
+
+  it("leaves an enrolled home's expiry unknown and records each notice at most once", () => {
+    expect(applyMigrations(db, MIGRATIONS)).toContain("0094_auth_home_notices.sql");
+    expect(db.prepare("SELECT claude_expires_at FROM user_auth_homes").get()).toEqual({
+      claude_expires_at: null,
+    });
+
+    const claim = db.prepare(
+      `INSERT INTO auth_home_notices (home_id, kind, period_key, recipient_user_id, claimed_at)
+       VALUES ('H1', ?, ?, 'u1', 9) ON CONFLICT DO NOTHING`
+    );
+    expect(claim.run("claude_expiry", "1700000000000").changes).toBe(1);
+    expect(claim.run("claude_expiry", "1700000000000").changes).toBe(0);
+    expect(claim.run("weekly_digest", "2026-10-05").changes).toBe(1);
+    expect(() => claim.run("monthly_digest", "2026-10")).toThrow(/CHECK constraint failed/);
   });
 });
