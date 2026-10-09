@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import type { EnvConfig } from "../types";
 import { parseTeamsEnforcementMode } from "../authorization/teams-enforcement";
 import { parseGitHubTeamSyncIntervalMs } from "../teams/github-team-sync";
+import { parseSubscriptionSecretOwners } from "../session/subscription-secret-owners";
 
 /** A source of configuration values, `process.env` in production. */
 export type ConfigSource = Record<string, string | undefined>;
@@ -114,6 +115,7 @@ const ENV_CONFIG_KEYS = {
   SANDBOX_BOOT_TIMEOUT_MS: true,
   EXECUTION_TIMEOUT_MS: true,
   SECRETS_CAP_ENFORCEMENT: true,
+  SUBSCRIPTION_SECRET_OWNERS: true,
   TEAMS_ENFORCEMENT: true,
   GITHUB_TEAM_SYNC_INTERVAL_MS: true,
   LOG_LEVEL: true,
@@ -181,6 +183,7 @@ export function readEnvConfig(source: ConfigSource): EnvConfig {
     throw new Error(`Missing required configuration: ${missing.join(", ")}`);
   }
   parseTeamsEnforcementMode(config.TEAMS_ENFORCEMENT);
+  parseSubscriptionSecretOwners(config.SUBSCRIPTION_SECRET_OWNERS);
   parseGitHubTeamSyncIntervalMs(config);
   return config as EnvConfig;
 }

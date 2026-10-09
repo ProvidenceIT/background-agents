@@ -371,6 +371,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     durableObjectId,
     repoSecretsEncryptionKey,
     secretsCapEnforcement: env.SECRETS_CAP_ENFORCEMENT,
+    subscriptionSecretOwners: env.SUBSCRIPTION_SECRET_OWNERS,
     log,
   });
 

@@ -32,6 +32,16 @@ describe("readEnvConfig", () => {
     );
   });
 
+  it("rejects a malformed subscription secret owner list at startup", () => {
+    expect(() =>
+      readEnvConfig({ ...REQUIRED, SUBSCRIPTION_SECRET_OWNERS: '{"ZHIPU_API_KEY":"u1"}' })
+    ).toThrow("SUBSCRIPTION_SECRET_OWNERS");
+    expect(
+      readEnvConfig({ ...REQUIRED, SUBSCRIPTION_SECRET_OWNERS: '{"ZHIPU_API_KEY":["u1"]}' })
+        .SUBSCRIPTION_SECRET_OWNERS
+    ).toBe('{"ZHIPU_API_KEY":["u1"]}');
+  });
+
   it("names every missing required variable at once", () => {
     expect(() => readEnvConfig({ DEPLOYMENT_NAME: "test", TOKEN_ENCRYPTION_KEY: "" })).toThrow(
       "Missing required configuration: GITHUB_BOT_USERNAME, TOKEN_ENCRYPTION_KEY, PROVIDER_ACCOUNTS_ENCRYPTION_KEY, REPO_SECRETS_ENCRYPTION_KEY"

@@ -23,6 +23,7 @@ import type { SqlDatabase, SqlResult, SqlStatement } from "../db/sql-database";
 import type { SqlResult as StorageSqlResult, SqlStorage } from "./sql-storage";
 import type { SessionProviderAuthMode } from "@open-inspect/shared/types/provider-accounts";
 import type { SessionRepositoryRow, SessionRow } from "./types";
+import { TRIGGER_KINDS } from "@open-inspect/shared/types/auth-homes";
 
 const ENCRYPTION_KEY = generateEncryptionKey();
 
@@ -257,6 +258,8 @@ function makeHarness(
     /** Omit to model an unset SECRETS_CAP_ENFORCEMENT (fail-closed enforce). */
     capEnforcement?: string;
     resolveRepoId?: (session: SessionRow) => Promise<number>;
+    /** SUBSCRIPTION_SECRET_OWNERS as the deployment sets it. */
+    subscriptionSecretOwners?: string;
   } = {}
 ) {
   const session = options.session === undefined ? sessionRow() : options.session;
@@ -308,6 +311,7 @@ function makeHarness(
     durableObjectId: "do-id-fallback",
     repoSecretsEncryptionKey: options.encryptionKey ?? ENCRYPTION_KEY,
     secretsCapEnforcement: options.capEnforcement,
+    subscriptionSecretOwners: options.subscriptionSecretOwners,
     log,
   });
 
@@ -689,6 +693,51 @@ describe("UserEnvResolver", () => {
       await expect(
         h.resolver.getProviderAuthenticationError("anthropic/claude-sonnet-4-5")
       ).resolves.toBeNull();
+    });
+  });
+
+  describe("owner-tagged subscription secrets", () => {
+    const OWNERS = JSON.stringify({ ZHIPU_API_KEY: ["u1"] });
+
+    async function envFor(triggerActorUserId: string, triggerKind: string) {
+      const h = makeHarness({ subscriptionSecretOwners: OWNERS, memberRows: [] });
+      h.db.sessionIndexRow = {
+        ...h.db.sessionIndexRow,
+        trigger_actor_user_id: triggerActorUserId,
+        trigger_kind: triggerKind,
+      };
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+      h.db.globalSecretRows = await secretRows({
+        ZHIPU_API_KEY: "zhipu-placeholder",
+        OTHER_SECRET: "other-placeholder",
+      });
+      h.db.repoSecretRowsByRepoId.set(90101, []);
+      return { env: await h.resolver.getUserEnvVars(), logs: h.logs };
+    }
+
+    it("reaches the listed trigger actor and nobody else, for every trigger kind", async () => {
+      for (const kind of TRIGGER_KINDS) {
+        const owner = await envFor("u1", kind);
+        expect(owner.env?.ZHIPU_API_KEY, kind).toBe("zhipu-placeholder");
+        expect(owner.env?.OTHER_SECRET, kind).toBe("other-placeholder");
+
+        const other = await envFor("u2", kind);
+        expect(other.env && "ZHIPU_API_KEY" in other.env, kind).toBe(false);
+        expect(other.env?.OTHER_SECRET, kind).toBe("other-placeholder");
+        expect(other.logs).toContainEqual(
+          expect.objectContaining({
+            msg: "subscription_secrets.withheld",
+            data: expect.objectContaining({ keys: ["ZHIPU_API_KEY"], trigger_actor: "u2" }),
+          })
+        );
+      }
+    });
+
+    it("refuses to resolve with a malformed owner list", async () => {
+      const h = makeHarness({ subscriptionSecretOwners: "{not json" });
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+      h.db.repoSecretRowsByRepoId.set(90101, []);
+      await expect(h.resolver.getUserEnvVars()).rejects.toThrow("SUBSCRIPTION_SECRET_OWNERS");
     });
   });
 });
