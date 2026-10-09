@@ -185,6 +185,10 @@ describe("memory rendering", () => {
     ];
     expect(renderMemorySection(manifest, entries, "opencode")).toContain("then memory_read");
     expect(renderMemorySection(manifest, entries, "claude")).toContain("then mcp__oi__memory_read");
+    // Codex reaches the same tools over its stdio `oi` MCP server.
+    expect(renderMemorySection(manifest, entries, "codex")).toContain(
+      "Use mcp__oi__memory_search with short keyword queries"
+    );
   });
   it("counts scope labels and JSON escaping against the rendered budget", async () => {
     const big = { repoOwner: "nested/".repeat(5000), repoName: "api", repoId: 123 };
