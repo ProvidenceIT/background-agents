@@ -13,6 +13,10 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
 import { parseBody } from "./body";
 import {
+  authHomeKeepsSessionsPrivate,
+  authHomeNotSharedResponse,
+} from "../auth-homes/session-binding";
+import {
   error,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   json,
@@ -69,6 +73,13 @@ async function changeVisibility(
     return json({ error: "Session owner required", code: "owner_required" }, 400);
   if (body.visibility === "team" && rows.some((row) => !row?.ownerTeamId))
     return json({ error: "A team is required", code: "team_required" }, 400);
+  if (body.visibility !== "private") {
+    for (const row of rows) {
+      if (await authHomeKeepsSessionsPrivate(ctx.db, row?.authHomeId)) {
+        return authHomeNotSharedResponse();
+      }
+    }
+  }
   const auditStore = new SessionAuditStore(ctx.db);
   const audits = rows.flatMap((row) =>
     row && row.visibility !== body.visibility
@@ -109,6 +120,9 @@ async function changeCollaborator(
     if (!access.allowed) return denied(access.reason);
   }
   if (!remove) {
+    if (await authHomeKeepsSessionsPrivate(ctx.db, admission.row.authHomeId)) {
+      return authHomeNotSharedResponse();
+    }
     const eligibility = await new UserStore(ctx.db).getCollaboratorEligibility(
       params.userId,
       admission.row.ownerTeamId

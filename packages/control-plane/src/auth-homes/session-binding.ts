@@ -20,7 +20,7 @@ import {
   checkTurnEligibility,
   resolveAuthHome,
 } from "./resolver";
-import { UserAuthHomeStore } from "./store";
+import { SubscriptionSharingStore, UserAuthHomeStore } from "./store";
 
 const logger = createLogger("auth-homes:session-binding");
 
@@ -179,4 +179,35 @@ export async function enforceAuthHomeTurn(input: AuthHomeTurnInput): Promise<Res
 export function turnTriggerKind(principal: RequestContext["principal"]): TriggerKind {
   if (principal?.kind !== "service" || principal.service === "web") return "prompt";
   return principal.service === "github-bot" ? "pr_event" : "mention";
+}
+
+/** Error code of the 409 that keeps an unshared home's session from being widened. */
+export const AUTH_HOME_NOT_SHARED = "auth_home_not_shared";
+
+/**
+ * Whether the sessions bound to `homeId` must stay private to their owner:
+ * under `owner_only`, or while the home is not shared, nobody else may take
+ * a turn on it, so the session may not be widened to others either.
+ */
+export async function authHomeKeepsSessionsPrivate(
+  db: SqlDatabase,
+  homeId: string | null | undefined
+): Promise<boolean> {
+  if (!homeId) return false;
+  const home = await new UserAuthHomeStore(db).getById(homeId);
+  if (!home) return false;
+  if (!home.shared) return true;
+  return (await new SubscriptionSharingStore(db).get()) !== "household";
+}
+
+/** The 409 for widening a session that `authHomeKeepsSessionsPrivate` holds private. */
+export function authHomeNotSharedResponse(): Response {
+  return Response.json(
+    {
+      error:
+        "This session runs on a subscription home that is not shared, so it stays private to its owner",
+      code: AUTH_HOME_NOT_SHARED,
+    },
+    { status: 409 }
+  );
 }
