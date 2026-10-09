@@ -93,6 +93,11 @@ The control plane writes these event families today:
 
 Actions without a friendly label are shown by their raw name.
 
+The three `credential.*` rows also show, as separate fields, the **Home owner**, the **Turn actor**
+(whose activity the turn was; the row's own actor is the writer, which is the control plane for a
+scheduled run), the **Trigger** kind (marked when a colleague's shared home served it) and, for a
+refusal, why it was refused.
+
 Channel binding changes are recorded as `team.binding_added` (**Team channel binding added**) and
 `team.binding_removed` (**Team channel binding removed**) for Slack channels and Linear teams. These record
 routing changes, not membership grants or transfers of existing session ownership.

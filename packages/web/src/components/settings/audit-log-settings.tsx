@@ -156,9 +156,54 @@ function resourceSummary(event: AuditEvent): string {
     : resource;
 }
 
+/** Metadata keys the subscription-home credential rows write, by meaning. */
+interface SubscriptionHomeParties {
+  homeOwner: string | null;
+  actor: string | null;
+  trigger: string | null;
+  refusal: string | null;
+}
+
+function metadataString(metadata: AuditEvent["metadata"], ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = (metadata as Record<string, unknown>)[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return null;
+}
+
+/**
+ * Who a served or refused subscription-home turn involved: the home's owner
+ * and the person whose activity the turn was, as the credential rows record
+ * them in metadata (the row's own actor is the writer, which for a scheduled
+ * run is the control plane).
+ */
+function subscriptionHomeParties(event: AuditEvent): SubscriptionHomeParties | null {
+  if (!event.action.startsWith("credential.")) return null;
+  const metadata = event.metadata;
+  const kind = metadataString(metadata, "trigger_kind");
+  const shared = metadataString(metadata, "selection") === "shared";
+  return {
+    homeOwner: metadataString(metadata, "home_owner", "owner"),
+    actor: metadataString(metadata, "actor", "trigger_actor"),
+    trigger: kind ? `${kind}${shared ? " on a shared home" : ""}` : null,
+    refusal: metadataString(metadata, "reason"),
+  };
+}
+
+function AuditDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="break-words font-mono text-foreground">{value}</dd>
+    </div>
+  );
+}
+
 export function AuditEventCard({ event }: { event: AuditEvent }) {
   const interpretation = interpretAuditEvent(event);
   const badge = badgeTreatment(interpretation);
+  const parties = subscriptionHomeParties(event);
   const localTimestamp = new Date(event.occurredAt).toLocaleString();
 
   return (
@@ -197,6 +242,10 @@ export function AuditEventCard({ event }: { event: AuditEvent }) {
             <dt className="text-muted-foreground">Reason</dt>
             <dd className="break-words font-mono text-foreground">{event.reasonCode}</dd>
           </div>
+          {parties?.homeOwner && <AuditDetail label="Home owner" value={parties.homeOwner} />}
+          {parties?.actor && <AuditDetail label="Turn actor" value={parties.actor} />}
+          {parties?.trigger && <AuditDetail label="Trigger" value={parties.trigger} />}
+          {parties?.refusal && <AuditDetail label="Refused because" value={parties.refusal} />}
           {interpretation.kind === "authorization_decision" && (
             <div className="min-w-0">
               <dt className="text-muted-foreground">HTTP response</dt>

@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AUDIT_OPERATION_ACTIONS } from "@open-inspect/shared/types/audit-events";
 import { AuditLogSettings } from "./audit-log-settings";
 
 expect.extend(matchers);
@@ -237,6 +238,91 @@ describe("AuditLogSettings", () => {
     const article = renderSingle(createEvent("applied", { action }));
     expect(article.getByText(label)).toBeInTheDocument();
     expect(article.getByText("Applied")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["credential.auth_home_mounted", "Subscription home mounted for a session"],
+    ["credential.auth_home_prompt", "Subscription home served a turn"],
+    ["credential.unattended_blocked", "Subscription home refused a turn"],
+    ["auth_home.registered", "Subscription home registered"],
+    ["auth_home.removed", "Subscription home removed"],
+    ["auth_home.consent_changed", "Subscription home background consent changed"],
+    ["auth_home.sharing_changed", "Home sharing changed"],
+    ["subscription_sharing.changed", "Subscription sharing policy changed"],
+    ["provider_account.connected", "Provider account connected"],
+    ["provider_account.denied", "Provider account use denied"],
+    ["provider_account.expiring", "Provider account credential expiring"],
+    ["provider_account.revoked", "Provider account revoked"],
+  ])("labels the subscription-home action %s", (action, label) => {
+    const article = renderSingle(
+      createEvent("applied", { action, metadata: { before: {}, requested: {}, after: {} } })
+    );
+    expect(article.getByRole("heading", { name: label })).toBeInTheDocument();
+  });
+
+  it("has a label for every operation action, none falling back to the raw action", () => {
+    for (const action of AUDIT_OPERATION_ACTIONS) {
+      cleanup();
+      const article = renderSingle(createEvent("applied", { action }));
+      expect(article.getByRole("heading", { level: 3 }).textContent).not.toBe(action);
+    }
+  });
+
+  it("shows the home owner and the actor of a served turn from its metadata", () => {
+    const article = renderSingle(
+      createEvent("applied", {
+        action: "credential.auth_home_prompt",
+        resourceType: "session",
+        resourceId: "session-1",
+        actorUserIdSnapshot: "user-colleague",
+        targetUserIdSnapshot: "user-owner",
+        reasonCode: "credential.auth_home_prompt",
+        metadata: {
+          before: {},
+          requested: {},
+          after: {},
+          home_id: "ah_1",
+          home_owner: "user-owner",
+          actor: "user-colleague",
+          selection: "shared",
+          trigger_kind: "mention",
+          provider: "anthropic",
+          channel: "prompt",
+        },
+      })
+    );
+    expect(article.getByRole("heading", { name: "Subscription home served a turn" })).toBeVisible();
+    expect(article.getByText("Home owner").nextElementSibling).toHaveTextContent("user-owner");
+    expect(article.getByText("Turn actor").nextElementSibling).toHaveTextContent("user-colleague");
+    expect(article.getByText("Trigger").nextElementSibling).toHaveTextContent(
+      "mention on a shared home"
+    );
+  });
+
+  it("shows why an unattended turn was refused and whose activity it was", () => {
+    const article = renderSingle(
+      createEvent("denied", {
+        action: "credential.unattended_blocked",
+        principalKind: "service",
+        actorUserIdSnapshot: null,
+        actorServiceSnapshot: "control-plane",
+        metadata: {
+          before: {},
+          requested: {},
+          after: {},
+          reason: "no_consent",
+          home_id: "ah_1",
+          home_owner: "user-owner",
+          trigger_kind: "schedule",
+          trigger_actor: "user-owner",
+          provider: "openai",
+        },
+      })
+    );
+    expect(article.getByText("Subscription home refused a turn")).toBeVisible();
+    expect(article.getByText("Denied")).toBeVisible();
+    expect(article.getByText("Refused because").nextElementSibling).toHaveTextContent("no_consent");
+    expect(article.getByText("Turn actor").nextElementSibling).toHaveTextContent("user-owner");
   });
 
   it("labels private session break-glass reads as operations", () => {
