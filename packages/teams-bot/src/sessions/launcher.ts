@@ -4,7 +4,9 @@
  * the Teams user as actor; every denial is rendered in the thread.
  */
 
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import {
+  extractProviderAndModel,
   getReasoningConfig,
   isValidModel,
   isValidReasoningEffort,
@@ -49,6 +51,16 @@ export interface LaunchDeps {
 export interface ModelSelection {
   model: string;
   reasoningEffort?: string;
+}
+
+/**
+ * The harness a Teams session runs its model on. OpenAI is spent only
+ * through Codex on the sender's subscription home (there is no OpenAI key),
+ * so an `openai/*` model asks for Codex; anything else keeps the control
+ * plane's built-in harness.
+ */
+export function harnessForModel(model: string): HarnessId | undefined {
+  return extractProviderAndModel(model).provider === "openai" ? "codex" : undefined;
 }
 
 /** Apply inline flags to the defaults, or say why they cannot be applied. */
@@ -184,6 +196,7 @@ export async function launchSession(deps: LaunchDeps, input: LaunchInput): Promi
       repoOwner: repo.data.owner,
       repoName: repo.data.name,
       model: selection.selection.model,
+      harness: harnessForModel(selection.selection.model),
       reasoningEffort: selection.selection.reasoningEffort,
       actorDisplayName: activity.from?.name,
     },

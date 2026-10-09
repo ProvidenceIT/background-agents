@@ -7,6 +7,7 @@
  * classified failure the command layer can render.
  */
 
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { signedControlPlaneFetch, type FetchClient } from "@open-inspect/shared/service-auth";
 import {
   createSessionResponseSchema,
@@ -84,6 +85,8 @@ export interface CreateSessionInput {
   model: string;
   reasoningEffort?: string;
   actorDisplayName?: string;
+  /** Absent means the control plane's built-in harness. */
+  harness?: HarnessId;
 }
 
 export interface SendPromptInput {
@@ -278,6 +281,7 @@ export class ControlPlaneClient {
       repoName: input.repoName,
       model: input.model,
       triggerKind: "mention",
+      ...(input.harness ? { harness: input.harness } : {}),
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       ...(input.actorDisplayName ? { actorDisplayName: input.actorDisplayName } : {}),
     });

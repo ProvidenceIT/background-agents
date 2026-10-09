@@ -616,6 +616,35 @@ describe("POST /api/messages", () => {
     });
   });
 
+  it("runs an inline !model openai/* on Codex and leaves other models on the default harness", async () => {
+    const routes = {
+      [`GET /channel-bindings/msteams/${CHANNEL_ID}`]: boundChannel,
+      "POST /sessions": sessionCreated,
+      "POST /sessions/session-1/prompt": promptQueued,
+    };
+    const codex = harness(routes, { defaultModel: "anthropic/claude-sonnet-4-6" });
+    await codex.post(
+      activityFixture({
+        text: "<at>Open-Inspect</at> !model openai/gpt-6-sol ProvidenceIT/playground do it",
+      })
+    );
+    const [, create] = codex.controlPlaneRemote.requests;
+    expect(create.body).toEqual({
+      teamId: "team-platform",
+      repoOwner: "ProvidenceIT",
+      repoName: "playground",
+      model: "openai/gpt-6-sol",
+      triggerKind: "mention",
+      harness: "codex",
+      actorDisplayName: "Casey",
+    });
+
+    const plain = harness(routes, { defaultModel: "anthropic/claude-sonnet-4-6" });
+    await plain.post(activityFixture());
+    const [, plainCreate] = plain.controlPlaneRemote.requests;
+    expect(plainCreate.body).not.toHaveProperty("harness");
+  });
+
   it("sends the configured reasoning effort with the default model and drops it for an inline model", async () => {
     const routes = {
       [`GET /channel-bindings/msteams/${CHANNEL_ID}`]: boundChannel,
