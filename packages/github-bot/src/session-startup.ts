@@ -150,6 +150,8 @@ export async function startSession(
     reactionPath: string;
     /** `!model` / `!reasoning` flags parsed from the triggering comment, if any. */
     inlineFlags?: ParseInlinePromptFlagsResult;
+    /** The pull request (or issue) author's numeric GitHub id, when the payload carries it. */
+    workItemAuthorId?: number;
     buildPrompt: (config: ResolvedGitHubConfig) => string;
   }
 ): Promise<HandlerResult> {
@@ -245,6 +247,12 @@ export async function startSession(
         scmLogin: sender.login,
         scmUserId: String(sender.id),
         scmAvatarUrl: sender.avatar_url,
+        // Every session this bot starts is about a pull request; the sender
+        // is the actor, the author is only recorded.
+        triggerKind: "pr_event",
+        ...(params.workItemAuthorId !== undefined
+          ? { workItemAuthorScmUserId: String(params.workItemAuthorId) }
+          : {}),
       });
       if (!creation.ok) {
         const { status, code, body } = creation;

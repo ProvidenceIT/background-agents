@@ -4,6 +4,15 @@ const githubUserSchema = z.object({
   login: z.string(),
 });
 
+/**
+ * The author of the pull request or issue an event is about. The numeric id
+ * is sent to the control plane as the work-item author (audited, never the
+ * actor); GitHub always includes it, older fixtures may not.
+ */
+const githubWorkItemAuthorSchema = githubUserSchema.extend({
+  id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+});
+
 const githubSenderSchema = githubUserSchema.extend({
   id: z.number(),
   avatar_url: z.string(),
@@ -29,7 +38,7 @@ const pullRequestSchema = z.object({
   number: z.number(),
   title: z.string(),
   body: z.string().nullable(),
-  user: githubUserSchema,
+  user: githubWorkItemAuthorSchema,
   head: z.object({ ref: z.string(), sha: z.string() }),
   base: z.object({ ref: z.string() }),
 });
@@ -55,6 +64,7 @@ export const issueCommentPayloadSchema = z.object({
     number: z.number(),
     title: z.string(),
     pull_request: z.object({ url: z.string() }).optional(),
+    user: githubWorkItemAuthorSchema.optional(),
   }),
   comment: z.object({
     id: z.number(),
@@ -67,7 +77,9 @@ export const issueCommentPayloadSchema = z.object({
 
 export const reviewCommentPayloadSchema = z.object({
   action: z.literal("created"),
-  pull_request: pullRequestSchema.omit({ body: true, user: true }),
+  pull_request: pullRequestSchema
+    .omit({ body: true, user: true })
+    .extend({ user: githubWorkItemAuthorSchema.optional() }),
   comment: z.object({
     id: z.number(),
     body: z.string(),

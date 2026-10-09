@@ -48,6 +48,7 @@ import {
   handleReviewComment,
 } from "../src/handlers";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "../src/github-auth";
+import { sendPrompt } from "../src/session-client";
 import { getGitHubConfig } from "../src/utils/integration-config";
 
 function createMockLogger(): Logger {
@@ -2026,5 +2027,69 @@ describe("default environment targets", () => {
 
     const sessionBody = sessionCreateBody(getControlPlaneFetch(env));
     expect(sessionBody.environmentId).toBe("env_abc");
+  });
+});
+
+describe("subscription trigger fields", () => {
+  it("sends pr_event with the sender as actor and the PR author only as work-item author", async () => {
+    const env = createMockEnv();
+    const payload: ReviewCommentPayload = {
+      ...reviewCommentPayload,
+      pull_request: {
+        ...reviewCommentPayload.pull_request,
+        user: { login: "author-a", id: 202 },
+      },
+    };
+
+    expect(
+      await handleReviewComment(env, createMockLogger(), payload, "trace-trigger")
+    ).toMatchObject({ outcome: "processed" });
+
+    const cpFetch = getControlPlaneFetch(env);
+    const body = sessionCreateBody(cpFetch);
+    expect(body.triggerKind).toBe("pr_event");
+    expect(body.workItemAuthorScmUserId).toBe("202");
+    const create = cpFetch.mock.calls.find(([url]) => url === "https://internal/sessions")!;
+    expect(new Headers(create[1].headers).get("X-OpenInspect-Actor")).toBe("github:1003");
+    expect(new Headers(create[1].headers).get("X-OpenInspect-Actor")).not.toBe("github:202");
+  });
+
+  it("names the issue author of a PR comment and omits an author the payload lacks", async () => {
+    const withAuthor = createMockEnv();
+    await handleIssueComment(
+      withAuthor,
+      createMockLogger(),
+      {
+        ...issueCommentPayload,
+        issue: { ...issueCommentPayload.issue, user: { login: "alice", id: 501 } },
+      },
+      "trace-trigger"
+    );
+    expect(sessionCreateBody(getControlPlaneFetch(withAuthor))).toMatchObject({
+      triggerKind: "pr_event",
+      workItemAuthorScmUserId: "501",
+    });
+
+    const withoutAuthor = createMockEnv();
+    await handleIssueComment(
+      withoutAuthor,
+      createMockLogger(),
+      issueCommentPayload,
+      "trace-trigger"
+    );
+    const body = sessionCreateBody(getControlPlaneFetch(withoutAuthor));
+    expect(body.triggerKind).toBe("pr_event");
+    expect(body).not.toHaveProperty("workItemAuthorScmUserId");
+  });
+
+  it("never upgrades a prompt without a GitHub author to an asserted actor", async () => {
+    const env = createMockEnv();
+    await sendPrompt(env, "trace-trigger", "session-1", {
+      content: "continue",
+      authorId: "anonymous",
+    });
+    const cpFetch = getControlPlaneFetch(env);
+    const prompt = cpFetch.mock.calls.find(([url]) => String(url).endsWith("/prompt"))!;
+    expect(new Headers(prompt[1].headers).has("X-OpenInspect-Actor")).toBe(false);
   });
 });

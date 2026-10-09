@@ -3,12 +3,16 @@ import {
   sendPromptResponseSchema,
 } from "@open-inspect/shared/types/session-api";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
+import type { TriggerKind } from "@open-inspect/shared/types/auth-homes";
 import { z } from "zod";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type { Env } from "./types";
 import type { SessionTargetFields } from "./session-target";
 
 const sessionCreationErrorSchema = z.object({ code: z.string() });
+
+/** Trigger kinds a GitHub event can start a session with. */
+export type GitHubTriggerKind = Extract<TriggerKind, "issue_label" | "pr_event">;
 
 export type SessionCreationResult =
   | { ok: true; sessionId: string }
@@ -25,8 +29,12 @@ export async function createSession(
     harness: HarnessId;
     reasoningEffort?: string | null;
     scmLogin: string;
+    /** The event sender: the only identity the session is attributed to. */
     scmUserId: string;
     scmAvatarUrl: string;
+    triggerKind: GitHubTriggerKind;
+    /** The pull request or issue author's numeric id; audited, never the actor. */
+    workItemAuthorScmUserId?: string;
   }
 ): Promise<SessionCreationResult> {
   const body: Record<string, unknown> = {
@@ -37,7 +45,11 @@ export async function createSession(
     harness: params.harness,
     scmLogin: params.scmLogin,
     scmAvatarUrl: params.scmAvatarUrl,
+    triggerKind: params.triggerKind,
   };
+  if (params.workItemAuthorScmUserId) {
+    body.workItemAuthorScmUserId = params.workItemAuthorScmUserId;
+  }
   if (params.reasoningEffort) {
     body.reasoningEffort = params.reasoningEffort;
   }

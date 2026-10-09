@@ -42,6 +42,7 @@ export async function handleReviewRequested(
     pullNumber: pr.number,
     title: `GitHub: Review PR #${pr.number}`,
     action: "review",
+    workItemAuthorId: pr.user.id,
     reactionPath: `issues/${pr.number}`,
     buildPrompt: (config) =>
       buildCodeReviewPrompt({
@@ -78,6 +79,7 @@ export async function handlePullRequestOpened(
     pullNumber: pr.number,
     title: `GitHub: Review PR #${pr.number}`,
     action: "auto_review",
+    workItemAuthorId: pr.user.id,
     reactionPath: `issues/${pr.number}`,
     buildPrompt: (config) =>
       buildCodeReviewPrompt({
@@ -132,6 +134,7 @@ export async function handleIssueComment(
     pullNumber: issue.number,
     title: `GitHub: PR #${issue.number} comment`,
     action: "comment",
+    workItemAuthorId: issue.user?.id,
     reactionPath: `issues/comments/${comment.id}`,
     inlineFlags,
     buildPrompt: (config) =>
@@ -179,6 +182,7 @@ export async function handleReviewComment(
     pullNumber: pr.number,
     title: `GitHub: PR #${pr.number} review comment`,
     action: "review_comment",
+    workItemAuthorId: pr.user?.id,
     reactionPath: `pulls/comments/${comment.id}`,
     inlineFlags,
     buildPrompt: (config) =>

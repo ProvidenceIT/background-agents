@@ -1202,4 +1202,82 @@ describe("GET /health", () => {
       service: "open-inspect-github-bot",
     });
   });
+
+  it.each([
+    {
+      name: "an issues.labeled payload",
+      event: "issues",
+      payload: {
+        action: "labeled",
+        repository: { id: 99, owner: { login: "test" }, name: "repo" },
+        sender: { id: 7, login: "labeler" },
+        label: { name: "agent" },
+        issue: {
+          number: 5,
+          title: "Fix the cache",
+          body: null,
+          user: { id: 101, login: "issue-author" },
+          labels: [{ name: "agent" }],
+        },
+      },
+      expected: { eventType: "issues.labeled", actor: "labeler", author: "101" },
+    },
+    {
+      name: "a pull_request.synchronize payload sent by S on a PR authored by A",
+      event: "pull_request",
+      payload: {
+        action: "synchronize",
+        repository: { id: 99, owner: { login: "test" }, name: "repo" },
+        sender: { id: 7, login: "sender-s" },
+        pull_request: {
+          number: 42,
+          title: "Ship it",
+          body: null,
+          state: "open",
+          draft: false,
+          merged: false,
+          user: { id: 202, login: "author-a" },
+          head: { ref: "feature/x", sha: "def456", repo: { id: 99 } },
+          base: { ref: "main", repo: { id: 99 } },
+        },
+      },
+      expected: { eventType: "pull_request.synchronize", actor: "sender-s", author: "202" },
+    },
+  ])(
+    "forwards $name with the sender as actor and the author only as work-item author",
+    async ({ event, payload, expected }) => {
+      const body = JSON.stringify(payload);
+      const signature = await sign(SECRET, body);
+      const ctx = makeCtx();
+      const env = makeEnv();
+
+      const res = await app.fetch(
+        new Request("http://localhost/webhooks/github", {
+          method: "POST",
+          body,
+          headers: { "X-Hub-Signature-256": signature, "X-GitHub-Event": event },
+        }),
+        env,
+        ctx
+      );
+      expect(res.status).toBe(200);
+      await flushWaitUntil(ctx);
+
+      const controlPlaneFetch = (
+        env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }
+      ).fetch;
+      const forwarded = controlPlaneFetch.mock.calls.find(([url]) =>
+        String(url).endsWith("/github-event")
+      );
+      expect(forwarded).toBeDefined();
+      const [, init] = forwarded!;
+      expect(JSON.parse(init.body as string)).toMatchObject({
+        eventType: expected.eventType,
+        actor: expected.actor,
+        workItemAuthorScmUserId: expected.author,
+      });
+      // Event forwarding never asserts a user: the scheduler acts for the automation owner.
+      expect(new Headers(init.headers).has("X-OpenInspect-Actor")).toBe(false);
+    }
+  );
 });
