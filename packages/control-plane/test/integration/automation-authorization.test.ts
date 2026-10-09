@@ -28,6 +28,7 @@ function automation(id: string, userId: string): AutomationRow {
     enabled: 1,
     next_run_at: null,
     consecutive_failures: 0,
+    background_consent_at: null,
     created_by: userId,
     user_id: userId,
     created_at: 1,

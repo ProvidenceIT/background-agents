@@ -349,6 +349,8 @@ async function handleCreateAutomation(
     deleted_at: null,
     event_type: body.eventType ?? null,
     trigger_config: body.triggerConfig ? JSON.stringify(body.triggerConfig) : null,
+    // The executor created it themselves; background runs on their home are consented.
+    background_consent_at: now,
     trigger_auth_data: triggerAuthData,
   };
 

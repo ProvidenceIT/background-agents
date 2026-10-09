@@ -51,6 +51,7 @@ it("persists explicit team and workspace ownership through the stores", async ()
     enabled: 0,
     next_run_at: null,
     consecutive_failures: 0,
+    background_consent_at: null,
     created_by: "operator",
     user_id: null,
     created_at: 1,

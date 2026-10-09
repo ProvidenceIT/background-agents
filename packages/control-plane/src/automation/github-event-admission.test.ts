@@ -53,6 +53,7 @@ const automation: AutomationRow = {
   enabled: 1,
   next_run_at: null,
   consecutive_failures: 0,
+  background_consent_at: null,
   created_at: 1,
   updated_at: 1,
   deleted_at: null,

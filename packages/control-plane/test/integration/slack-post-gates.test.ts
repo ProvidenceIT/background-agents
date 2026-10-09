@@ -206,6 +206,7 @@ describe("Slack outbound post gates (real D1)", () => {
       enabled: 1,
       next_run_at: null,
       consecutive_failures: 0,
+      background_consent_at: null,
       created_by: "user-1",
       user_id: "user-1",
       created_at: 1,

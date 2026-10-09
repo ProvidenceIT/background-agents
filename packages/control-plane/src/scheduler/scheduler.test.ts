@@ -450,6 +450,7 @@ const sampleAutomation = {
   enabled: 1,
   next_run_at: now - 60000,
   consecutive_failures: 0,
+  background_consent_at: null,
   created_by: "user-1",
   user_id: "user-1" as string | null,
   created_at: now - 86400000,

@@ -22,6 +22,7 @@ export function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRo
     enabled: 1,
     next_run_at: now + 86_400_000,
     consecutive_failures: 0,
+    background_consent_at: null,
     created_by: "user-1",
     user_id: "user-1",
     created_at: now,

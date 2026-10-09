@@ -39,6 +39,7 @@ function makeAutomation(overrides: Partial<AutomationRow> = {}): AutomationRow {
     enabled: 1,
     next_run_at: null,
     consecutive_failures: 0,
+    background_consent_at: null,
     created_by: "test-user",
     user_id: "test-user",
     created_at: Date.now(),
