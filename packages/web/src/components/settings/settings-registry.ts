@@ -125,6 +125,17 @@ export const SETTINGS_GROUPS = [
         ),
       },
       {
+        id: "subscription-homes",
+        label: "Subscription homes",
+        description: "Your subscription home, its sharing and consent",
+        keywords: "auth home claude codex subscription sharing household consent expiry",
+        icon: KeyIcon,
+        visibility: anyOf("auth_homes.manage_own"),
+        panel: lazyPanel(() =>
+          import("./auth-home-settings").then(({ AuthHomeSettings }) => AuthHomeSettings)
+        ),
+      },
+      {
         id: "shared-memories",
         label: "Shared memories",
         description: "Repository and environment knowledge",
