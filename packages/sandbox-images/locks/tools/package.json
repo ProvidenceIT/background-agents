@@ -5,6 +5,7 @@
   "dependencies": {
     "opencode-ai": "1.18.29",
     "@opencode-ai/plugin": "1.18.29",
+    "@openai/codex": "0.162.0",
     "zod": "4.4.3",
     "pnpm": "10.34.5",
     "bun": "1.4.2"

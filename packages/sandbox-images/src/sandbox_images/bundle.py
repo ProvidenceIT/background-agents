@@ -81,7 +81,7 @@ def validate_toolchain(tools: dict[str, Any]) -> None:
         raise ValueError("Unsupported image toolchain schema")
     if version(tools["opencode"]) < version(tools["opencodeMinimum"]):
         raise ValueError("OpenCode is below the image toolchain minimum")
-    for name in ("agentBrowser", "pnpm", "bun", "zod", "python"):
+    for name in ("agentBrowser", "codex", "pnpm", "bun", "zod", "python"):
         version(tools[name])
     if not re.fullmatch(r"[a-f0-9]{64}", tools.get("agentBrowserSha256", "")):
         raise ValueError("agent-browser native binary must have a SHA-256 pin")

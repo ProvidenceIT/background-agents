@@ -19,6 +19,7 @@ def update_locks(root: Path, *, check: bool = False) -> None:
         "tools": {
             "opencode-ai": tools["opencode"],
             "@opencode-ai/plugin": tools["opencode"],
+            "@openai/codex": tools["codex"],
             "zod": tools["zod"],
             "pnpm": tools["pnpm"],
             "bun": tools["bun"],

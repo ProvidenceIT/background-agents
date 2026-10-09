@@ -241,6 +241,7 @@ def observed_tool_version(command: str, expected: str, output: str) -> str:
     prefixes = {
         "node": r"v",
         "opencode": r"",
+        "codex": r"codex-cli\s+",
         "bun": r"",
         "pnpm": r"",
         "agent-browser": r"agent-browser\s+",
@@ -265,6 +266,7 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
     for command, version in (
         ("node", tools["node"][plan["target"]["node"]]["version"]),
         ("opencode", tools["opencode"]),
+        ("codex", tools["codex"]),
         ("bun", tools["bun"]),
         ("pnpm", tools["pnpm"]),
         ("agent-browser", tools["agentBrowser"]),
