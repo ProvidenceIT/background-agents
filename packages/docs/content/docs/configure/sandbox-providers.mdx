@@ -4,7 +4,7 @@ description: Compare sandbox backends and see which behaviors differ from a user
 audience: admin
 owner: platform
 status: published
-lastReviewed: "2026-10-07"
+lastReviewed: "2026-10-09"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/IMAGE_PREBUILD.md
@@ -17,6 +17,8 @@ relatedCode:
   - packages/web/src/components/settings/sandbox-settings.tsx
   - packages/control-plane/src/sandbox/providers/vercel/provider.ts
   - packages/control-plane/src/sandbox/providers/kubernetes-provider.ts
+  - packages/control-plane/src/auth-homes/routes.ts
+  - packages/shared/src/types/auth-homes.ts
 ---
 
 This page compares the sandbox providers a deployment can run on: the operator picks one (`sandbox_provider` in the deployment configuration) for every session, and each runs the same [sandbox runtime](/reference/sandbox-environment) but differs in how sandboxes start, how saved state is kept, and which [sandbox settings](/configure/sandbox-settings) it honors.
@@ -113,6 +115,18 @@ OpenComputer can also wake an existing hibernated sandbox if no saved shutdown r
 - CPU and memory settings become pod requests and limits, and the sandbox timeout setting applies.
 - Prebuilt images are not supported yet, and neither are code-server, the web terminal, VNC, or tunnel ports.
 - Sandboxes reach only the hosts on the operator's allowlist. A tool that needs another host fails to connect; ask the operator to add it.
+
+## Subscription homes
+
+On the Kubernetes provider an operator can run sessions on a person's own model subscription without the subscription token ever entering the control plane. Each enrolled person gets a **subscription home**: a directory on a cluster node that the person (or an operator they trust) administers, exposed as a node-pinned `local` PersistentVolume and a pre-bound PersistentVolumeClaim named `sf-home-<name>`. The first-party command-line tools read their credentials from it: a Claude `setup-token` in `claude/oauth-token` (with `claude/expires_at`), a Codex login in its own claim `sf-home-<name>-codex`, and an `env` file for plan keys such as `ZHIPU_API_KEY`.
+
+- The control plane stores only metadata about the home (claim name, node, providers, enabled trigger kinds, consent timestamps, concurrency cap, and whether it is shared), never a token. You register your own home under Settings › Subscription homes or through `PUT /me/auth-home`; the route takes no owner field, so nobody can register a home for someone else. Owners and Administrators can list every home's metadata (`GET /auth-homes`), but not the claim name or any file.
+- For each turn the control plane picks a home for the person who triggered it: a web prompt, a Teams mention, a GitHub event they performed, an automation they own, or a child of any of these. It tries that person's own home for the model's provider first. If there is none, it can use a home whose owner switched it to **shared**, but only when the workspace setting `subscription_sharing` is `household`, which is the default. With `owner_only` it never does. Otherwise the turn is refused with `no_eligible_home`. There is no fallback to an API key. The check repeats at child spawn, at resume, and on every later prompt, so a session started on one person's home does not quietly serve another person's prompt.
+- The selected claim is mounted read-write at `/home/sandbox/.sf-auth`, and the pod is labelled `sf.dokman.io/auth-home-owner`. The admission policy admits at most one `sf-home-` claim per pod, requires the label to match it, and denies the control-plane and garbage-collection service accounts any change to or deletion of an `sf-home-` claim. Sandbox garbage collection only selects workspace claims, so it never touches a subscription home.
+- If the claim is missing or not bound, the session fails with `auth_home_unavailable` instead of falling back to another credential.
+- The deployment's egress allowlist must include the provider hosts the tools call: `api.anthropic.com` for Claude, and `chatgpt.com` and `auth.openai.com` for Codex on a ChatGPT login.
+
+Provider terms decide whether a subscription may be used this way, and in particular whether anyone other than the subscriber may use it. Check them before you enrol a home or turn sharing on. `owner_only` limits every home to its owner.
 
 ## Provider setup
 
