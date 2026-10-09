@@ -286,7 +286,10 @@ same claim. The control plane holds a per-home **Codex seat** (`auth_home_leases
   fails. A holder silent for 10 minutes (a control-plane outage, a lost bridge) is fenced: the next
   waiter has its pods deleted and is granted the seat only once no other session's pod mounting
   `sf-home-<name>-codex` is left in the API server, terminating ones included.
-- The seat is never granted while another session's pod mounts the claim, lease row or not.
+- The seat is never granted while another session's pod mounts the claim, lease row or not. A
+  session's pod that still mounts it after its seat was released (a sandbox given up for dead while
+  its pod hung on) is deleted by the next waiter; a pod that belongs to no session, such as the
+  operator's login pod, is waited out and never deleted.
 - An in-pod file lock would not do: under gVisor each sandbox's locks stay in its own sentry.
 
 The literal alternative, one Codex login per concurrent stream on claims `sf-home-<name>-codex-<n>`,

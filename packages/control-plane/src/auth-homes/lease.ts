@@ -21,7 +21,9 @@ import type { SqlDatabase } from "../db/sql-database";
  *   restart or a lost heartbeat cannot hand out a second seat while the
  *   first pod still runs);
  * - and the seat is never granted while any other session's pod mounts the
- *   claim, lease row or not.
+ *   claim, lease row or not; a session's pod that mounts it with no row (its
+ *   seat was released while the pod lived on) is deleted, and an operator's
+ *   pod that belongs to no session is waited out.
  *
  * D1 has no interactive transactions, so each change is one conditional
  * statement: a grant is an insert that does nothing on conflict, read back;
@@ -188,6 +190,11 @@ export class AuthHomeLeaseStore {
         .bind(homeId, provider, lease.sessionId, lease.heartbeatAt)
         .run();
     } else if (foreign.length > 0) {
+      // Nobody holds the seat, yet another session's pod mounts the claim:
+      // its seat was released (its sandbox given up for dead) while the pod
+      // lived on. Nothing else would ever end it, so fence it here. A pod no
+      // session owns (an operator's login pod) is waited out, never deleted.
+      await this.fenceOrphans(foreign, fence);
       return this.wait(request, "claim_mounted", null);
     }
 
@@ -275,6 +282,15 @@ export class AuthHomeLeaseStore {
       });
     }
     return statuses;
+  }
+
+  private async fenceOrphans(
+    pods: readonly AuthHomeClaimPod[],
+    fence: AuthHomeClaimFence
+  ): Promise<void> {
+    for (const pod of pods) {
+      if (pod.sessionId !== null && !pod.terminating) await fence.deletePod(pod);
+    }
   }
 
   private async fence(

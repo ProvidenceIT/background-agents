@@ -228,9 +228,12 @@ describe("AuthHomeLeaseStore (the fenced Codex seat)", () => {
     expect(await leases.heartbeatSession("S1")).toBe(false);
   });
 
-  it("refuses the seat while any pod of another session mounts the claim, even with no lease row", async () => {
-    // The control-plane restart case: the row is gone, a Codex pod still runs.
+  it("fences a session's pod that outlived its released seat, and grants once it is gone", async () => {
+    // The holder's sandbox was given up for dead and its seat released, but
+    // its pod is hung and still mounts the claim.
+    await leases.acquire(request("S9"), fence);
     fence.mount("pod-orphan", "S9");
+    await leases.release("S9");
 
     expect(await leases.acquire(request("S2"), fence)).toEqual({
       kind: "waiting",
@@ -238,10 +241,28 @@ describe("AuthHomeLeaseStore (the fenced Codex seat)", () => {
       position: 1,
       holderSessionId: null,
     });
-    expect(fence.deleted).toEqual([]);
+    expect(fence.deleted).toEqual(["pod-orphan"]);
     expect(await leases.get(H1, CODEX_SEAT)).toBeNull();
 
+    // Still terminating: no second delete, still no seat.
+    now += 30_000;
+    expect(await leases.acquire(request("S2"), fence)).toMatchObject({ reason: "claim_mounted" });
+    expect(fence.deleted).toEqual(["pod-orphan"]);
+
     fence.gone("pod-orphan");
+    expect(await leases.acquire(request("S2"), fence)).toMatchObject({ kind: "granted" });
+  });
+
+  it("waits out, never deletes, a pod no session owns (an operator's login pod)", async () => {
+    fence.mount("codex-login", null);
+
+    expect(await leases.acquire(request("S2"), fence)).toMatchObject({
+      kind: "waiting",
+      reason: "claim_mounted",
+    });
+    expect(fence.deleted).toEqual([]);
+
+    fence.gone("codex-login");
     expect(await leases.acquire(request("S2"), fence)).toMatchObject({ kind: "granted" });
   });
 
