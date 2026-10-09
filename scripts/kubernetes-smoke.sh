@@ -24,7 +24,28 @@
 #                                (e.g. "ssh root@node"). Enables the check that
 #                                the proxy never resolves a name off its
 #                                allowlist (needs tcpdump on the node).
+#
+# --auth-home: also check subscription homes. Needs an operator-made, Bound
+# claim in the namespace (SMOKE_AUTH_HOME_CLAIM, default sf-home-bram; see
+# docs/KUBERNETES_SANDBOX_PROVIDER.md) and the sandbox GC's ServiceAccount
+# (open-inspect-sandbox-gc). The sandbox is created mounting that home, and
+# admission is probed with server-side dry runs only: a pod whose
+# sf.dokman.io/auth-home-owner label names another home, a pod mounting two
+# sf-home- claims, and a home claim deleted or changed by the GC or the
+# control plane are all denied, while the GC may still delete a workspace
+# claim. One resume runs without the home and must not mount it. Nothing is
+# read from the home beyond whether its directory is there.
+#
+#   KUBERNETES_SANDBOX_IMAGE=... scripts/kubernetes-smoke.sh --auth-home
 set -euo pipefail
+
+auth_home_mode=false
+for argument in "$@"; do
+  case "$argument" in
+    --auth-home) auth_home_mode=true ;;
+    *) echo "unknown argument: $argument" >&2; exit 2 ;;
+  esac
+done
 
 : "${KUBERNETES_SANDBOX_IMAGE:?KUBERNETES_SANDBOX_IMAGE is required}"
 export KUBERNETES_NAMESPACE="${KUBERNETES_NAMESPACE:-open-inspect-sandboxes}"
@@ -37,6 +58,15 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d)"
 failures=0
 claim=""
+auth_home_claim="${SMOKE_AUTH_HOME_CLAIM:-sf-home-bram}"
+gc_user="system:serviceaccount:${control_plane_namespace}:open-inspect-sandbox-gc"
+if [[ "$auth_home_mode" == true ]]; then
+  if [[ "$(kubectl -n "$ns" get pvc "$auth_home_claim" -o jsonpath='{.status.phase}')" != Bound ]]; then
+    echo "--auth-home needs the claim $auth_home_claim, Bound, in $ns" >&2
+    exit 2
+  fi
+  export SMOKE_AUTH_HOME_CLAIM="$auth_home_claim"
+fi
 
 cleanup() {
   if [[ -n "$claim" ]]; then
@@ -196,6 +226,38 @@ refuse "an ephemeral container is rejected" \
   -p "$(jq -c '{spec: {ephemeralContainers: [{name: "debug", image: .spec.containers[0].image,
     securityContext: .spec.containers[0].securityContext}]}}' <<<"$template")"
 
+if [[ "$auth_home_mode" == true ]]; then
+  echo "== subscription home"
+  home_name="${auth_home_claim#sf-home-}"
+  owner_label='sf.dokman.io/auth-home-owner'
+  check "the sandbox mounts $auth_home_claim, once" bash -c "kubectl -n $ns get pod $pod -o json |
+    jq -e '[.spec.volumes[] | select(.persistentVolumeClaim.claimName == \"$auth_home_claim\")] | length == 1'"
+  check "the pod wears $owner_label=$home_name" \
+    test "$(kubectl -n "$ns" get pod "$pod" -o json | jq -r --arg k "$owner_label" '.metadata.labels[$k]')" = "$home_name"
+  check "the runtime is pointed at the home" in_sandbox "$pod" 'test -d "$SF_AUTH_HOME" && test -n "$SF_AUTH_HOME_PROVIDERS"'
+  check "the home's pod shape is admitted" admit "$template"
+  refuse "a pod whose owner label names another home is rejected" \
+    admit "$(jq --arg k "$owner_label" '.metadata.labels[$k] = "x"' <<<"$template")"
+  refuse "a pod mounting the home without the owner label is rejected" \
+    admit "$(jq --arg k "$owner_label" 'del(.metadata.labels[$k])' <<<"$template")"
+  refuse "a pod mounting two sf-home- claims is rejected" \
+    admit "$(jq '.spec.volumes += [{"name":"sf-auth-2","persistentVolumeClaim":{"claimName":"sf-home-smoke-other"}}]' <<<"$template")"
+  no_home="$(jq --arg k "$owner_label" --arg c "$auth_home_claim" 'del(.metadata.labels[$k])
+    | .spec.volumes |= map(select(.persistentVolumeClaim.claimName != $c))
+    | .spec.containers[0].volumeMounts |= map(select(.name != "sf-auth"))' <<<"$template")"
+  check "a pod without a home and without the label is admitted" admit "$no_home"
+  refuse "the owner label without a home claim is rejected" \
+    admit "$(jq --arg k "$owner_label" '.metadata.labels[$k] = "x"' <<<"$no_home")"
+  refuse "the sandbox GC cannot delete $auth_home_claim" \
+    kubectl -n "$ns" delete pvc "$auth_home_claim" --dry-run=server --as="$gc_user"
+  refuse "the control plane cannot delete $auth_home_claim" \
+    kubectl -n "$ns" delete pvc "$auth_home_claim" --dry-run=server --as="$control_plane_user"
+  refuse "the sandbox GC cannot change $auth_home_claim" \
+    kubectl -n "$ns" annotate pvc "$auth_home_claim" openinspect.dev/gc-claimed-at-ms=1 --dry-run=server --as="$gc_user"
+  check "the sandbox GC may still delete a workspace claim" \
+    kubectl -n "$ns" delete pvc "$claim" --dry-run=server --as="$gc_user"
+fi
+
 echo "== preserve-stop"
 smoke preserve "$claim" "$g1"
 check "the pod is gone" test -z "$(sandbox_pods)"
@@ -209,13 +271,22 @@ pod="$(sandbox_pods)"
 check "resumed on the same claim with the workspace intact" in_sandbox "$pod" "grep -qx $marker /workspace/smoke-marker"
 check "/tmp survived (agent session-id file)" in_sandbox "$pod" "grep -qx $marker /tmp/agent-session-id-smoke"
 check "resume boots as restored" in_sandbox "$pod" 'test "$RESTORED_FROM_SNAPSHOT" = true'
+if [[ "$auth_home_mode" == true ]]; then
+  check "resume mounts the home it was given" in_sandbox "$pod" 'test -d "$SF_AUTH_HOME"'
+fi
 
 echo "== forced pod loss (drain), then resume"
 kubectl -n "$ns" delete pod "$pod" --grace-period=0 --force >/dev/null 2>&1
 g3="$(now_ms)"
-smoke resume "$claim" "$session" "$sandbox" "$g3"
+# With --auth-home, this resume stands for an actor the resolver refused: no home.
+SMOKE_AUTH_HOME_CLAIM='' smoke resume "$claim" "$session" "$sandbox" "$g3"
 pod="$(sandbox_pods)"
 check "workspace intact after a forced pod loss" in_sandbox "$pod" "grep -qx $marker /workspace/smoke-marker"
+if [[ "$auth_home_mode" == true ]]; then
+  check "a resume given no home mounts none" bash -c "kubectl -n $ns get pod $pod -o json |
+    jq -e '[.spec.volumes[] | select(.persistentVolumeClaim.claimName // \"\" | startswith(\"sf-home-\"))] | length == 0
+      and (.metadata.labels[\"sf.dokman.io/auth-home-owner\"] == null)'"
+fi
 
 echo "== resume over a running pod"
 old_pod="$pod"

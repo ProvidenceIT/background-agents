@@ -11,9 +11,14 @@
  *   kubernetes-provider-smoke resume  <providerObjectId> <sessionId> <sandboxId> <generationMs>
  *   kubernetes-provider-smoke destroy <providerObjectId>
  *
+ * With SMOKE_AUTH_HOME_CLAIM set (an existing sf-home-* claim), create and
+ * resume mount that subscription home (SMOKE_AUTH_HOME_PROVIDERS, default
+ * anthropic); unset, they mount none.
+ *
  * Prints the provider's result as JSON. Not part of the control plane.
  */
 
+import type { SandboxAuthHome } from "../src/sandbox/provider";
 import { createSandboxProviderFromEnv } from "../src/sandbox/provider-factory";
 import type { Env } from "../src/types";
 
@@ -21,6 +26,13 @@ async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   const provider = createSandboxProviderFromEnv(process.env as unknown as Env, "kubernetes");
   const timeoutSeconds = Number(process.env.SMOKE_TIMEOUT_SECONDS ?? "1800");
+  const authHome: SandboxAuthHome | undefined = process.env.SMOKE_AUTH_HOME_CLAIM
+    ? {
+        pvcName: process.env.SMOKE_AUTH_HOME_CLAIM,
+        ownerUserId: "smoke",
+        providers: (process.env.SMOKE_AUTH_HOME_PROVIDERS ?? "anthropic").split(","),
+      }
+    : undefined;
   let result: unknown;
   switch (command) {
     case "create": {
@@ -38,6 +50,7 @@ async function main(): Promise<void> {
         model: "claude-sonnet-4-6",
         timeoutSeconds,
         userEnvVars: { SMOKE_USER_SECRET: "visible-to-the-sandbox-only" },
+        authHome,
       });
       break;
     }
@@ -61,6 +74,7 @@ async function main(): Promise<void> {
         sandboxId: sandboxId!,
         generationCreatedAtMs: Number(generation),
         timeoutSeconds,
+        authHome,
       });
       break;
     }
