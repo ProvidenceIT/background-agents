@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { subscriptionProviderIdSchema, type SubscriptionProviderId } from "./provider-accounts";
+import { extractProviderAndModel } from "../models";
+import { SUBSCRIPTION_PROVIDER_IDS, type SubscriptionProviderId } from "./provider-accounts";
 
 /**
  * Subscription auth homes.
@@ -81,13 +82,29 @@ export const AUTH_HOME_MAX_OWNERS = 8;
 export const AUTH_HOME_DEFAULT_MAX_CONCURRENT = 3;
 export const AUTH_HOME_MAX_CONCURRENT_LIMIT = 32;
 
+/**
+ * Providers a home can carry: the subscription providers whose CLI reads a
+ * credential file from the home, plus the Z.AI Coding Plan, whose key the
+ * sandbox sources from the home's `env` file. Model ids name the provider
+ * as their first path segment (`zai-coding-plan/glm-5.3`).
+ */
+export const AUTH_HOME_PROVIDER_IDS = [...SUBSCRIPTION_PROVIDER_IDS, "zai-coding-plan"] as const;
+export const authHomeProviderIdSchema = z.enum(AUTH_HOME_PROVIDER_IDS);
+export type AuthHomeProviderId = z.infer<typeof authHomeProviderIdSchema>;
+
+/** The provider a model id spends, when a home can carry it; null for every other provider. */
+export function authHomeProviderForModel(modelId: string): AuthHomeProviderId | null {
+  const parsed = authHomeProviderIdSchema.safeParse(extractProviderAndModel(modelId).provider);
+  return parsed.success ? parsed.data : null;
+}
+
 const authHomeOwnerUserIdsSchema = z
   .array(z.string().min(1))
   .min(1)
   .max(AUTH_HOME_MAX_OWNERS)
   .refine((ids) => new Set(ids).size === ids.length, "ownerUserIds must be unique");
 const authHomeProvidersSchema = z
-  .array(subscriptionProviderIdSchema)
+  .array(authHomeProviderIdSchema)
   .refine((ids) => new Set(ids).size === ids.length, "providers must be unique");
 const authHomeKindsEnabledSchema = z
   .array(triggerKindSchema)
@@ -199,7 +216,7 @@ export type AuthHomeResolution = z.infer<typeof authHomeResolutionSchema>;
 /** The user-facing refusal, one sentence per reason, never mentioning a key. */
 export function authHomeRefusalMessage(
   reason: AuthHomeRefusalReason,
-  provider: SubscriptionProviderId | string
+  provider: AuthHomeProviderId | SubscriptionProviderId | string
 ): string {
   switch (reason) {
     case "no_eligible_home":

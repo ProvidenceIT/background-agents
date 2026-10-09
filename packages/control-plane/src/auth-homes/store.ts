@@ -6,12 +6,12 @@ import {
   subscriptionSharingSchema,
   TRIGGER_KINDS,
   type AuthHome,
+  type AuthHomeProviderId,
   type AuthHomeStatus,
   type SubscriptionSharing,
   type SubscriptionSharingPolicy,
   type TriggerKind,
 } from "@open-inspect/shared/types/auth-homes";
-import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { z } from "zod";
 import { generateId } from "../auth/crypto";
 import { LIKE_ESCAPE_CLAUSE, likeContains } from "../db/like-pattern";
@@ -92,7 +92,7 @@ export interface RegisterAuthHomeInput {
   ownerUserIds: readonly string[];
   pvcName: string;
   nodeName: string;
-  providers: readonly SubscriptionProviderId[];
+  providers: readonly AuthHomeProviderId[];
   /** Every kind when omitted. */
   kindsEnabled?: readonly TriggerKind[];
   backgroundConsentAt?: number | null;
@@ -107,7 +107,7 @@ export interface RegisterAuthHomeInput {
 export interface UpdateAuthHomeInput {
   pvcName?: string;
   nodeName?: string;
-  providers?: readonly SubscriptionProviderId[];
+  providers?: readonly AuthHomeProviderId[];
   kindsEnabled?: readonly TriggerKind[];
   backgroundConsentAt?: number | null;
   maxConcurrent?: number;

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTH_HOME_PROVIDER_IDS,
+  authHomeProviderForModel,
   AUTH_HOME_REFUSAL_REASONS,
   AUTH_HOME_SELECTION_SOURCES,
   DEFAULT_SUBSCRIPTION_SHARING_POLICY,
@@ -86,6 +88,22 @@ describe("authHomeSchema", () => {
     ).toBe(false);
     expect(authHomeSchema.safeParse({ ...home, providers: ["zhipu"] }).success).toBe(false);
     expect(authHomeSchema.safeParse({ ...home, maxConcurrent: 0 }).success).toBe(false);
+  });
+
+  it("carries the Z.AI Coding Plan next to the subscription providers", () => {
+    expect(AUTH_HOME_PROVIDER_IDS).toEqual(["openai", "xai", "anthropic", "zai-coding-plan"]);
+    expect(
+      authHomeSchema.parse({ ...home, providers: ["anthropic", "zai-coding-plan"] }).providers
+    ).toEqual(["anthropic", "zai-coding-plan"]);
+  });
+});
+
+describe("authHomeProviderForModel", () => {
+  it("names the provider a model spends, or null when no home can carry it", () => {
+    expect(authHomeProviderForModel("anthropic/claude-sonnet-4-6")).toBe("anthropic");
+    expect(authHomeProviderForModel("zai-coding-plan/glm-5.3")).toBe("zai-coding-plan");
+    expect(authHomeProviderForModel("openai/gpt-6-sol")).toBe("openai");
+    expect(authHomeProviderForModel("opencode-go/glm-5.2")).toBeNull();
   });
 });
 
