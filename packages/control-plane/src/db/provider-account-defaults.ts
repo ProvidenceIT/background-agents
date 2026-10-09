@@ -1,6 +1,6 @@
 import type {
   ModelProviderAccountDefault,
-  ProviderAuthMode,
+  ProviderUnattendedMode as SharedProviderUnattendedMode,
 } from "@open-inspect/shared/types/provider-accounts";
 import {
   assertModelProviderId,
@@ -8,8 +8,17 @@ import {
 } from "../model-provider-accounts/provider-auth-contracts";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
-export type ProviderUnattendedMode = ProviderAuthMode;
+export type ProviderUnattendedMode = SharedProviderUnattendedMode;
 export type ProviderDefault = ModelProviderAccountDefault;
+
+/**
+ * An unattended run (automation, bot, child) has no person at the keyboard
+ * whose own account it could be spending, so a default may never route it to
+ * a connected account. Subscriptions reach unattended runs through the
+ * trigger actor's auth home instead.
+ */
+export const UNATTENDED_PROVIDER_ACCOUNT_REFUSED =
+  "Unattended runs cannot spend a connected provider account; they are served from the trigger actor's subscription home";
 
 interface DefaultRow {
   provider: string;
@@ -47,6 +56,9 @@ export class ProviderDefaultStore {
     now = Date.now()
   ): Promise<void> {
     assertModelProviderId(provider);
+    if (unattendedMode === "provider_account") {
+      throw new ProviderDefaultConstraintError(UNATTENDED_PROVIDER_ACCOUNT_REFUSED);
+    }
     const result = await this.db
       .prepare(
         `INSERT INTO model_provider_account_defaults (
@@ -67,6 +79,7 @@ export class ProviderDefaultStore {
     }
   }
 
+  /** The first active account becomes the attended default; unattended runs stay off it. */
   bindSetForFirstActiveAccount(
     accountId: string,
     provider: ModelProviderId,
@@ -79,7 +92,7 @@ export class ProviderDefaultStore {
         `INSERT INTO model_provider_account_defaults
           (provider, provider_account_id, unattended_mode, created_by, updated_by,
            created_at, updated_at)
-         SELECT ?, id, 'provider_account', ?, ?, ?, ?
+         SELECT ?, id, 'api_key', ?, ?, ?, ?
          FROM model_provider_accounts
          WHERE id = ? AND provider = ? AND status = 'active' AND archived_at IS NULL
            AND NOT EXISTS (

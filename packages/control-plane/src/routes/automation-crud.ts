@@ -283,7 +283,8 @@ async function handleCreateAutomation(
   try {
     providerSelections = await parseAndValidateAutomationProviderSelections(
       ctx.db,
-      body.providerSelections ?? {}
+      body.providerSelections ?? {},
+      resolvedUserId
     );
   } catch (e) {
     if (e instanceof AutomationProviderSelectionError) return error(e.message, 400);
@@ -465,7 +466,8 @@ async function handleUpdateAutomation(
     try {
       replacementProviderSelections = await parseAndValidateAutomationProviderSelections(
         ctx.db,
-        body.providerSelections
+        body.providerSelections,
+        existing.user_id
       );
     } catch (e) {
       if (e instanceof AutomationProviderSelectionError) return error(e.message, 400);

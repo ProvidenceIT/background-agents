@@ -188,7 +188,7 @@ describe("provider account migration and stores", () => {
     expect(second.id).toBe("second-account");
     await expect(new ProviderDefaultStore(env.DB).get("xai")).resolves.toMatchObject({
       providerAccountId: "first-account",
-      unattendedMode: "provider_account",
+      unattendedMode: "api_key",
     });
   });
 
@@ -378,10 +378,13 @@ describe("provider account migration and stores", () => {
     ).rejects.toThrow();
 
     const defaults = new ProviderDefaultStore(env.DB);
-    await expect(defaults.set("xai", "openai-1", "provider_account", null, now)).rejects.toThrow(
+    await expect(defaults.set("xai", "openai-1", "api_key", null, now)).rejects.toThrow(
       /active xai account/i
     );
-    await defaults.set("openai", "openai-1", "provider_account", null, now);
+    await expect(defaults.set("openai", "openai-1", "provider_account", null, now)).rejects.toThrow(
+      /unattended runs cannot spend a connected provider account/i
+    );
+    await defaults.set("openai", "openai-1", "api_key", null, now);
     await expect(accounts.setStatus("openai-1", "disabled", null, now)).rejects.toThrow(
       /default account must remain active/i
     );

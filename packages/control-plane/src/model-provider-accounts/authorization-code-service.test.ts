@@ -203,6 +203,7 @@ function service(
     displayName: "Claude",
     externalAccountId: null,
     status: "active" as const,
+    ownerUserId: USER_ID,
     createdBy: USER_ID,
     updatedBy: USER_ID,
     lastVerifiedAt: now,

@@ -161,7 +161,7 @@ describe("provider account device authorization routes", () => {
     ).first<{ provider_account_id: string; unattended_mode: string }>();
     expect(providerDefault).toEqual({
       provider_account_id: connectedBody.account.id,
-      unattended_mode: "provider_account",
+      unattended_mode: "api_key",
     });
 
     const legacyReconnect = await request(

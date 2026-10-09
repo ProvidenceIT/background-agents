@@ -18,6 +18,7 @@ interface AccountRow {
   display_name: string;
   external_account_id: string | null;
   status: string;
+  owner_user_id: string;
   created_by: string | null;
   updated_by: string | null;
   last_verified_at: number | null;
@@ -35,9 +36,14 @@ export interface CreateModelProviderAccount {
   externalAccountId?: string | null;
   status?: ModelProviderAccountStatus;
   actorId?: string | null;
+  /** The user whose activity may spend the account; defaults to the actor. */
+  ownerUserId?: string | null;
   lastVerifiedAt?: number | null;
   now?: number;
 }
+
+/** Rows store '' for an account whose owner is unknown; the contract shows null. */
+const NO_OWNER = "";
 
 export interface ModelProviderAccountLifecycleSnapshot {
   account: ModelProviderAccount;
@@ -52,6 +58,7 @@ function toAccount(row: AccountRow): ModelProviderAccount {
     displayName: row.display_name,
     externalAccountId: row.external_account_id,
     status: modelProviderAccountStatusSchema.parse(row.status),
+    ownerUserId: row.owner_user_id === NO_OWNER ? null : row.owner_user_id,
     createdBy: row.created_by,
     updatedBy: row.updated_by,
     lastVerifiedAt: row.last_verified_at,
@@ -80,9 +87,9 @@ export class ModelProviderAccountStore {
       .prepare(
         `INSERT INTO model_provider_accounts (
            id, provider, display_name, external_account_id,
-           status, created_by, updated_by, last_verified_at,
+           status, owner_user_id, created_by, updated_by, last_verified_at,
            created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         input.id,
@@ -90,6 +97,7 @@ export class ModelProviderAccountStore {
         input.displayName,
         input.externalAccountId ?? null,
         input.status ?? "active",
+        input.ownerUserId ?? input.actorId ?? NO_OWNER,
         input.actorId ?? null,
         input.actorId ?? null,
         input.lastVerifiedAt ?? null,

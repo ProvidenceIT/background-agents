@@ -15,6 +15,7 @@ const account = {
   displayName: "Team ChatGPT",
   externalAccountId: "acct_public",
   status: "active" as const,
+  ownerUserId: null,
   createdBy: null,
   updatedBy: null,
   lastVerifiedAt: null,

@@ -31,6 +31,7 @@ const winner: ModelProviderAccountLifecycleSnapshot = {
     displayName: "Existing OpenAI",
     externalAccountId: "acct-1",
     status: "active",
+    ownerUserId: "user-2",
     createdBy: "user-2",
     updatedBy: "user-2",
     lastVerifiedAt: 1,

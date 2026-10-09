@@ -221,6 +221,7 @@ export function applyMockDefaults(): void {
     id: "0123456789abcdef0123456789abcdef",
     provider: "openai",
     status: "active",
+    ownerUserId: "user-1",
     archivedAt: null,
   });
   mockProviderAdapterGet.mockReturnValue({});

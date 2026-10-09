@@ -319,11 +319,17 @@ type SchedulerPromptRequest = Pick<
 export async function resolveAutomationProviderAuth(
   db: SqlDatabase,
   automationId: string,
+  executorUserId: string | null,
   harness: HarnessId = DEFAULT_HARNESS
 ): Promise<SessionModelProviderAuthInput[]> {
   const pinRows = await new AutomationModelProviderAuthStore(db).list(automationId);
   const explicit = toProviderSelections(pinRows);
-  const resolved = await resolveSessionProviderAuth(db, { explicit, unattended: true, harness });
+  const resolved = await resolveSessionProviderAuth(db, {
+    explicit,
+    actorUserId: executorUserId,
+    unattended: true,
+    harness,
+  });
   const pinnedProviders = new Set(pinRows.map((pin) => pin.provider));
   return resolved.map((auth) =>
     pinnedProviders.has(auth.provider) && auth.selectionSource === "explicit"
@@ -591,6 +597,7 @@ export class Scheduler {
           providerAuth: await resolveAutomationProviderAuth(
             this.db,
             automation.id,
+            automation.user_id,
             getValidHarnessOrDefault(automation.harness)
           ),
         };

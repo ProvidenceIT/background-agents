@@ -169,6 +169,7 @@ function service(
     displayName: "OpenAI",
     externalAccountId: "external-1",
     status: "active" as const,
+    ownerUserId: "user-1",
     createdBy: "user-1",
     updatedBy: "user-1",
     lastVerifiedAt: now,

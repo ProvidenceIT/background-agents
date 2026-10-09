@@ -15,9 +15,15 @@ export class AutomationProviderSelectionError extends Error {
   }
 }
 
+/**
+ * Validate an automation's pinned provider selections. `executorUserId` is
+ * the user the automation runs as: a pinned account must be theirs, since
+ * every run spends it.
+ */
 export async function parseAndValidateAutomationProviderSelections(
   db: SqlDatabase,
-  value: unknown
+  value: unknown,
+  executorUserId: string | null
 ): Promise<ModelProviderSelections> {
   const parsed = modelProviderSelectionsSchema.safeParse(value);
   if (!parsed.success) {
@@ -33,7 +39,7 @@ export async function parseAndValidateAutomationProviderSelections(
   for (const provider of SUBSCRIPTION_PROVIDER_IDS) {
     const selection = parsed.data[provider];
     if (!selection || selection.mode === "api_key") continue;
-    await policy.validateSelection(provider, selection.accountId);
+    await policy.validateSelection(provider, selection.accountId, executorUserId);
   }
   return parsed.data;
 }

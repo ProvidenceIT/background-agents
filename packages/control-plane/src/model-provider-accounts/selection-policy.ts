@@ -6,7 +6,7 @@ import type {
 import type { ModelProviderId } from "./provider-auth-contracts";
 import { providerAccountIneligibility } from "./account-lifecycle-policy";
 
-type ProviderAccountPolicyStatus = 400 | 404 | 409;
+type ProviderAccountPolicyStatus = 400 | 403 | 404 | 409;
 
 export interface ProviderAccountAdapterLookup {
   get(provider: ModelProviderId): object | undefined;
@@ -27,23 +27,31 @@ export class ProviderAccountSelectionPolicy {
     private readonly adapters: ProviderAccountAdapterLookup
   ) {}
 
+  /**
+   * An account may be spent only by its owner's own activity: `actorUserId`
+   * is the user whose session or automation would use it, and an account
+   * owned by anyone else (or by nobody) is refused with 403.
+   */
   validateSelection(
     provider: ModelProviderId,
-    providerAccountId: string
+    providerAccountId: string,
+    actorUserId: string | null
   ): Promise<ModelProviderAccount> {
-    return this.validateActiveAccount(provider, providerAccountId, "Selected");
+    return this.validateActiveAccount(provider, providerAccountId, actorUserId, "Selected");
   }
 
   validateDefault(
     provider: ModelProviderId,
-    providerAccountId: string
+    providerAccountId: string,
+    actorUserId: string | null
   ): Promise<ModelProviderAccount> {
-    return this.validateActiveAccount(provider, providerAccountId, "Default");
+    return this.validateActiveAccount(provider, providerAccountId, actorUserId, "Default");
   }
 
   private async validateActiveAccount(
     provider: ModelProviderId,
     providerAccountId: string,
+    actorUserId: string | null,
     source: "Selected" | "Default"
   ): Promise<ModelProviderAccount> {
     if (!MODEL_PROVIDER_ACCOUNT_ID_PATTERN.test(providerAccountId)) {
@@ -76,6 +84,12 @@ export class ProviderAccountSelectionPolicy {
       throw new ProviderAccountSelectionPolicyError(
         `${source} ${provider} provider account is unavailable`,
         409
+      );
+    }
+    if (account.ownerUserId === null || account.ownerUserId !== actorUserId) {
+      throw new ProviderAccountSelectionPolicyError(
+        `${source} ${provider} provider account belongs to another user; a subscription is spent only by its owner's own activity`,
+        403
       );
     }
     return account;

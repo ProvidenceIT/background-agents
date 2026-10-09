@@ -28,6 +28,7 @@ function account(overrides: Partial<ModelProviderAccount> = {}): ModelProviderAc
     displayName: "Primary",
     externalAccountId: "external-1",
     status: "active",
+    ownerUserId: null,
     createdBy: null,
     updatedBy: null,
     lastVerifiedAt: null,

@@ -40,6 +40,12 @@ const LEGACY_SCOPED_OAUTH_PROVIDERS: ReadonlySet<SubscriptionProviderId> = new S
 
 export interface ProviderAccountResolutionInput {
   explicit?: ModelProviderSelections;
+  /**
+   * The user whose activity the session is (its trigger actor); a connected
+   * account resolves only when this user owns it. Null when no user is
+   * admitted, which refuses every connected account.
+   */
+  actorUserId: string | null;
   unattended: boolean;
   /**
    * The session's harness. An installation default only applies where the
@@ -66,7 +72,7 @@ async function resolveProvider(
   const explicit = input.explicit?.[provider];
   if (explicit?.mode === "api_key") return apiKey(provider, "explicit");
   if (explicit?.mode === "provider_account") {
-    const account = await policy.validateSelection(provider, explicit.accountId);
+    const account = await policy.validateSelection(provider, explicit.accountId, input.actorUserId);
     return {
       provider,
       authMode: "provider_account",
@@ -84,7 +90,11 @@ async function resolveProvider(
     return apiKey(provider, "unattended_policy");
   }
 
-  const account = await policy.validateDefault(provider, providerDefault.providerAccountId);
+  const account = await policy.validateDefault(
+    provider,
+    providerDefault.providerAccountId,
+    input.actorUserId
+  );
   return {
     provider,
     authMode: "provider_account",

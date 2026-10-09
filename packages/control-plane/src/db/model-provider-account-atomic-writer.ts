@@ -182,9 +182,9 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
       this.db
         .prepare(
           `INSERT INTO model_provider_accounts
-            (id, provider, display_name, external_account_id, status, created_by, updated_by,
-             last_verified_at, created_at, updated_at)
-           SELECT ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?
+            (id, provider, display_name, external_account_id, status, owner_user_id, created_by,
+             updated_by, last_verified_at, created_at, updated_at)
+           SELECT ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?
            WHERE EXISTS (${authorizationGuard})
              AND NOT EXISTS (SELECT 1 FROM model_provider_accounts
                WHERE provider = ? AND external_account_id = ? AND archived_at IS NULL)`
@@ -194,6 +194,7 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
           input.authorization.provider,
           input.authorization.displayName,
           input.externalAccountId,
+          input.authorization.userId,
           input.authorization.userId,
           input.authorization.userId,
           input.now,

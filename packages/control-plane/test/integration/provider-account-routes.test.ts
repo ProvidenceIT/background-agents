@@ -6,6 +6,9 @@ import { ProviderCredentialStore } from "../../src/db/provider-account-credentia
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
 
 const OPENAI_ACCOUNT_ID = "11111111111111111111111111111111";
+/** The browser user every management request acts as (helpers.ts TEST_BROWSER_USER_ID). */
+const OWNER_USER_ID = "11111111111111111111111111111111";
+const OTHER_USER_ID = "22222222222222222222222222222222";
 
 async function managementFetch(path: string, init?: { method?: string; body?: unknown }) {
   return serviceFetch(`https://test.local${path}`, {
@@ -61,7 +64,7 @@ describe("provider account management routes", () => {
         {
           provider: "openai",
           providerAccountId: createdBody.account.id,
-          unattendedMode: "provider_account",
+          unattendedMode: "api_key",
         },
       ],
     });
@@ -160,11 +163,19 @@ describe("provider account management routes", () => {
     const now = Date.now();
     await env.DB.prepare(
       `INSERT INTO model_provider_accounts
-        (id, provider, display_name, status, created_at, updated_at)
-        VALUES (?, 'openai', 'Default OpenAI', 'active', ?, ?)`
+        (id, provider, display_name, status, owner_user_id, created_at, updated_at)
+        VALUES (?, 'openai', 'Default OpenAI', 'active', ?, ?, ?)`
     )
-      .bind(OPENAI_ACCOUNT_ID, now, now)
+      .bind(OPENAI_ACCOUNT_ID, OWNER_USER_ID, now, now)
       .run();
+
+    // An unattended run may never be routed to a connected account.
+    const unattended = await managementFetch("/model-provider-account-defaults/openai", {
+      method: "PUT",
+      body: { providerAccountId: OPENAI_ACCOUNT_ID, unattendedMode: "provider_account" },
+    });
+    expect(unattended.status).toBe(409);
+    expectPrivateNoStore(unattended);
 
     const put = await managementFetch("/model-provider-account-defaults/openai", {
       method: "PUT",
@@ -190,10 +201,10 @@ describe("provider account management routes", () => {
     const now = Date.now();
     await env.DB.prepare(
       `INSERT INTO model_provider_accounts
-        (id, provider, display_name, status, created_at, updated_at)
-        VALUES (?, 'openai', 'Default OpenAI', 'active', ?, ?)`
+        (id, provider, display_name, status, owner_user_id, created_at, updated_at)
+        VALUES (?, 'openai', 'Default OpenAI', 'active', ?, ?, ?)`
     )
-      .bind(OPENAI_ACCOUNT_ID, now, now)
+      .bind(OPENAI_ACCOUNT_ID, OWNER_USER_ID, now, now)
       .run();
     await env.DB.prepare(
       `CREATE TRIGGER reject_provider_default_write
@@ -206,7 +217,7 @@ describe("provider account management routes", () => {
     try {
       const response = await managementFetch("/model-provider-account-defaults/openai", {
         method: "PUT",
-        body: { providerAccountId: OPENAI_ACCOUNT_ID, unattendedMode: "provider_account" },
+        body: { providerAccountId: OPENAI_ACCOUNT_ID, unattendedMode: "api_key" },
       });
 
       expect(response.status).toBe(502);
@@ -252,6 +263,34 @@ describe("provider account management routes", () => {
       "SELECT COUNT(*) AS count FROM model_provider_accounts WHERE external_account_id = 'acct-integration'"
     ).first<{ count: number }>();
     expect(count?.count).toBe(1);
+  });
+
+  it("refuses a default on an account owned by another user", async () => {
+    const now = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO model_provider_accounts
+        (id, provider, display_name, status, owner_user_id, created_at, updated_at)
+        VALUES (?, 'openai', 'Colleague OpenAI', 'active', ?, ?, ?)`
+    )
+      .bind(OPENAI_ACCOUNT_ID, OTHER_USER_ID, now, now)
+      .run();
+
+    const response = await managementFetch("/model-provider-account-defaults/openai", {
+      method: "PUT",
+      body: { providerAccountId: OPENAI_ACCOUNT_ID, unattendedMode: "api_key" },
+    });
+    expect(response.status).toBe(403);
+    expectPrivateNoStore(response);
+    await expect(response.json()).resolves.toEqual({
+      error: expect.stringContaining("belongs to another user"),
+    });
+    expect(
+      (
+        await env.DB.prepare(
+          "SELECT COUNT(*) AS count FROM model_provider_account_defaults"
+        ).first()
+      )?.count
+    ).toBe(0);
   });
 
   it.each([

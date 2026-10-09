@@ -13,6 +13,10 @@ import {
   subscriptionProviderIdSchema,
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
+import {
+  SUBSCRIPTION_TOKEN_NOT_STORABLE,
+  SUBSCRIPTION_TOKEN_PROVIDERS,
+} from "@open-inspect/shared/types/auth-homes";
 import { Hono } from "hono";
 import { z } from "zod";
 import { createLogger } from "../logger";
@@ -118,6 +122,23 @@ function authorizationCodeService(env: Env, ctx: RequestContext): ProviderAuthor
 function provider(value: string): SubscriptionProviderId | Response {
   const parsed = subscriptionProviderIdSchema.safeParse(value);
   return parsed.success ? parsed.data : error("Unsupported model provider", 400);
+}
+
+/**
+ * The control plane is not a store for a subscription token. A Claude
+ * subscription is read by the Claude CLI from the subscriber's auth home;
+ * connecting, reconnecting or authorizing an Anthropic account here would
+ * put that token in this database, so every such route refuses.
+ */
+function subscriptionTokenNotStorable(providerId: SubscriptionProviderId): Response | null {
+  if (!SUBSCRIPTION_TOKEN_PROVIDERS.includes(providerId)) return null;
+  return json(
+    {
+      error: `${providerId} subscriptions are not stored by the control plane; enrol a subscription home under Settings > Subscription homes`,
+      code: SUBSCRIPTION_TOKEN_NOT_STORABLE,
+    },
+    422
+  );
 }
 
 const accountListQuerySchema = z.object({
@@ -245,6 +266,8 @@ modelProviderAccountRoutes.post("/model-provider-accounts", ACCOUNTS_MANAGE, (c)
       "Invalid provider account"
     );
     if (body instanceof Response) return body;
+    const refused = subscriptionTokenNotStorable(body.provider);
+    if (refused) return refused;
     const accounts = service(env, ctx);
     return accountOperation(ctx, async () => {
       const result = await accounts.create(body, ctx.principal.userId);
@@ -309,6 +332,8 @@ modelProviderAccountRoutes.post(
     dispatch(c, async (request, env, params, ctx) => {
       const parsedProvider = provider(params.provider);
       if (parsedProvider instanceof Response) return parsedProvider;
+      const refused = subscriptionTokenNotStorable(parsedProvider);
+      if (refused) return refused;
       const body = await parseBody(
         request,
         startProviderAuthorizationCodeRequestSchema,
@@ -334,6 +359,8 @@ modelProviderAccountRoutes.get(
     dispatch(c, async (_request, env, params, ctx) => {
       const parsedProvider = provider(params.provider);
       if (parsedProvider instanceof Response) return parsedProvider;
+      const refused = subscriptionTokenNotStorable(parsedProvider);
+      if (refused) return refused;
       const id = authorizationId(params.id);
       if (id instanceof Response) return id;
       return authorizationOperation(ctx, async () =>
@@ -350,6 +377,8 @@ modelProviderAccountRoutes.post(
     dispatch(c, async (request, env, params, ctx) => {
       const parsedProvider = provider(params.provider);
       if (parsedProvider instanceof Response) return parsedProvider;
+      const refused = subscriptionTokenNotStorable(parsedProvider);
+      if (refused) return refused;
       const id = authorizationId(params.id);
       if (id instanceof Response) return id;
       const body = await parseBody(
@@ -377,6 +406,8 @@ modelProviderAccountRoutes.delete(
     dispatch(c, async (_request, env, params, ctx) => {
       const parsedProvider = provider(params.provider);
       if (parsedProvider instanceof Response) return parsedProvider;
+      const refused = subscriptionTokenNotStorable(parsedProvider);
+      if (refused) return refused;
       const id = authorizationId(params.id);
       if (id instanceof Response) return id;
       return authorizationOperation(ctx, async () => {
@@ -435,6 +466,8 @@ modelProviderAccountRoutes.post("/model-provider-accounts/:id/reconnect", ACCOUN
       "Invalid provider account reconnect request"
     );
     if (body instanceof Response) return body;
+    const refused = subscriptionTokenNotStorable(body.provider);
+    if (refused) return refused;
     const accounts = service(env, ctx);
     return accountOperation(ctx, async () =>
       json({ account: await accounts.reconnect(id, body, ctx.principal.userId) })
@@ -472,7 +505,7 @@ modelProviderAccountRoutes.put("/model-provider-account-defaults/:provider", ACC
       await new ProviderAccountSelectionPolicy(
         new ModelProviderAccountStore(ctx.db),
         modelProviderAccountAdapterRegistry
-      ).validateDefault(parsedProvider, body.providerAccountId);
+      ).validateDefault(parsedProvider, body.providerAccountId, ctx.principal.userId);
       await defaults.set(
         parsedProvider,
         body.providerAccountId,
@@ -565,6 +598,11 @@ async function handleProviderAccess(
   }
   if (binding.authMode === "api_key") {
     return error("Session uses API-key mode for this provider", 409);
+  }
+  if (binding.authMode === "auth_home") {
+    // The credential is a file in the mounted home, read by the provider's
+    // CLI; the control plane has nothing to broker.
+    return error("Session is served from a subscription home; no brokered token exists", 409);
   }
   if (
     modelProviderAccountAdapterRegistry.runtimeCredentialKind(parsedProvider) !==

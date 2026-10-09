@@ -69,12 +69,14 @@ describe("Scheduler (integration)", () => {
       const accounts = new ModelProviderAccountStore(env.DB);
       const defaults = new ProviderDefaultStore(env.DB);
       for (const provider of ["openai", "xai"] as const) {
+        // Owned by the automation's executor (makeAutomation user_id).
         await accounts.create({
           id: accountIds[provider],
           provider,
           displayName: provider,
+          actorId: "user-1",
         });
-        await defaults.set(provider, accountIds[provider], "provider_account", null);
+        await defaults.set(provider, accountIds[provider], "api_key", null);
       }
     }
 
@@ -93,7 +95,7 @@ describe("Scheduler (integration)", () => {
         )
       );
 
-      const resolved = await resolveAutomationProviderAuth(env.DB, automation.id);
+      const resolved = await resolveAutomationProviderAuth(env.DB, automation.id, "user-1");
 
       expect(resolved).toContainEqual({
         provider,
@@ -102,6 +104,27 @@ describe("Scheduler (integration)", () => {
         selectionSource: "automation_pin",
       });
     });
+
+    it.each(["openai", "xai"] as const)(
+      "refuses an account pin for %s when the executor is not the account owner",
+      async (provider) => {
+        await seedProviderAccounts();
+        const automation = makeAutomation({ id: `auto-foreign-${provider}` });
+        await new AutomationStore(env.DB).create(automation);
+        const authStore = new AutomationModelProviderAuthStore(env.DB);
+        await sqlDatabase(env.DB).batch(
+          authStore.bindReplace(
+            automation.id,
+            { [provider]: { mode: "provider_account", accountId: accountIds[provider] } },
+            Date.now()
+          )
+        );
+
+        await expect(
+          resolveAutomationProviderAuth(env.DB, automation.id, "colleague-1")
+        ).rejects.toMatchObject({ status: 403 });
+      }
+    );
 
     it.each(["openai", "xai"] as const)("uses an API-key pin for %s", async (provider) => {
       await seedProviderAccounts();
@@ -112,7 +135,7 @@ describe("Scheduler (integration)", () => {
         authStore.bindReplace(automation.id, { [provider]: { mode: "api_key" } }, Date.now())
       );
 
-      const resolved = await resolveAutomationProviderAuth(env.DB, automation.id);
+      const resolved = await resolveAutomationProviderAuth(env.DB, automation.id, "user-1");
 
       expect(resolved).toEqual(
         expect.arrayContaining([
@@ -134,7 +157,9 @@ describe("Scheduler (integration)", () => {
         const defaults = new ProviderDefaultStore(env.DB);
         await defaults.set(provider, accountIds[provider], "api_key", null);
 
-        await expect(resolveAutomationProviderAuth(env.DB, automation.id)).resolves.toEqual(
+        await expect(
+          resolveAutomationProviderAuth(env.DB, automation.id, "user-1")
+        ).resolves.toEqual(
           expect.arrayContaining([
             expect.objectContaining({
               provider,
@@ -144,13 +169,17 @@ describe("Scheduler (integration)", () => {
           ])
         );
 
-        await defaults.set(provider, accountIds[provider], "provider_account", null);
-        await expect(resolveAutomationProviderAuth(env.DB, automation.id)).resolves.toEqual(
+        // The default cannot be turned into an unattended connected-account route.
+        await expect(
+          defaults.set(provider, accountIds[provider], "provider_account", null)
+        ).rejects.toThrow(/unattended runs cannot spend a connected provider account/i);
+        await expect(
+          resolveAutomationProviderAuth(env.DB, automation.id, "user-1")
+        ).resolves.toEqual(
           expect.arrayContaining([
             expect.objectContaining({
               provider,
-              authMode: "provider_account",
-              providerAccountId: accountIds[provider],
+              authMode: "api_key",
               selectionSource: "unattended_policy",
             }),
           ])

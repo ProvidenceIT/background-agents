@@ -271,6 +271,17 @@ describe("automation create route", () => {
       ["wrong provider", { provider: "xai", status: "active", archivedAt: null }, 400],
       ["inactive account", { provider: "openai", status: "disabled", archivedAt: null }, 409],
       ["archived account", { provider: "openai", status: "active", archivedAt: 123 }, 409],
+      // A colleague's account is never spent by this executor's automation.
+      [
+        "account owned by another user",
+        { provider: "openai", status: "active", ownerUserId: "colleague-1", archivedAt: null },
+        403,
+      ],
+      [
+        "account without an owner",
+        { provider: "openai", status: "active", ownerUserId: null, archivedAt: null },
+        403,
+      ],
     ])("rejects a provider pin for a %s", async (_label, account, status) => {
       mockProviderAccountStore.getById.mockResolvedValue({
         id: "0123456789abcdef0123456789abcdef",
@@ -299,6 +310,7 @@ describe("automation create route", () => {
         id: "0123456789abcdef0123456789abcdef",
         provider: "anthropic",
         status: "active",
+        ownerUserId: "user-1",
         archivedAt: null,
       });
 

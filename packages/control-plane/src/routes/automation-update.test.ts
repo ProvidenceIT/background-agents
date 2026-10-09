@@ -495,6 +495,7 @@ describe("automation read, update, and delete routes", () => {
         id: "0123456789abcdef0123456789abcdef",
         provider: "anthropic",
         status: "active",
+        ownerUserId: "user-1",
         archivedAt: null,
       });
 

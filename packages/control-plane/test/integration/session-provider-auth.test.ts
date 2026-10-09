@@ -22,23 +22,29 @@ describe("session provider auth persistence", () => {
   });
 
   it("keeps the authoritative D1 snapshot when the installation default changes", async () => {
+    await env.DB.prepare(
+      "INSERT INTO users (id, display_name, created_at, updated_at) VALUES ('user-1', 'User', 1, 1)"
+    ).run();
     const accounts = new ModelProviderAccountStore(env.DB);
     const defaults = new ProviderDefaultStore(env.DB);
     await accounts.create({
       id: FIRST_ACCOUNT_ID,
       provider: "openai",
       displayName: "First",
+      actorId: "user-1",
       now: 10,
     });
     await accounts.create({
       id: SECOND_ACCOUNT_ID,
       provider: "openai",
       displayName: "Second",
+      actorId: "user-1",
       now: 20,
     });
-    await defaults.set("openai", FIRST_ACCOUNT_ID, "provider_account", null, 30);
+    await defaults.set("openai", FIRST_ACCOUNT_ID, "api_key", null, 30);
 
     const providerAuth = await resolveSessionProviderAuth(env.DB, {
+      actorUserId: "user-1",
       unattended: false,
       harness: "opencode",
     });
@@ -76,7 +82,7 @@ describe("session provider auth persistence", () => {
       } as never
     );
 
-    await defaults.set("openai", SECOND_ACCOUNT_ID, "provider_account", null, 60);
+    await defaults.set("openai", SECOND_ACCOUNT_ID, "api_key", null, 60);
 
     await expect(new SessionIndexStore(env.DB).getCompleteProviderAuth(sessionId)).resolves.toEqual(
       [
