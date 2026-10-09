@@ -94,16 +94,23 @@ export function harnessSupportsModel(harness: HarnessId, model: string): boolean
   return families.includes(provider);
 }
 
+/** Whether the harness runs the provider on a subscription home and nothing else. */
+function runsOnlyOnAuthHome(harness: HarnessId, provider: string): boolean {
+  const modes = getHarnessCapabilities(harness).providerAuth[provider];
+  return !!modes && modes.length > 0 && modes.every((mode) => mode === "auth_home");
+}
+
 /**
  * Whether the harness can run a provider under an auth mode.
- * `legacy_scoped_oauth` is resolver-assigned, not selectable, and passes through.
+ * `legacy_scoped_oauth` is resolver-assigned, not selectable, and passes
+ * through, except where the harness runs the provider only on a home.
  */
 export function harnessSupportsProviderAuth(
   harness: HarnessId,
   provider: string,
   mode: SessionProviderAuthMode
 ): boolean {
-  if (mode === "legacy_scoped_oauth") return true;
+  if (mode === "legacy_scoped_oauth") return !runsOnlyOnAuthHome(harness, provider);
   const modes = getHarnessCapabilities(harness).providerAuth[provider];
   // No row means the harness does not run the provider at all, so it cannot
   // select any auth mode for it either. The model check reports that to the
@@ -214,8 +221,7 @@ function providerAuthMessage(
   mode: SessionProviderAuthMode
 ): string {
   const label = getHarnessLabel(harness);
-  const modes = getHarnessCapabilities(harness).providerAuth[provider] ?? [];
-  if (modes.length > 0 && modes.every((candidate) => candidate === "auth_home")) {
+  if (runsOnlyOnAuthHome(harness, provider)) {
     return `The ${label} harness runs ${provider} only on a subscription home; enrol one under Settings > Subscription homes.`;
   }
   return mode === "provider_account"

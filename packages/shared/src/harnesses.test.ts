@@ -108,6 +108,14 @@ describe("harnessSupportsProviderAuth", () => {
     expect(harnessSupportsProviderAuth("claude", "openai", "legacy_scoped_oauth")).toBe(true);
   });
 
+  it("does not pass legacy mode through where the harness runs the provider only on a home", () => {
+    expect(harnessSupportsProviderAuth("codex", "openai", "legacy_scoped_oauth")).toBe(false);
+    expect(harnessSupportsProviderAuth("codex", "openai", "auth_home")).toBe(true);
+    expect(
+      checkHarnessCompatibility("codex", "openai/gpt-6-sol", { openai: "legacy_scoped_oauth" })
+    ).toMatchObject({ code: "provider_auth" });
+  });
+
   it("only the Claude harness may select an Anthropic provider account", () => {
     expect(harnessSupportsProviderAuth("opencode", "anthropic", "provider_account")).toBe(false);
     expect(harnessSupportsProviderAuth("opencode", "anthropic", "api_key")).toBe(true);

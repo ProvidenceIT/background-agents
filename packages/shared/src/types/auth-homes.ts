@@ -252,3 +252,41 @@ export const SUBSCRIPTION_TOKEN_NOT_STORABLE = "subscription_token_not_storable"
 export const SUBSCRIPTION_TOKEN_PROVIDERS: readonly SubscriptionProviderId[] = ["anthropic"];
 /** Error code of the 403 a turn receives when no home may serve it. */
 export const NO_ELIGIBLE_HOME = "no_eligible_home" as const;
+
+/** The seat Codex sessions queue for: one running Codex session per home. */
+export const CODEX_SEAT = "codex" as const;
+
+/**
+ * One place in a home's Codex seat. Session ids are shown only for the
+ * caller's own sessions; a colleague's waiting or running session on a
+ * shared home is counted, never named.
+ */
+const authHomeSeatOccupantSchema = z.strictObject({
+  sessionId: z.string().min(1).nullable(),
+  mine: z.boolean(),
+});
+
+export const authHomeSeatWaiterSchema = authHomeSeatOccupantSchema.extend({
+  position: z.number().int().positive(),
+  enqueuedAt: z.number().int(),
+});
+export type AuthHomeSeatWaiter = z.infer<typeof authHomeSeatWaiterSchema>;
+
+export const authHomeSeatSchema = z.strictObject({
+  homeId: authHomeIdSchema,
+  seat: z.literal(CODEX_SEAT),
+  holder: authHomeSeatOccupantSchema
+    .extend({
+      acquiredAt: z.number().int(),
+      heartbeatAt: z.number().int(),
+      /** The holder went silent and its sandbox is being shut down. */
+      fencing: z.boolean(),
+    })
+    .nullable(),
+  waiting: z.array(authHomeSeatWaiterSchema),
+});
+export type AuthHomeSeat = z.infer<typeof authHomeSeatSchema>;
+
+/** `GET /me/auth-home/lease`: the Codex seat of the caller's own home. */
+export const authHomeSeatResponseSchema = z.strictObject({ seat: authHomeSeatSchema });
+export type AuthHomeSeatResponse = z.infer<typeof authHomeSeatResponseSchema>;

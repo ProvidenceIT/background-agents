@@ -546,6 +546,10 @@ export {
   SUBSCRIPTION_TOKEN_NOT_STORABLE,
   SUBSCRIPTION_TOKEN_PROVIDERS,
   NO_ELIGIBLE_HOME,
+  CODEX_SEAT,
+  authHomeSeatWaiterSchema,
+  authHomeSeatSchema,
+  authHomeSeatResponseSchema,
 } from "./auth-homes";
 export type {
   TriggerKind,
@@ -563,6 +567,9 @@ export type {
   PutAuthHomeRequest,
   AuthHomeRefusalReason,
   AuthHomeResolution,
+  AuthHomeSeatWaiter,
+  AuthHomeSeat,
+  AuthHomeSeatResponse,
 } from "./auth-homes";
 
 export { formatGitHubNoreplyEmail, githubLoginSchema } from "./github-identity";
