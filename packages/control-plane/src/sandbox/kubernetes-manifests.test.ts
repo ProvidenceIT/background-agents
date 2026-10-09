@@ -280,7 +280,7 @@ describe("buildSandboxPod with a subscription home", () => {
       [LABELS.sandbox]: names.hash,
       [LABELS.authHomeOwner]: "bram",
     });
-    expect(LABELS.authHomeOwner).toBe("sf.dokman.io/auth-home-owner");
+    expect(LABELS.authHomeOwner).toBe("openinspect.dev/auth-home-owner");
     // The owner's canonical id is an annotation: label values cannot carry arbitrary ids.
     expect(withHome.metadata.annotations).toMatchObject({
       [ANNOTATIONS.authHomePvc]: "sf-home-bram",

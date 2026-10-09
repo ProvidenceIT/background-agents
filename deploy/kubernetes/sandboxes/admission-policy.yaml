@@ -13,7 +13,7 @@
 #
 # Subscription homes: a sandbox pod may also mount at most one operator-made
 # claim named sf-home-<name> (a person's provider login, on a local volume),
-# and wears sf.dokman.io/auth-home-owner=<name> exactly when it does, so a
+# and wears openinspect.dev/auth-home-owner=<name> exactly when it does, so a
 # pod cannot carry one home's name while mounting another's. Neither the
 # control plane nor the sandbox GC may create, change or delete such a claim:
 # the CREATE/UPDATE claims policy refuses them, and a separate DELETE policy
@@ -73,7 +73,7 @@ spec:
       expression: "object.spec.containers + object.spec.?initContainers.orValue([])"
     # The subscription home label, and the sf-home-* claims the pod mounts.
     - name: authHomeOwnerLabel
-      expression: "'sf.dokman.io/auth-home-owner'"
+      expression: "'openinspect.dev/auth-home-owner'"
     - name: authHomeClaims
       expression: >-
         object.spec.?volumes.orValue([])
@@ -115,8 +115,8 @@ spec:
       message: "the only non-sandbox pod allowed here is the egress proxy, and it mounts no claims"
     - expression: >-
         variables.isSandbox ||
-        !variables.labels.exists(k, k.startsWith('openinspect.dev/') || k.startsWith('sf.dokman.io/'))
-      message: "the egress proxy carries no openinspect.dev or sf.dokman.io labels"
+        !variables.labels.exists(k, k.startsWith('openinspect.dev/'))
+      message: "the egress proxy carries no openinspect.dev labels"
     - expression: >-
         variables.isSandbox || request.operation != 'CREATE' ||
         (request.userInfo.username == variables.proxyCreator &&

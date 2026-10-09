@@ -25,7 +25,7 @@ export const LABELS = {
    * label on exactly the pods that mount one such claim, equal to the suffix,
    * so a pod cannot wear one home's name while mounting another's.
    */
-  authHomeOwner: "sf.dokman.io/auth-home-owner",
+  authHomeOwner: "openinspect.dev/auth-home-owner",
 } as const;
 
 export const ANNOTATIONS = {
@@ -48,8 +48,8 @@ export const ANNOTATIONS = {
    * canonical user id on both. Hints for an operator reading the namespace;
    * a resume never mounts from them, it resolves the home again.
    */
-  authHomePvc: "sf.dokman.io/auth-home-pvc",
-  authHomeOwner: "sf.dokman.io/auth-home-owner",
+  authHomePvc: "openinspect.dev/auth-home-pvc",
+  authHomeOwner: "openinspect.dev/auth-home-owner",
 } as const;
 
 /** Whether a workspace claim has been given up: deleting, destroy-stopped, or claimed by GC. */

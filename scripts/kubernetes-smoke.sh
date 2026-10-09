@@ -26,11 +26,11 @@
 #                                allowlist (needs tcpdump on the node).
 #
 # --auth-home: also check subscription homes. Needs an operator-made, Bound
-# claim in the namespace (SMOKE_AUTH_HOME_CLAIM, default sf-home-bram; see
+# claim in the namespace (SMOKE_AUTH_HOME_CLAIM, required; see
 # docs/KUBERNETES_SANDBOX_PROVIDER.md) and the sandbox GC's ServiceAccount
 # (open-inspect-sandbox-gc). The sandbox is created mounting that home, and
 # admission is probed with server-side dry runs only: a pod whose
-# sf.dokman.io/auth-home-owner label names another home, a pod mounting two
+# openinspect.dev/auth-home-owner label names another home, a pod mounting two
 # sf-home- claims, and a home claim deleted or changed by the GC or the
 # control plane are all denied, while the GC may still delete a workspace
 # claim. One resume runs without the home and must not mount it. Nothing is
@@ -58,9 +58,13 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d)"
 failures=0
 claim=""
-auth_home_claim="${SMOKE_AUTH_HOME_CLAIM:-sf-home-bram}"
+auth_home_claim="${SMOKE_AUTH_HOME_CLAIM:-}"
 gc_user="system:serviceaccount:${control_plane_namespace}:open-inspect-sandbox-gc"
 if [[ "$auth_home_mode" == true ]]; then
+  if [[ -z "$auth_home_claim" ]]; then
+    echo "--auth-home needs SMOKE_AUTH_HOME_CLAIM, the name of an sf-home- claim in $ns" >&2
+    exit 2
+  fi
   if [[ "$(kubectl -n "$ns" get pvc "$auth_home_claim" -o jsonpath='{.status.phase}')" != Bound ]]; then
     echo "--auth-home needs the claim $auth_home_claim, Bound, in $ns" >&2
     exit 2
@@ -229,7 +233,7 @@ refuse "an ephemeral container is rejected" \
 if [[ "$auth_home_mode" == true ]]; then
   echo "== subscription home"
   home_name="${auth_home_claim#sf-home-}"
-  owner_label='sf.dokman.io/auth-home-owner'
+  owner_label='openinspect.dev/auth-home-owner'
   check "the sandbox mounts $auth_home_claim, once" bash -c "kubectl -n $ns get pod $pod -o json |
     jq -e '[.spec.volumes[] | select(.persistentVolumeClaim.claimName == \"$auth_home_claim\")] | length == 1'"
   check "the pod wears $owner_label=$home_name" \
@@ -285,7 +289,7 @@ check "workspace intact after a forced pod loss" in_sandbox "$pod" "grep -qx $ma
 if [[ "$auth_home_mode" == true ]]; then
   check "a resume given no home mounts none" bash -c "kubectl -n $ns get pod $pod -o json |
     jq -e '[.spec.volumes[] | select(.persistentVolumeClaim.claimName // \"\" | startswith(\"sf-home-\"))] | length == 0
-      and (.metadata.labels[\"sf.dokman.io/auth-home-owner\"] == null)'"
+      and (.metadata.labels[\"openinspect.dev/auth-home-owner\"] == null)'"
 fi
 
 echo "== resume over a running pod"

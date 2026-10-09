@@ -75,10 +75,10 @@ test("pods: the auth-home owner label is allowed and tied to exactly one sf-home
   const pods = policy("open-inspect-sandbox-pods");
   assert.deepEqual(operations(pods), ["CREATE", "UPDATE"]);
   const variables = Object.fromEntries(pods.spec.variables.map((v) => [v.name, v.expression]));
-  assert.equal(variables.authHomeOwnerLabel, "'sf.dokman.io/auth-home-owner'");
+  assert.equal(variables.authHomeOwnerLabel, "'openinspect.dev/auth-home-owner'");
   assert.match(variables.authHomeClaims, /startsWith\('sf-home-'\)/);
   assert.ok(
-    pods.spec.variables.some((v) => v.expression.includes("sf.dokman.io/auth-home-owner")),
+    pods.spec.variables.some((v) => v.expression.includes("openinspect.dev/auth-home-owner")),
     "the pods policy variables name the label"
   );
 

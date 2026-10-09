@@ -193,9 +193,9 @@ Layers, from the inside out:
    only its own Secret, and only the control plane's ServiceAccount may create one. A proxy pod is
    created only by the ReplicaSet controller for a ReplicaSet it owns, runs the pinned command, and
    reads no Secret. The one addition is a subscription auth home (below): a sandbox pod may also
-   mount at most one `sf-home-<name>` claim, and wears `sf.dokman.io/auth-home-owner=<name>` exactly
-   when it does; neither the control plane nor the garbage collector may create, change or delete
-   such a claim (the DELETE rule is its own policy, since a DELETE carries only `oldObject`).
+   mount at most one `sf-home-<name>` claim, and wears `openinspect.dev/auth-home-owner=<name>`
+   exactly when it does; neither the control plane nor the garbage collector may create, change or
+   delete such a claim (the DELETE rule is its own policy, since a DELETE carries only `oldObject`).
 
 A fully compromised control plane can therefore create only unprivileged, sandboxed pods running the
 pinned image, each reading one session's Secret and volume, with egress limited to the allowlist.
@@ -243,9 +243,9 @@ A session the control plane resolved to a subscription home (`sessions.auth_home
 resolver) gets that home mounted: an operator-made claim named `sf-home-<name>`, pre-bound to a
 volume on the node that holds the subscriber's own provider login. The provider mounts it read-only
 at `/home/sandbox/.sf-auth` in the sandbox container only (nothing in a session writes there), sets
-`SF_AUTH_HOME` and `SF_AUTH_HOME_PROVIDERS`, labels the pod `sf.dokman.io/auth-home-owner=<name>`,
-and records the claim and the owner's user id as annotations (hints only) on the workspace claim and
-pod. The control plane never reads the volume.
+`SF_AUTH_HOME` and `SF_AUTH_HOME_PROVIDERS`, labels the pod
+`openinspect.dev/auth-home-owner=<name>`, and records the claim and the owner's user id as
+annotations (hints only) on the workspace claim and pod. The control plane never reads the volume.
 
 A user can register a home only on a claim an operator assigned to them
 (`PUT /auth-home-claims/<claim>` with `{"ownerUserId": ...}`, permission `auth_homes.assign`), and
@@ -274,7 +274,7 @@ in `-codex` are Codex claims (below) and are never registered as a home.
 #### Codex sessions and the Codex seat
 
 A session on the `codex` harness mounts a second claim of the same home, read-write,
-`sf-home-<name>-codex` (label `sf.dokman.io/auth-home-owner=<name>-codex`), with
+`sf-home-<name>-codex` (label `openinspect.dev/auth-home-owner=<name>-codex`), with
 `SF_AUTH_HOME_PROVIDERS=openai`. It holds one directory, `codex/`, which is the session's
 `CODEX_HOME`: the owner's own `codex login --device-auth` login (`codex/auth.json`, never a copy of
 a login from elsewhere), Codex's state databases and its `sessions/` rollouts, from which a later
@@ -324,5 +324,4 @@ is not built.
   the label and ephemeral-container bypasses), and that the workspace survives preserve, resume and
   a forced pod loss. Point `KUBERNETES_SANDBOX_IMAGE` at an image whose runtime idles, since no
   control plane answers it. With `--auth-home` it also mounts an existing `Bound` home claim
-  (`SMOKE_AUTH_HOME_CLAIM`, default `sf-home-bram`) and probes the home rules with server-side dry
-  runs.
+  (`SMOKE_AUTH_HOME_CLAIM`, required) and probes the home rules with server-side dry runs.

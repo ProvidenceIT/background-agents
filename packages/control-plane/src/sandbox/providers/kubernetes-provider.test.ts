@@ -885,10 +885,10 @@ describe("subscription auth homes", () => {
       mountPath: "/home/sandbox/.sf-auth",
       readOnly: true,
     });
-    expect(pod.metadata.labels).toMatchObject({ "sf.dokman.io/auth-home-owner": "bram" });
+    expect(pod.metadata.labels).toMatchObject({ "openinspect.dev/auth-home-owner": "bram" });
     expect(pod.metadata.annotations).toMatchObject({
-      "sf.dokman.io/auth-home-pvc": "sf-home-bram",
-      "sf.dokman.io/auth-home-owner": "u1",
+      "openinspect.dev/auth-home-pvc": "sf-home-bram",
+      "openinspect.dev/auth-home-owner": "u1",
     });
     expect(podEnv(api, G1)).toEqual({
       SANDBOX_TIMEOUT_SECONDS: "3600",
@@ -902,8 +902,8 @@ describe("subscription auth homes", () => {
     expect(JSON.stringify(secretEnv(api))).not.toContain("SF_AUTH_HOME");
     // The workspace claim remembers the home, as a hint for operators.
     expect(api.pvcs.get(names.base)!.metadata.annotations).toMatchObject({
-      "sf.dokman.io/auth-home-pvc": "sf-home-bram",
-      "sf.dokman.io/auth-home-owner": "u1",
+      "openinspect.dev/auth-home-pvc": "sf-home-bram",
+      "openinspect.dev/auth-home-owner": "u1",
     });
     // The home's claim is the operator's: never created, patched or deleted here.
     expect(api.calls.filter((call) => call.endsWith("sf-home-bram"))).toEqual([]);
@@ -956,7 +956,7 @@ describe("subscription auth homes", () => {
     await expect(provider.resumeSandbox(resume)).resolves.toMatchObject({ success: true });
     const pod = api.pods.get(podName(names, G2))!;
     expect(homeVolumes(pod.spec as HomePodSpec)).toEqual([]);
-    expect(pod.metadata.labels).not.toHaveProperty("sf.dokman.io/auth-home-owner");
+    expect(pod.metadata.labels).not.toHaveProperty("openinspect.dev/auth-home-owner");
     expect(podEnv(api, G2)).toEqual({
       SANDBOX_TIMEOUT_SECONDS: "1800",
       RESTORED_FROM_SNAPSHOT: "true",
@@ -965,7 +965,7 @@ describe("subscription auth homes", () => {
     const pvc = api.pvcs.get(names.base)!;
     expect(pvc.metadata.deletionTimestamp).toBeUndefined();
     expect(pvc.metadata.annotations).toMatchObject({
-      "sf.dokman.io/auth-home-pvc": "sf-home-bram",
+      "openinspect.dev/auth-home-pvc": "sf-home-bram",
     });
 
     // Resolved again for an eligible actor: mounted again.
@@ -975,7 +975,7 @@ describe("subscription auth homes", () => {
     ).resolves.toMatchObject({ success: true });
     const third = api.pods.get(podName(names, G3))!;
     expect(homeVolumes(third.spec as HomePodSpec)).toHaveLength(1);
-    expect(third.metadata.labels).toMatchObject({ "sf.dokman.io/auth-home-owner": "bram" });
+    expect(third.metadata.labels).toMatchObject({ "openinspect.dev/auth-home-owner": "bram" });
     expect(podEnv(api, G3).SF_AUTH_HOME).toBe("/home/sandbox/.sf-auth");
   });
 
@@ -1053,7 +1053,7 @@ describe("subscription auth homes", () => {
     const byHome = {
       metadata: { name: "home-egress" },
       spec: {
-        podSelector: { matchLabels: { "sf.dokman.io/auth-home-owner": "bram" } },
+        podSelector: { matchLabels: { "openinspect.dev/auth-home-owner": "bram" } },
         policyTypes: ["Egress"],
         egress: [{ to: [{ ipBlock: { cidr: "0.0.0.0/0" } }] }],
       },
