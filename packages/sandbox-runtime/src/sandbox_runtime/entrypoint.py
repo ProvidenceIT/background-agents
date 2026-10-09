@@ -14,6 +14,7 @@ from .boot_events import BootEventLog
 from .browser_desktop import BrowserDesktop
 from .claude_stager import ClaudeStager, isolated_claude_config_dir, resolve_claude_config_dir
 from .code_server import CodeServer
+from .codex_stager import CodexStager, resolve_codex_config_dir
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
 from .docker_service import DockerService
 from .harness.base import HarnessId, HarnessProcessOwner
@@ -64,6 +65,8 @@ def build_harness_process(
             )
         case HarnessId.CLAUDE:
             return ClaudeStager(config.claude_stager_config(), log, config_dir=claude_config_dir)
+        case HarnessId.CODEX:
+            return CodexStager(config.has_repository, log)
     raise ValueError(f"Unsupported harness: {config.harness}")
 
 
@@ -91,6 +94,9 @@ def harness_config_dir(harness: HarnessId, claude_config_dir: Path | None) -> Pa
             if claude_config_dir is None:
                 raise ValueError("Claude sessions need a config dir decided")
             return claude_config_dir
+        case HarnessId.CODEX:
+            # Never CODEX_HOME: that is the subscription home, shared across sessions.
+            return resolve_codex_config_dir()
     raise ValueError(f"Unsupported harness: {harness}")
 
 

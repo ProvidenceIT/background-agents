@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..claude_stager import ClaudeHarnessHandoff
+from ..codex_stager import CodexHarnessHandoff
 from ..credentials.provider_credential_client import RuntimeCredentialClient
-from ..memories import append_memory
+from ..memories import append_memory, memory_text
 from .base import (
     DEFAULT_HARNESS_ID,
     DETERMINISTIC_FAILURE_EXIT_CODE,
@@ -26,6 +27,7 @@ from .base import (
 from .claude import ClaudeHarness, ClaudeHarnessConfig
 from .claude_env import OAUTH_MANAGED_ENV_VAR
 from .claude_tools import ToolServerConfig
+from .codex import DEFAULT_CODEX_MODEL, CodexHarness, CodexHarnessConfig
 from .opencode import OpencodeHarness
 from .opencode_client import OpenCodeClient
 
@@ -80,15 +82,7 @@ def build_agent_harness(
                 system_prompt_append=append_memory(
                     _repository_guidance(handoff.workdir), handoff.config_dir
                 ),
-                tools=ToolServerConfig(
-                    control_plane_url=identity.control_plane_url,
-                    session_id=identity.session_id,
-                    auth_token=identity.auth_token,
-                    repo_manifest_path=identity.repo_manifest_path,
-                    has_repository=handoff.has_repository,
-                    slack_notify_enabled=os.environ.get("AGENT_SLACK_NOTIFY_ENABLED", "").lower()
-                    == "true",
-                ),
+                tools=_tool_server_config(identity, has_repository=handoff.has_repository),
             )
             credential_client = (
                 RuntimeCredentialClient(
@@ -107,7 +101,44 @@ def build_agent_harness(
                 limits=limits,
                 credential_client=credential_client,
             )
+        case HarnessId.CODEX:
+            codex_handoff = CodexHarnessHandoff.read()
+            codex_session_config = _session_config_from_env()
+            if _mcp_servers_from(codex_session_config):
+                # Repository MCP servers are not wired into Codex yet; say so
+                # rather than start a session that silently lacks them.
+                log.warn(
+                    "codex.mcp_servers_unsupported",
+                    count=len(_mcp_servers_from(codex_session_config)),
+                )
+            return CodexHarness(
+                config=CodexHarnessConfig(
+                    workdir=codex_handoff.workdir,
+                    config_dir=codex_handoff.config_dir,
+                    default_model=str(codex_session_config.get("model") or DEFAULT_CODEX_MODEL),
+                    # Codex reads the workspace AGENTS.md itself; memory is
+                    # what it would otherwise not see.
+                    developer_instructions=memory_text(codex_handoff.config_dir),
+                    tools=_tool_server_config(
+                        identity, has_repository=codex_handoff.has_repository
+                    ),
+                ),
+                log=log,
+                limits=limits,
+            )
     raise ValueError(f"Unsupported harness: {harness_id}")
+
+
+def _tool_server_config(identity: BridgeIdentity, *, has_repository: bool) -> ToolServerConfig:
+    """Open Inspect's own tools, as the Claude and Codex harnesses serve them."""
+    return ToolServerConfig(
+        control_plane_url=identity.control_plane_url,
+        session_id=identity.session_id,
+        auth_token=identity.auth_token,
+        repo_manifest_path=identity.repo_manifest_path,
+        has_repository=has_repository,
+        slack_notify_enabled=os.environ.get("AGENT_SLACK_NOTIFY_ENABLED", "").lower() == "true",
+    )
 
 
 def _session_config_from_env() -> dict[str, object]:

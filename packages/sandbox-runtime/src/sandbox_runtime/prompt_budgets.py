@@ -35,6 +35,10 @@ SSE_INACTIVITY_TIMEOUT_ENV_VAR = "BRIDGE_SSE_INACTIVITY_TIMEOUT"
 # budget renews on any traffic, so silence there means the transport died and
 # no tool call, however long, can trip it.
 OPENCODE_INACTIVITY_TIMEOUT_SECONDS = 300.0
+# ``codex exec --json`` prints an item when a command starts and again when it
+# ends, and nothing in between: a long build or test run is silence. The
+# budget covers such a command; the prompt deadline still bounds the turn.
+CODEX_INACTIVITY_TIMEOUT_SECONDS = 1200.0
 INACTIVITY_TIMEOUT_MIN_SECONDS = 5.0
 INACTIVITY_TIMEOUT_MAX_SECONDS = 3600.0
 
@@ -53,14 +57,21 @@ def _inactivity_bounds(harness: HarnessId) -> tuple[float, float, float | None]:
     any silence, and a fixed cap here would pin the budget to its floor for a
     child whose tool calls can outlast that cap.
     """
-    if harness is not HarnessId.CLAUDE:
-        return (
-            OPENCODE_INACTIVITY_TIMEOUT_SECONDS,
-            INACTIVITY_TIMEOUT_MIN_SECONDS,
-            INACTIVITY_TIMEOUT_MAX_SECONDS,
-        )
-    budget = stream_silence_budget_seconds()
-    return budget, budget, None
+    match harness:
+        case HarnessId.CLAUDE:
+            budget = stream_silence_budget_seconds()
+            return budget, budget, None
+        case HarnessId.CODEX:
+            return (
+                CODEX_INACTIVITY_TIMEOUT_SECONDS,
+                INACTIVITY_TIMEOUT_MIN_SECONDS,
+                INACTIVITY_TIMEOUT_MAX_SECONDS,
+            )
+    return (
+        OPENCODE_INACTIVITY_TIMEOUT_SECONDS,
+        INACTIVITY_TIMEOUT_MIN_SECONDS,
+        INACTIVITY_TIMEOUT_MAX_SECONDS,
+    )
 
 
 def resolve_prompt_limits(log: StructuredLogger, harness: HarnessId) -> PromptLimits:
