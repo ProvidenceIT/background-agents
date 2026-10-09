@@ -13,7 +13,7 @@ import { useAuthSession } from "@/lib/auth-session";
  * fenced lease). Composers read it to say why a Codex session has not
  * started yet.
  */
-export const CODEX_SEAT_API_PATH = "/api/me/auth-home/lease";
+const CODEX_SEAT_API_PATH = "/api/me/auth-home/lease";
 /** A waiting session asks for the seat again every 30 s; the notice follows at the same pace. */
 const CODEX_SEAT_REFRESH_MS = 30_000;
 

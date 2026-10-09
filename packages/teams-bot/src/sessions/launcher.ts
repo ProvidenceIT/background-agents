@@ -59,7 +59,7 @@ export interface ModelSelection {
  * so an `openai/*` model asks for Codex; anything else keeps the control
  * plane's built-in harness.
  */
-export function harnessForModel(model: string): HarnessId | undefined {
+function harnessForModel(model: string): HarnessId | undefined {
   return extractProviderAndModel(model).provider === "openai" ? "codex" : undefined;
 }
 

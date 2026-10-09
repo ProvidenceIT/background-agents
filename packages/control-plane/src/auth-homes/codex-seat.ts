@@ -53,7 +53,7 @@ export const CODEX_PROVIDER_REQUIRED =
   "Codex sessions need a sandbox provider that mounts subscription homes (Kubernetes).";
 
 /** The launch refusal a waiting session shows. */
-export function codexSeatWaitMessage(
+function codexSeatWaitMessage(
   decision: Extract<AuthHomeSeatDecision, { kind: "waiting" }>
 ): string {
   switch (decision.reason) {
