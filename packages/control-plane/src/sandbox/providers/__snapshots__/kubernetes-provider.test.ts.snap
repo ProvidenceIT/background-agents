@@ -1,0 +1,183 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`createSandbox > pins the pod manifest of a plain create 1`] = `
+{
+  "apiVersion": "v1",
+  "kind": "Pod",
+  "metadata": {
+    "annotations": {
+      "openinspect.dev/generation-created-at-ms": "1700000000000",
+      "openinspect.dev/sandbox-id": "sandbox-octo-repo-1700000000000",
+      "openinspect.dev/session-id": "sess-1",
+    },
+    "labels": {
+      "app.kubernetes.io/managed-by": "open-inspect",
+      "openinspect.dev/role": "sandbox",
+      "openinspect.dev/sandbox": "a277a4ff9fc69c83773a",
+    },
+    "name": "oi-a277a4ff9fc69c83773a-loyw3v28",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "name": "oi-a277a4ff9fc69c83773a",
+        "uid": "uid-1",
+      },
+    ],
+  },
+  "spec": {
+    "activeDeadlineSeconds": 3600,
+    "automountServiceAccountToken": false,
+    "containers": [
+      {
+        "command": [
+          "/opt/openinspect/python/bin/python",
+          "-m",
+          "sandbox_runtime.entrypoint",
+        ],
+        "env": [
+          {
+            "name": "SANDBOX_TIMEOUT_SECONDS",
+            "value": "3600",
+          },
+        ],
+        "envFrom": [
+          {
+            "secretRef": {
+              "name": "oi-a277a4ff9fc69c83773a",
+            },
+          },
+        ],
+        "image": "registry.test/sandbox@sha256:abc",
+        "name": "sandbox",
+        "resources": {
+          "limits": {
+            "cpu": "4000m",
+            "ephemeral-storage": "10Gi",
+            "memory": "8192Mi",
+          },
+          "requests": {
+            "cpu": "1000m",
+            "memory": "2048Mi",
+          },
+        },
+        "securityContext": {
+          "allowPrivilegeEscalation": false,
+          "capabilities": {
+            "drop": [
+              "ALL",
+            ],
+          },
+          "runAsNonRoot": true,
+        },
+        "terminationMessagePolicy": "FallbackToLogsOnError",
+        "volumeMounts": [
+          {
+            "mountPath": "/workspace",
+            "name": "workspace",
+            "subPath": "workspace",
+          },
+          {
+            "mountPath": "/tmp",
+            "name": "workspace",
+            "subPath": "tmp",
+          },
+          {
+            "mountPath": "/home/sandbox/.local/share/opencode",
+            "name": "workspace",
+            "subPath": "home/opencode-data",
+          },
+          {
+            "mountPath": "/home/sandbox/.openinspect",
+            "name": "workspace",
+            "subPath": "home/openinspect",
+          },
+        ],
+      },
+    ],
+    "enableServiceLinks": false,
+    "initContainers": [
+      {
+        "command": [
+          "/bin/sh",
+          "-c",
+          "set -eu
+v=/oi-volume
+mkdir -p "$v/workspace"
+mkdir -p "$v/tmp"
+if [ -d "/tmp/opencode" ]; then mkdir -p "$v/tmp/opencode" && cp -an "/tmp/opencode/." "$v/tmp/opencode/"; fi
+mkdir -p "$v/home/opencode-data"
+if [ -d "/home/sandbox/.local/share/opencode/." ]; then mkdir -p "$v/home/opencode-data/." && cp -an "/home/sandbox/.local/share/opencode/./." "$v/home/opencode-data/./"; fi
+mkdir -p "$v/home/openinspect"
+chmod 1777 "$v/tmp"
+if [ -n "\${OI_EXTRA_CA_CERT:-}" ]; then
+  printf '%s\\n' "$OI_EXTRA_CA_CERT" > /opt/openinspect-trust/extra-ca.crt
+  cat /etc/ssl/certs/ca-certificates.crt /opt/openinspect-trust/extra-ca.crt > /opt/openinspect-trust/ca-bundle.crt
+fi
+/opt/openinspect/python/bin/python - <<'EOF'
+import socket, sys, time
+deadline = time.monotonic() + 30
+while True:
+    try:
+        socket.create_connection(("1.1.1.1", 443), timeout=1).close()
+    except OSError:
+        sys.exit(0)
+    if time.monotonic() > deadline:
+        sys.exit("egress is not confined: a direct connection to 1.1.1.1:443 still succeeds")
+    time.sleep(0.1)
+EOF",
+        ],
+        "image": "registry.test/sandbox@sha256:abc",
+        "name": "prepare",
+        "resources": {
+          "limits": {
+            "cpu": "1",
+            "memory": "256Mi",
+          },
+          "requests": {
+            "cpu": "100m",
+            "memory": "64Mi",
+          },
+        },
+        "securityContext": {
+          "allowPrivilegeEscalation": false,
+          "capabilities": {
+            "drop": [
+              "ALL",
+            ],
+          },
+          "runAsNonRoot": true,
+        },
+        "terminationMessagePolicy": "FallbackToLogsOnError",
+        "volumeMounts": [
+          {
+            "mountPath": "/oi-volume",
+            "name": "workspace",
+          },
+        ],
+      },
+    ],
+    "restartPolicy": "Never",
+    "runtimeClassName": "gvisor",
+    "securityContext": {
+      "fsGroup": 1000,
+      "fsGroupChangePolicy": "OnRootMismatch",
+      "runAsGroup": 1000,
+      "runAsNonRoot": true,
+      "runAsUser": 1000,
+      "seccompProfile": {
+        "type": "RuntimeDefault",
+      },
+    },
+    "terminationGracePeriodSeconds": 30,
+    "volumes": [
+      {
+        "name": "workspace",
+        "persistentVolumeClaim": {
+          "claimName": "oi-a277a4ff9fc69c83773a",
+        },
+      },
+    ],
+  },
+}
+`;

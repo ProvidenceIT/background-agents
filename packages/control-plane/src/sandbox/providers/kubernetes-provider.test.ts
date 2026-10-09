@@ -81,6 +81,15 @@ describe("KubernetesSandboxProvider capabilities", () => {
 });
 
 describe("createSandbox", () => {
+  it("pins the pod manifest of a plain create", async () => {
+    // The whole object the API server is asked to create, so an addition for
+    // one kind of session (a mounted subscription home, say) is shown not to
+    // change the pods of every other session.
+    const { api, provider } = setup();
+    await provider.createSandbox(baseCreateConfig);
+    expect(api.createPod.mock.calls[0]![0]).toMatchSnapshot();
+  });
+
   it("creates the claim, the env Secret and the generation's pod, in that order", async () => {
     const { api, provider } = setup();
     const result = await provider.createSandbox(baseCreateConfig);
