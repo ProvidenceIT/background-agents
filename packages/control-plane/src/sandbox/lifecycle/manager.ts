@@ -479,12 +479,16 @@ export class SandboxLifecycleManager
       sessionContext,
       provider: {
         name: provider.name,
-        capabilities: { supportsSandboxTimeout: provider.capabilities.supportsSandboxTimeout },
+        capabilities: {
+          supportsSandboxTimeout: provider.capabilities.supportsSandboxTimeout,
+          supportsAuthHomeMounts: provider.capabilities.supportsAuthHomeMounts,
+        },
       },
       config: {
         model: config.model,
         mcpServerLookup: config.mcpServerLookup,
         slackAgentNotifyLookup: config.slackAgentNotifyLookup,
+        authHomeLookup: config.authHomeLookup,
       },
       imageBuildLookup,
       getLogger: () => this.log,
@@ -839,6 +843,7 @@ export class SandboxLifecycleManager
         await this.launchContext.resolveAgentSlackNotifyEnabled(session);
       const { sandboxSettings, timeoutSeconds } =
         this.launchContext.resolveSandboxSettings(session);
+      const authHome = await this.launchContext.resolveAuthHome(sessionId);
       const createConfig: CreateSandboxConfig = {
         sessionId,
         generationCreatedAtMs: generation.createdAt,
@@ -859,6 +864,7 @@ export class SandboxLifecycleManager
         mcpServers,
         sandboxSettings,
         ...repositoryFields,
+        ...(authHome ? { authHome } : {}),
       };
 
       this.vmStartup.registerForegroundAuth(generation, sessionId, sandboxAuthToken);
@@ -1351,16 +1357,19 @@ export class SandboxLifecycleManager
       const { sandboxSettings, timeoutSeconds } =
         this.launchContext.resolveSandboxSettings(session);
 
+      const resumeSessionId = session.session_name || session.id;
+      const authHome = await this.launchContext.resolveAuthHome(resumeSessionId);
       if (restoringSavedState) this.shutdown.markRecoveryInvoked(generation, providerObjectId);
       const result = await this.provider.resumeSandbox({
         providerObjectId,
-        sessionId: session.session_name || session.id,
+        sessionId: resumeSessionId,
         sandboxId: sandbox.modal_sandbox_id,
         timeoutSeconds,
         generationCreatedAtMs: generation.createdAt,
         codeServerEnabled: session.code_server_enabled === 1,
         vncEnabled: session.vnc_enabled === 1,
         sandboxSettings,
+        ...(authHome ? { authHome } : {}),
       });
 
       if (!result.success) {

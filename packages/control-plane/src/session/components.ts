@@ -53,6 +53,7 @@ import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecyc
 // eslint-disable-next-line no-restricted-imports
 import { SandboxAccess } from "../sandbox/lifecycle/sandbox-access";
 import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
+import { createSessionAuthHomeLookup } from "../auth-homes/sandbox-mount";
 import { McpServerStore } from "../db/mcp-servers";
 import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
@@ -1250,6 +1251,8 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,
     slackAgentNotifyLookup,
+    // Read only when the provider mounts homes (Kubernetes).
+    authHomeLookup: createSessionAuthHomeLookup(db),
     recordWarning: deps.recordWarning,
     resumeQueuedWork: deps.resumeQueuedWork,
     admitLaunch: deps.admitLaunch,

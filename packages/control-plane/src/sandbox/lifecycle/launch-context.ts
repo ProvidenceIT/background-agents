@@ -7,11 +7,14 @@ import {
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
+import type { SessionAuthHomeLookup } from "../../auth-homes/sandbox-mount";
 import type { Logger } from "../../logger";
 import { sessionHasRepository, type SessionRow } from "../../session/types";
 import {
+  AuthHomeUnavailableError,
   SandboxProviderError,
   type CreateSandboxConfig,
+  type SandboxAuthHome,
   type SandboxProviderCapabilities,
   type SessionRepositoryInfo,
 } from "../provider";
@@ -45,13 +48,18 @@ export interface SandboxLaunchConfig {
   model: string;
   mcpServerLookup?: McpServerLookup;
   slackAgentNotifyLookup?: SlackAgentNotifyLookup;
+  /** The session's bound subscription home; consulted only by providers that mount one. */
+  authHomeLookup?: SessionAuthHomeLookup;
 }
 
 export interface SandboxLaunchContextDependencies {
   sessionContext: SandboxLaunchContextReader;
   provider: {
     name: string;
-    capabilities: Pick<SandboxProviderCapabilities, "supportsSandboxTimeout">;
+    capabilities: Pick<
+      SandboxProviderCapabilities,
+      "supportsSandboxTimeout" | "supportsAuthHomeMounts"
+    >;
   };
   config: SandboxLaunchConfig;
   imageBuildLookup?: ImageBuildLookup;
@@ -231,6 +239,40 @@ export class SandboxLaunchContext {
       });
       return undefined;
     }
+  }
+
+  /**
+   * The subscription home this launch mounts: the one bound to the session
+   * now, read afresh for every create and resume, so a resume follows the
+   * resolver's latest verdict for whoever is acting and never what the
+   * stopped sandbox had. A provider that cannot mount a home is never asked.
+   * A home that is bound but gone or disabled refuses the launch
+   * (`AuthHomeUnavailableError`); a failed lookup is transient, because
+   * launching without the mount would leave the harness with no credential.
+   */
+  async resolveAuthHome(sessionId: string): Promise<SandboxAuthHome | undefined> {
+    const lookup = this.config.authHomeLookup;
+    if (!lookup || !this.provider.capabilities.supportsAuthHomeMounts) return undefined;
+    let authHome: SandboxAuthHome | undefined;
+    try {
+      authHome = await lookup.getForSession(sessionId);
+    } catch (error) {
+      if (error instanceof AuthHomeUnavailableError) throw error;
+      throw new SandboxProviderError(
+        `Failed to look up the session's subscription home: ${error instanceof Error ? error.message : String(error)}`,
+        "transient",
+        error instanceof Error ? error : undefined
+      );
+    }
+    if (authHome) {
+      this.getLogger().info("Mounting subscription home", {
+        event: "auth_home.launch_mount",
+        auth_home_pvc: authHome.pvcName,
+        auth_home_owner: authHome.ownerUserId,
+        providers: authHome.providers,
+      });
+    }
+    return authHome;
   }
 
   resolveSandboxSettings(session: SessionRow): ResolvedSandboxSettings {
