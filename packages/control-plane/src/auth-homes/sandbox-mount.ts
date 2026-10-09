@@ -5,9 +5,11 @@ import { UserAuthHomeStore } from "./store";
 
 /**
  * What a sandbox launch mounts for a session: the home the resolver bound to
- * it (`sessions.auth_home_id`), named by its claim. The resolver (session
- * create and every turn) is the only writer of that binding; a launch only
- * reads it, so a create and a resume mount whatever the latest verdict says.
+ * it (`sessions.auth_home_id`), named by its claim. Session creation (including
+ * child spawns and scheduled runs) is the only writer of that binding; later
+ * turns are gated against it (enforceAuthHomeTurn) and refused rather than
+ * rebound. A launch only reads it, so a create and a resume mount the bound
+ * home, and a resume reaches here only after the acting turn passed the gate.
  */
 export interface SessionAuthHomeLookup {
   /**
