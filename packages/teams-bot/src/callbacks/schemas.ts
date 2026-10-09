@@ -90,7 +90,7 @@ export const threadClosedCallbackSchema = z.looseObject({
 export const MSTEAMS_DIRECT_MESSAGE_KIND = "msteams.direct_message";
 
 /** Teams caps a message at about 28 KB; a notice is a few lines. */
-export const MAX_DIRECT_MESSAGE_CHARS = 8_000;
+const MAX_DIRECT_MESSAGE_CHARS = 8_000;
 
 /**
  * `POST /callbacks/direct_message`: a notice for one person, delivered to

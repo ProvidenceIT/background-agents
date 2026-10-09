@@ -33,7 +33,7 @@ interface SentActivity {
 }
 
 /** A one-to-one chat between the bot and a tenant user, named by the user's Entra object id. */
-export interface DirectMessageTarget {
+interface DirectMessageTarget {
   serviceUrl: string;
   /** The bot registration's application id; the bot's channel account is `28:<appId>`. */
   botAppId: string;

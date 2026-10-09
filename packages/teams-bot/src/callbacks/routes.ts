@@ -45,7 +45,7 @@ const MAX_CALLBACK_BODY_BYTES = 1024 * 1024;
 const ACTIVITY_CALLBACK_MAX_AGE_MS = 2 * 60 * 1000;
 
 /** The connector endpoint a direct message uses before the bot has heard from anyone. */
-export const DEFAULT_DIRECT_MESSAGE_SERVICE_URL = "https://smba.trafficmanager.net/teams/";
+const DEFAULT_DIRECT_MESSAGE_SERVICE_URL = "https://smba.trafficmanager.net/teams/";
 
 const DIRECT_MESSAGE_KIND = "direct_message";
 

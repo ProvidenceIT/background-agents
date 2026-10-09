@@ -30,7 +30,7 @@ import { authHomeOwnerUserId, UserAuthHomeStore } from "./store";
  * counts, names and dates: never a token, a volume name or file contents.
  */
 
-export const MSTEAMS_DIRECT_MESSAGE_KIND = "msteams.direct_message";
+const MSTEAMS_DIRECT_MESSAGE_KIND = "msteams.direct_message";
 
 /** The bot's callback route for a direct message (internal URL; the binding routes it). */
 const DIRECT_MESSAGE_URL = "https://internal/callbacks/direct_message";
@@ -145,7 +145,7 @@ async function releaseNotice(
 }
 
 /** The Claude expiry notice for a home, or null when its expiry is unknown or further than 14 days. */
-export function claudeExpiryNoticeText(home: AuthHome, nowMs: number): string | null {
+function claudeExpiryNoticeText(home: AuthHome, nowMs: number): string | null {
   const expiresAt = home.claudeExpiresAt;
   if (expiresAt === null || expiresAt - nowMs > AUTH_HOME_EXPIRY_NOTICE_MS) return null;
   const date = isoDate(expiresAt);
@@ -172,7 +172,7 @@ interface DigestRow {
 }
 
 /** One person's sessions on the home in the digest week. */
-export interface DigestActorLine {
+interface DigestActorLine {
   userId: string;
   name: string;
   selection: AuthHomeSelection;
@@ -180,7 +180,7 @@ export interface DigestActorLine {
   byKind: Partial<Record<TriggerKind, number>>;
 }
 
-export interface WeeklyDigest {
+interface WeeklyDigest {
   weekStart: number;
   total: number;
   byKind: Partial<Record<TriggerKind, number>>;
@@ -216,7 +216,7 @@ function kindOf(value: string | null): TriggerKind {
 }
 
 /** What the home served in the UTC week starting `weekStart`: sessions per kind and per person. */
-export async function buildWeeklyDigest(
+async function buildWeeklyDigest(
   db: SqlDatabase,
   home: AuthHome,
   weekStart: number
@@ -272,7 +272,7 @@ function kindCounts(counts: Partial<Record<TriggerKind, number>>): string {
 }
 
 /** The digest as the owner reads it in Teams (markdown). */
-export function weeklyDigestText(digest: WeeklyDigest, ownerUserIds: readonly string[]): string {
+function weeklyDigestText(digest: WeeklyDigest, ownerUserIds: readonly string[]): string {
   const from = isoDate(digest.weekStart);
   const to = isoDate(digest.weekStart + WEEK_MS - DAY_MS);
   const lines = [

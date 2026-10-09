@@ -19,7 +19,7 @@ const SHARING_KEY = "/api/subscription-sharing";
 const errorBodySchema = z.object({ error: z.string() });
 
 /** A failed subscription-home request, with the control plane's message when it gave one. */
-export class AuthHomeRequestError extends Error {
+class AuthHomeRequestError extends Error {
   constructor(
     message: string,
     readonly status: number
