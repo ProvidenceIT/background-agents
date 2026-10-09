@@ -58,6 +58,7 @@ import { McpServerStore } from "../db/mcp-servers";
 import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
+import { UserAuthHomeStore } from "../auth-homes/store";
 import { UsageLedgerStore } from "../db/usage-ledger";
 import { describeSandboxCapRefusal, UsageQuotaService } from "../authorization/usage-quotas";
 import { TeamMembershipStore } from "../db/team-memberships";
@@ -711,7 +712,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     backgroundTasks,
     messageQueue,
     log,
-    lifecycleManager
+    lifecycleManager,
+    async (expiresAt) => {
+      await new UserAuthHomeStore(db).recordClaudeExpiryForSession(getPublicSessionId(), expiresAt);
+    }
   );
   const pushService = new SandboxPushService(log, wsManager, () =>
     lifecycleManager.pushAdmissionDecision()

@@ -11,6 +11,7 @@ import type { SessionCoreRepository } from "../session-core-repository";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "../title";
 import { persistSandboxEvent, type SandboxEventContext } from "./context";
 import { sandboxBootPhaseLogFields } from "../../sandbox/boot-phase";
+import { reportedClaudeExpiresAt } from "../../auth-homes/claude-expiry";
 
 /**
  * Sandbox-runtime family: events about the sandbox itself rather than the
@@ -41,7 +42,9 @@ export class SandboxRuntimeEventHandler {
     private readonly backgroundTasks: BackgroundTasks,
     private readonly messageQueue: Pick<SessionMessageQueue, "processMessageQueue">,
     private readonly log: Logger,
-    private readonly lifecycle: SandboxReadiness
+    private readonly lifecycle: SandboxReadiness,
+    /** Store the Claude token expiry a mounted auth home reported; absent where no home exists. */
+    private readonly recordClaudeExpiry?: (expiresAt: number) => Promise<void>
   ) {}
 
   handleHeartbeat(context: SandboxEventContext): void {
@@ -77,6 +80,7 @@ export class SandboxRuntimeEventHandler {
         reported_harness: event.harness,
       });
     }
+    this.noteAuthHomeExpiry(event);
     this.diffService.pinBaselines(event);
     // Fills the column a fresh spawn cleared; a restore has already seeded
     // the snapshot's version, which outranks whatever this sandbox reports.
@@ -102,6 +106,17 @@ export class SandboxRuntimeEventHandler {
     await this.scheduleInactivityCheck();
   }
 
+  /**
+   * A home's token expiry rides on `ready`; storing it is a D1 write the
+   * readiness commit must not wait on, and a failure costs only a stale
+   * settings warning, so it is a logged background task.
+   */
+  private noteAuthHomeExpiry(event: Extract<SandboxEvent, { type: "ready" }>): void {
+    const record = this.recordClaudeExpiry;
+    const expiresAt = reportedClaudeExpiresAt(event.auth_home);
+    if (!record || expiresAt === null) return;
+    this.backgroundTasks.submit(() => record(expiresAt), { name: "auth_home.record_expiry" });
+  }
   /**
    * A boot phase the supervisor reported through the bridge. Recorded once
    * per sequence number (the bridge resends its latest phase on reconnect),

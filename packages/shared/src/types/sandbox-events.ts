@@ -95,6 +95,17 @@ export const sandboxGenerationSchema = z.object({
   createdAt: z.number().int().positive(),
 });
 
+/** What the bridge says about a mounted subscription auth home; never a credential. */
+export const sandboxAuthHomeReportSchema = z.object({
+  present: z.boolean(),
+  providers: z.array(z.string().max(64)).max(16),
+  claude_expires_at: z
+    .union([z.number(), z.string().max(32)])
+    .nullable()
+    .optional(),
+});
+export type SandboxAuthHomeReport = z.infer<typeof sandboxAuthHomeReportSchema>;
+
 // Sandbox events from Modal or synthesized by the control plane.
 export const sandboxEventSchema = z.discriminatedUnion("type", [
   sandboxEventBaseSchema.extend({
@@ -112,6 +123,11 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     runtimeVersion: z.string().optional(),
     preservationProtocolVersion: z.literal(1).optional(),
     repositories: z.array(sessionDiffBaselineRepositorySchema).optional(),
+    // A mounted subscription auth home, as the bridge reports it at boot:
+    // whether the mount is there, the providers it carries, and the Claude
+    // token's expiry from `claude/expires_at` (an integer or an ISO 8601
+    // string). Never a credential value.
+    auth_home: sandboxAuthHomeReportSchema.optional(),
   }),
   sandboxEventBaseSchema.extend({
     type: z.literal("sandbox_generation_ready"),
