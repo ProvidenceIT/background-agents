@@ -96,6 +96,18 @@ const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "budget.blocked": "Usage quota blocked work",
   "budget.warned": "Usage quota warning",
   "budget.quota_changed": "Usage quota changed",
+  "credential.auth_home_mounted": "Subscription home mounted for a session",
+  "credential.auth_home_prompt": "Subscription home served a turn",
+  "credential.unattended_blocked": "Subscription home refused a turn",
+  "auth_home.registered": "Subscription home registered",
+  "auth_home.removed": "Subscription home removed",
+  "auth_home.consent_changed": "Subscription home background consent changed",
+  "auth_home.sharing_changed": "Home sharing changed",
+  "subscription_sharing.changed": "Subscription sharing policy changed",
+  "provider_account.connected": "Provider account connected",
+  "provider_account.denied": "Provider account use denied",
+  "provider_account.expiring": "Provider account credential expiring",
+  "provider_account.revoked": "Provider account revoked",
 };
 
 const OBSERVATION_LABELS: Record<AuditObservationAction, string> = {

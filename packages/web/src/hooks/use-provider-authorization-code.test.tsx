@@ -48,6 +48,7 @@ const connected = {
     displayName: "Claude account",
     externalAccountId: null,
     status: "active" as const,
+    ownerUserId: null,
     createdBy: null,
     updatedBy: null,
     lastVerifiedAt: null,
