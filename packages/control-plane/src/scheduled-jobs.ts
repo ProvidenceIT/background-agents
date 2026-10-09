@@ -14,6 +14,7 @@
  * it needs no leader election.
  */
 
+import { runAuthHomeNoticesJob } from "./auth-homes/expiry-digest";
 import { checkAutofixQueueHealth } from "./autofix/queue-health";
 import { SessionIndexStore } from "./db/session-index";
 import type { SqlDatabase } from "./db/sql-database";
@@ -32,7 +33,8 @@ import type { Env } from "./types";
 
 /**
  * Every minute: the automation scheduler's tick, the autofix queue health
- * check, and the GitHub team sync, which gates itself on its own interval.
+ * check, the GitHub team sync, which gates itself on its own interval, and
+ * the subscription-home notices, which claim each notice once.
  */
 export const SCHEDULER_TICK_CRON = "* * * * *";
 
@@ -65,6 +67,9 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       });
       backgroundTasks.submit(() => runGitHubTeamSync(env, db, log, nowMs, correlation.request_id), {
         name: "github_team_sync",
+      });
+      backgroundTasks.submit(() => runAuthHomeNoticesJob(env, db, log, nowMs), {
+        name: "auth_home_notices",
       });
       // The tick runs both the recovery sweep (orphaned/timed-out runs) and
       // processes overdue automations.
