@@ -40,6 +40,42 @@ def resolve_opencode_global_config_dir() -> Path:
     return base / "opencode"
 
 
+# The subscription auth home's env file (`$SF_AUTH_HOME/env`): KEY=VALUE
+# lines its owner wrote. Only these keys reach OpenCode; anything else in the
+# file is ignored, so the home cannot override the sandbox's own variables.
+AUTH_HOME_ENV_VAR = "SF_AUTH_HOME"
+AUTH_HOME_ENV_FILE = "env"
+AUTH_HOME_ENV_ALLOWLIST = frozenset(
+    {"ZHIPU_API_KEY", "OPENCODE_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY"}
+)
+
+
+def parse_auth_home_env(text: str) -> dict[str, str]:
+    """The allowlisted ``KEY=VALUE`` pairs of an env file; nothing is executed.
+
+    Blank lines and ``#`` comments are skipped, an ``export`` prefix and one
+    pair of matching surrounding quotes are removed, and an empty value is
+    dropped. A key that appears twice keeps its last value, as a shell would.
+    """
+    values: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        name, separator, value = line.partition("=")
+        name = name.strip()
+        if not separator or name not in AUTH_HOME_ENV_ALLOWLIST:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        if value:
+            values[name] = value
+    return values
+
+
 class OpenCodeServer:
     HEALTH_CHECK_TIMEOUT = 30.0
 
@@ -357,6 +393,27 @@ class OpenCodeServer:
         except Exception as e:
             self.log.warn("managed_oauth.setup_error", exc=e)
 
+    def _source_auth_home_env(self) -> dict[str, str]:
+        """Provider keys the mounted subscription home carries, allowlisted.
+
+        Read once per start; logged by name only. No home, or a home without
+        the file, contributes nothing.
+        """
+        home = os.environ.get(AUTH_HOME_ENV_VAR)
+        if not home:
+            return {}
+        env_file = Path(home) / AUTH_HOME_ENV_FILE
+        try:
+            text = env_file.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return {}
+        except (OSError, UnicodeDecodeError) as e:
+            self.log.warn("auth_home.env_unreadable", error_type=type(e).__name__)
+            return {}
+        values = parse_auth_home_env(text)
+        self.log.info("auth_home.env_sourced", keys=sorted(values))
+        return values
+
     def _resolve_mcp_servers(self) -> list[Mapping[str, Any]]:
         """Resolve MCP servers from session config."""
         return list(self.mcp_servers)
@@ -461,6 +518,7 @@ class OpenCodeServer:
 
         env = {
             **os.environ,
+            **self._source_auth_home_env(),
             "OPENCODE_CONFIG_CONTENT": json.dumps(opencode_config),
             # Disable OpenCode's question tool in headless mode. The tool blocks
             # on a Promise waiting for user input via the HTTP API, but the bridge
