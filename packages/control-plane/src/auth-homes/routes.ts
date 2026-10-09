@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import {
   authHomeMetadataSchema,
   authHomeResponseSchema,
+  authHomeSeatResponseSchema,
+  CODEX_SEAT,
   authHomesResponseSchema,
   putAuthHomeRequestSchema,
   putSubscriptionSharingRequestSchema,
@@ -21,6 +23,7 @@ import {
   type UserRouteContext,
 } from "../routes/shared";
 import { bindAuthHomeAuditEvent } from "./audit";
+import { AuthHomeLeaseStore } from "./lease";
 import { AuthHomeValidationError, SubscriptionSharingStore, UserAuthHomeStore } from "./store";
 
 /**
@@ -30,7 +33,8 @@ import { AuthHomeValidationError, SubscriptionSharingStore, UserAuthHomeStore } 
  * owner is the admitted user, the body never names one, and no route reads
  * another person's home by id. `/auth-homes` lists metadata (no volume
  * names) for the roles that administer the workspace. `/subscription-sharing`
- * is the one workspace-wide switch.
+ * is the one workspace-wide switch. `/me/auth-home/lease` is the Codex seat of
+ * the caller's home: the UI's "waiting for your Codex seat".
  */
 
 const PRIVATE_NO_STORE = "private, no-store" as const;
@@ -39,6 +43,61 @@ const NO_HOME = "No subscription home is registered for you";
 function consentAt(current: number | null, consented: boolean, now: number): number | null {
   if (!consented) return null;
   return current ?? now;
+}
+
+/** Of `sessionIds`, those the user created or triggered: the only ones the seat names to them. */
+async function sessionsOf(
+  ctx: UserRouteContext,
+  sessionIds: readonly string[]
+): Promise<Set<string>> {
+  if (sessionIds.length === 0) return new Set();
+  const placeholders = sessionIds.map(() => "?").join(", ");
+  const rows = await ctx.db
+    .prepare(
+      `SELECT id FROM sessions
+       WHERE id IN (${placeholders}) AND (user_id = ? OR trigger_actor_user_id = ?)`
+    )
+    .bind(...sessionIds, ctx.principal.userId, ctx.principal.userId)
+    .all<{ id: string }>();
+  return new Set((rows.results ?? []).map((row) => row.id));
+}
+
+/** The Codex seat of the caller's home: who runs, who waits, and in what order. */
+async function getOwnSeat(_request: Request, _env: Env, _params: object, ctx: UserRouteContext) {
+  const home = await new UserAuthHomeStore(ctx.db).findOwnedBy(ctx.principal.userId);
+  if (!home) return error(NO_HOME, 404);
+  const [status] = await new AuthHomeLeaseStore(ctx.db).status([home.id], CODEX_SEAT);
+  const holder = status?.holder ?? null;
+  const waiting = status?.waiting ?? [];
+  const mine = await sessionsOf(ctx, [
+    ...(holder ? [holder.sessionId] : []),
+    ...waiting.map((waiter) => waiter.sessionId),
+  ]);
+  const occupant = (sessionId: string) => ({
+    sessionId: mine.has(sessionId) ? sessionId : null,
+    mine: mine.has(sessionId),
+  });
+  return json(
+    authHomeSeatResponseSchema.parse({
+      seat: {
+        homeId: home.id,
+        seat: CODEX_SEAT,
+        holder: holder
+          ? {
+              ...occupant(holder.sessionId),
+              acquiredAt: holder.acquiredAt,
+              heartbeatAt: holder.heartbeatAt,
+              fencing: holder.fencedAt !== null,
+            }
+          : null,
+        waiting: waiting.map((waiter) => ({
+          ...occupant(waiter.sessionId),
+          position: waiter.position,
+          enqueuedAt: waiter.enqueuedAt,
+        })),
+      },
+    })
+  );
 }
 
 async function getOwnHome(_request: Request, _env: Env, _params: object, ctx: UserRouteContext) {
@@ -227,6 +286,7 @@ const manageSharing = admit({
 authHomeRoutes.get("/me/auth-home", self, (c) => dispatch(c, getOwnHome));
 authHomeRoutes.put("/me/auth-home", self, (c) => dispatch(c, putOwnHome));
 authHomeRoutes.delete("/me/auth-home", self, (c) => dispatch(c, deleteOwnHome));
+authHomeRoutes.get("/me/auth-home/lease", self, (c) => dispatch(c, getOwnSeat));
 authHomeRoutes.get("/auth-homes", readAll, (c) => dispatch(c, listHomes));
 authHomeRoutes.get("/subscription-sharing", self, (c) => dispatch(c, getSharing));
 authHomeRoutes.put("/subscription-sharing", manageSharing, (c) => dispatch(c, putSharing));

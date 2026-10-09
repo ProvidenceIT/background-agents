@@ -13,6 +13,8 @@ import {
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
 } from "../router.test-support";
+import { CODEX_SEAT } from "@open-inspect/shared/types/auth-homes";
+import { AuthHomeLeaseStore } from "./lease";
 import { authHomeRoutes } from "./routes";
 import { UserAuthHomeStore } from "./store";
 
@@ -217,6 +219,58 @@ describe("auth-home routes", () => {
       { metadata: { from: false, to: true, by: "U1" } },
       { metadata: { from: true, to: false, by: "U1" } },
     ]);
+  });
+
+  it("shows the Codex seat of the caller's home, naming only the caller's own sessions", async () => {
+    expect((await call("owner", "GET", "/me/auth-home/lease")).status).toBe(404);
+    const { home } = (await (await call("owner", "PUT", "/me/auth-home", registration)).json()) as {
+      home: { id: string };
+    };
+    for (const [id, userId] of [
+      ["S-mine-running", USER_IDS.owner],
+      ["S-colleague", USER_IDS.member],
+      ["S-mine-waiting", USER_IDS.owner],
+    ]) {
+      await store
+        .prepare(
+          "INSERT INTO sessions (id, user_id, harness, auth_home_id, created_at, updated_at) VALUES (?, ?, 'codex', ?, 1, 1)"
+        )
+        .bind(id, userId, home.id)
+        .run();
+    }
+    const leases = new AuthHomeLeaseStore(store, () => FIXED_NOW);
+    const fence = { listPodsMountingClaim: async () => [], deletePod: async () => {} };
+    const seat = (sessionId: string) => ({
+      homeId: home.id,
+      provider: CODEX_SEAT,
+      sessionId,
+      claimName: "sf-home-u1-codex",
+    });
+    await leases.acquire(seat("S-mine-running"), fence);
+    await leases.acquire(seat("S-colleague"), fence);
+    await leases.acquire(seat("S-mine-waiting"), fence);
+
+    const response = await call("owner", "GET", "/me/auth-home/lease");
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.json()).toEqual({
+      seat: {
+        homeId: home.id,
+        seat: "codex",
+        holder: {
+          sessionId: "S-mine-running",
+          mine: true,
+          acquiredAt: FIXED_NOW,
+          heartbeatAt: FIXED_NOW,
+          fencing: false,
+        },
+        waiting: [
+          { sessionId: null, mine: false, position: 1, enqueuedAt: FIXED_NOW },
+          { sessionId: "S-mine-waiting", mine: true, position: 2, enqueuedAt: FIXED_NOW },
+        ],
+      },
+    });
   });
 
   it("removes only the caller's home", async () => {
