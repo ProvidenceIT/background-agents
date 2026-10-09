@@ -43,6 +43,7 @@ from .attachment_processor import (
     AttachmentProcessor,
     parse_session_image_attachments,
 )
+from .auth_home import auth_home_boot_report
 from .boot_attach import RECONNECT_BACKOFF_BASE, RECONNECT_MAX_DELAY_SECONDS, BootAttach
 from .constants import (
     BRIDGE_FATAL_ERROR_FILE_PATH,
@@ -287,6 +288,7 @@ class AgentBridge:
         # stamp snapshots with the runtime that produced them and retire the
         # ones a later compatibility floor rules out.
         runtime_version = os.environ.get("SANDBOX_VERSION", "")
+        auth_home = auth_home_boot_report()
         return {
             "type": "ready",
             "sandboxId": self.sandbox_id,
@@ -294,6 +296,8 @@ class AgentBridge:
             "harness": harness.id.value,
             "preservationProtocolVersion": 1,
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
+            # Mount presence and token expiry of a subscription home; never a value.
+            **({"auth_home": auth_home} if auth_home is not None else {}),
             "repositories": [
                 {
                     "position": position,
