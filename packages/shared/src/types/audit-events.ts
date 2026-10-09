@@ -127,6 +127,7 @@ export const AUDIT_OPERATION_ACTIONS = [
   "auth_home.consent_changed",
   "auth_home.sharing_changed",
   "subscription_sharing.changed",
+  // Reserved: nothing writes the provider_account actions yet.
   "provider_account.connected",
   "provider_account.denied",
   "provider_account.expiring",

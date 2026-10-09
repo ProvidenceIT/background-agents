@@ -23,10 +23,10 @@ This page shows you how to authenticate model providers with either an API key o
 
 ## Two ways to authenticate a provider
 
-| Mode              | How it is configured                                                                                                                                                                 | Where it applies                                                                                             |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| API key           | Add the provider's key as a global, repository, or environment secret under Settings › Secrets (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, and the opt-in provider keys). | Every provider. The only option for OpenCode Zen, OpenCode Go, Z.AI Coding Plan, and DeepSeek.               |
-| Connected account | Connect a subscription under Settings › Accounts (provider accounts). Credentials stay in the control plane, encrypted and write-only.                                               | OpenAI (ChatGPT) and xAI (SuperGrok) on OpenCode sessions; Anthropic (Claude) on Claude Agent sessions only. |
+| Mode              | How it is configured                                                                                                                                                                 | Where it applies                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| API key           | Add the provider's key as a global, repository, or environment secret under Settings › Secrets (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, and the opt-in provider keys). | Every provider. The only option for OpenCode Zen, OpenCode Go, Z.AI Coding Plan, and DeepSeek.         |
+| Connected account | Connect a subscription under Settings › Accounts (provider accounts). Credentials stay in the control plane, encrypted and write-only.                                               | OpenAI (ChatGPT) and xAI (SuperGrok) on OpenCode sessions. Claude runs on a subscription home instead. |
 
 A provider account serves its owner's own sessions only: the person who connected it is the only one who can select it or make it a default. Viewing the page needs `provider_accounts.read`; connecting and managing accounts needs `provider_accounts.manage`.
 
@@ -82,7 +82,7 @@ Defaults are resolved when a session starts. Changing a default never moves an e
 
 ## Select authentication per session
 
-When you create a session with an OpenAI, xAI, or Anthropic model, the composer's **Session options** menu has an **authentication** entry for that provider with three kinds of choice:
+When you create a session with an OpenAI or xAI model, the composer's **Session options** menu has an **authentication** entry for that provider with three kinds of choice:
 
 | Choice                                         | Meaning                                                                                        |
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------- |
@@ -90,7 +90,7 @@ When you create a session with an OpenAI, xAI, or Anthropic model, the composer'
 | A named account                                | Pin that active account for the session.                                                       |
 | **No account**                                 | Use API-key mode: the provider's key from the session's secret scope.                          |
 
-The choice is fixed when the session is created. Child sessions inherit their parent's pinned authentication. A harness that cannot use accounts for the provider offers none: on OpenCode the Anthropic control reads `OpenCode runs Anthropic on its API key; connected accounts are not offered.`
+The choice is fixed when the session is created. Child sessions inherit their parent's pinned authentication. A harness that cannot use accounts for the provider offers none, and the control reads `<harness> runs <provider> on its API key; connected accounts are not offered.`
 
 ## Select authentication per automation
 
