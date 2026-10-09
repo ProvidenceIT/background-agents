@@ -64,6 +64,7 @@ import { parseJsonBody } from "./body";
 import type { Env } from "../types";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
+import { bindAutomationConsentAudit } from "../auth-homes/audit";
 import { createLogger } from "../logger";
 import {
   AUTOMATION_READ,
@@ -757,6 +758,32 @@ async function handleUpdateAutomation(
     updateFields.next_run_at = nextCronOccurrence(cron, tz).getTime();
   }
 
+  // Background consent is the automation owner's: an edit by anyone else
+  // withdraws it (the next non-prompt run on a consent-gated home is refused
+  // until the owner saves the automation again), and the owner's own edit
+  // gives it back.
+  const consentStatements: SqlStatement[] = [];
+  const editorUserId = admission.viewer.kind === "user" ? admission.viewer.userId : null;
+  if (editorUserId) {
+    const consentNow = Date.now();
+    const nextConsent =
+      editorUserId === existing.user_id ? (existing.background_consent_at ?? consentNow) : null;
+    if (nextConsent !== existing.background_consent_at) {
+      updateFields.background_consent_at = nextConsent;
+      consentStatements.push(
+        bindAutomationConsentAudit(ctx.db, {
+          requestId: ctx.request_id,
+          actorUserId: editorUserId,
+          automationId: id,
+          ownerUserId: existing.user_id,
+          from: existing.background_consent_at,
+          to: nextConsent,
+          now: consentNow,
+        })
+      );
+    }
+  }
+
   // Apply the field update, the repository-selection replacement (which
   // carries the transitional scalar-mirror dual-write), and any slack
   // watched-channel re-sync in ONE atomic batch so none of them can drift
@@ -784,6 +811,7 @@ async function handleUpdateAutomation(
       ...slackStore.bindChannelStatements(id, extractSlackChannels(body.triggerConfig))
     );
   }
+  statements.push(...consentStatements);
   if (statements.length > 0) {
     await ctx.db.batch(statements);
   }

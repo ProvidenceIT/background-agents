@@ -16,7 +16,7 @@ export type AuthHomeAuditAction = Extract<
 >;
 
 export type AuthHomeAuditResourceType =
-  "auth_home" | "subscription_sharing" | "session" | "provider_account";
+  "auth_home" | "subscription_sharing" | "session" | "provider_account" | "automation";
 
 /**
  * One audit row about a home, a policy flip, or a turn served or refused.
@@ -82,12 +82,21 @@ export function bindAuthHomeAuditEvent(db: SqlDatabase, event: AuthHomeAuditEven
 interface CredentialAuditBase {
   db: SqlDatabase;
   requestId: string;
-  /** The trigger actor; null for a scheduler run with no linked owner. */
+  /** The trigger actor whose activity the turn is. */
   actorUserId: string | null;
+  /**
+   * Who performed the write when that is not the trigger actor: null for the
+   * scheduler, which records a service row. Defaults to the trigger actor.
+   */
+  principalUserId?: string | null;
   sessionId: string | null;
   provider: string;
   triggerKind: TriggerKind;
   now?: number;
+}
+
+function principalOf(input: CredentialAuditBase): string | null {
+  return input.principalUserId === undefined ? input.actorUserId : input.principalUserId;
 }
 
 /** `credential.auth_home_mounted`: a new session was bound to a home at create, spawn or run. */
@@ -101,7 +110,7 @@ export function bindAuthHomeMountedAudit(
 ): SqlStatement {
   return bindAuthHomeAuditEvent(input.db, {
     requestId: input.requestId,
-    actorUserId: input.actorUserId,
+    actorUserId: principalOf(input),
     action: "credential.auth_home_mounted",
     resourceType: "session",
     resourceId: input.sessionId,
@@ -162,7 +171,7 @@ export function bindUnattendedBlockedAudit(
 ): SqlStatement {
   return bindAuthHomeAuditEvent(input.db, {
     requestId: input.requestId,
-    actorUserId: input.actorUserId,
+    actorUserId: principalOf(input),
     action: "credential.unattended_blocked",
     resourceType: input.sessionId ? "session" : "auth_home",
     resourceId: input.sessionId ?? input.homeId ?? null,
@@ -178,6 +187,38 @@ export function bindUnattendedBlockedAudit(
       automation_id: input.automationId ?? null,
       provider: input.provider,
     },
+    now: input.now,
+  });
+}
+
+/**
+ * `auth_home.consent_changed` for an automation: its background consent is
+ * the owner's, so an edit by anyone else withdraws it and the owner's own
+ * edit gives it again.
+ */
+export function bindAutomationConsentAudit(
+  db: SqlDatabase,
+  input: {
+    requestId: string;
+    actorUserId: string;
+    automationId: string;
+    ownerUserId: string | null;
+    from: number | null;
+    to: number | null;
+    now?: number;
+  }
+): SqlStatement {
+  return bindAuthHomeAuditEvent(db, {
+    requestId: input.requestId,
+    actorUserId: input.actorUserId,
+    action: "auth_home.consent_changed",
+    resourceType: "automation",
+    resourceId: input.automationId,
+    targetUserId: input.ownerUserId,
+    before: { backgroundConsentAt: input.from },
+    requested: {},
+    after: { backgroundConsentAt: input.to },
+    metadata: { by: input.actorUserId, from: input.from, to: input.to, scope: "automation" },
     now: input.now,
   });
 }

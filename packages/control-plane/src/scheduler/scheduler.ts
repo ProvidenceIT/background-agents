@@ -115,6 +115,14 @@ import {
   type GitHubEnrichment,
 } from "../session/identity";
 import { resolveScmProviderFromEnv } from "../source-control/config";
+import { createSourceControlProviderFromEnv } from "../source-control";
+import {
+  authHomeRefusalMessage,
+  type AuthHomeRefusalReason,
+} from "@open-inspect/shared/types/auth-homes";
+import { applyAuthHomeToProviderAuth, bindSessionAuthHome } from "../auth-homes/session-binding";
+import { bindAuthHomeMountedAudit, bindUnattendedBlockedAudit } from "../auth-homes/audit";
+import { repositoriesArePrivate } from "../auth-homes/repo-visibility";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -301,6 +309,19 @@ interface StartInvocationParams {
    * `instructionsOverride` so admitted children cannot be stranded.
    */
   instructionsOverrideFactory?: () => Promise<string>;
+  /** The workspace user who authored the issue or pull request an event run acts on. */
+  workItemAuthorUserId?: string | null;
+}
+
+/** No auth home may serve the run; the run fails with the refusal, nothing is started. */
+export class AutomationAuthHomeRefusedError extends Error {
+  constructor(
+    readonly reason: AuthHomeRefusalReason,
+    provider: string
+  ) {
+    super(authHomeRefusalMessage(reason, provider));
+    this.name = "AutomationAuthHomeRefusedError";
+  }
 }
 
 interface ExecutionPrincipal {
@@ -733,7 +754,8 @@ export class Scheduler {
             authorization,
             target:
               targetSnapshot && "target" in targetSnapshot ? targetSnapshot.target : undefined,
-          }
+          },
+          params.workItemAuthorUserId ?? null
         );
         await this.sendPromptToSession(
           sessionId,
@@ -1150,6 +1172,11 @@ export class Scheduler {
   async event(event: AutomationEvent): Promise<SchedulerEventResult> {
     const store = new AutomationStore(this.db);
     if (event.source === "github") {
+      // The issue or pull request author is audited on the run, never its actor.
+      const workItemAuthorUserId = event.workItemAuthorScmUserId
+        ? ((await new UserStore(this.db).getIdentity("github", event.workItemAuthorScmUserId))
+            ?.userId ?? null)
+        : null;
       return admitGitHubEvent(
         this.db,
         event,
@@ -1157,6 +1184,7 @@ export class Scheduler {
           this.startInvocation(store, {
             automation,
             repositories,
+            workItemAuthorUserId,
             source: "event",
             triggerKey: event.triggerKey,
             concurrencyKey: event.concurrencyKey,
@@ -1822,7 +1850,8 @@ export class Scheduler {
     executionPrincipal: ExecutionPrincipal,
     /** The instant the run claimed this session — what its deadline measures from. */
     startedAt: number,
-    admission: LaunchAdmission
+    admission: LaunchAdmission,
+    workItemAuthorUserId: string | null = null
   ): Promise<void> {
     const ctx: RequestContext = {
       trace_id: `automation:${automation.id}`,
@@ -1891,6 +1920,36 @@ export class Scheduler {
       environmentId: target.environmentId,
     });
 
+    // The run is its owner's background activity: the home is resolved for
+    // the owner, gated by the owner's consent on this automation.
+    const triggerActorUserId = automation.user_id ?? executionPrincipal.platformUserId;
+    const authHome = await bindSessionAuthHome(this.db, {
+      actorUserId: triggerActorUserId,
+      model: automation.model,
+      triggerKind: "schedule",
+      repoPrivate: () =>
+        repositoriesArePrivate(createSourceControlProviderFromEnv(this.env), scopeMembers),
+      workItemAuthorUserId,
+      automationConsentAt: automation.background_consent_at ?? null,
+    });
+    if (authHome.kind === "refused") {
+      await bindUnattendedBlockedAudit({
+        db: this.db,
+        requestId: run.id,
+        actorUserId: triggerActorUserId,
+        principalUserId: null,
+        sessionId: null,
+        provider: authHome.provider,
+        triggerKind: "schedule",
+        reason: authHome.resolution.reason,
+        homeId: authHome.resolution.homeId,
+        homeOwnerUserId: authHome.resolution.homeOwnerUserId,
+        workItemAuthorUserId,
+        automationId: automation.id,
+      }).run();
+      throw new AutomationAuthHomeRefusedError(authHome.resolution.reason, authHome.provider);
+    }
+
     const sessionInput: SessionInitInput = {
       memory: resolvedPin(memorySelection),
       ownerTeamId: automation.owner_team_id,
@@ -1916,10 +1975,33 @@ export class Scheduler {
       automationId: automation.id,
       automationRunId: run.id,
       managedSkills: resolvedPin(managedSkillsManifest),
-      providerAuth,
+      providerAuth:
+        authHome.kind === "served"
+          ? applyAuthHomeToProviderAuth(providerAuth, authHome)
+          : providerAuth,
+      triggerActorUserId,
+      triggerKind: "schedule",
+      workItemAuthorUserId,
+      authHomeId: authHome.kind === "served" ? authHome.home.id : null,
+      authHomeSelection: authHome.kind === "served" ? authHome.resolution.kind : null,
     };
 
     await initializeSession(this.env, sessionInput, ctx);
+    if (authHome.kind === "served") {
+      await bindAuthHomeMountedAudit({
+        db: this.db,
+        requestId: run.id,
+        actorUserId: triggerActorUserId,
+        principalUserId: null,
+        sessionId,
+        provider: authHome.provider,
+        triggerKind: "schedule",
+        homeId: authHome.home.id,
+        homeOwnerUserId: authHome.resolution.homeOwnerUserId,
+        selection: authHome.resolution.kind,
+        workItemAuthorUserId,
+      }).run();
+    }
   }
 
   private async sendPromptToSession(

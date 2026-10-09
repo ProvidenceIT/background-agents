@@ -178,6 +178,7 @@ export const sampleRow = {
   event_type: null,
   trigger_config: null,
   trigger_auth_data: null,
+  background_consent_at: now,
 };
 
 /**

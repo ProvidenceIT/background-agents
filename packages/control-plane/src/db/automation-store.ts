@@ -668,6 +668,7 @@ export class AutomationStore {
       "event_type",
       "trigger_config",
       "trigger_auth_data",
+      "background_consent_at",
     ];
 
     for (const field of allowedFields) {

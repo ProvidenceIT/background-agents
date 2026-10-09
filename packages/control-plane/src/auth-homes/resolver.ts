@@ -95,7 +95,7 @@ async function loadSnapshot(db: SqlDatabase): Promise<RegistrySnapshot> {
  * API-key paths unchanged.
  */
 export async function authHomesInForce(db: SqlDatabase): Promise<boolean> {
-  const row = await db.prepare("SELECT 1 AS present FROM user_auth_homes LIMIT 1").first();
+  const row = await db.prepare("SELECT 1 AS present FROM user_auth_homes LIMIT 1").bind().first();
   return row !== null;
 }
 

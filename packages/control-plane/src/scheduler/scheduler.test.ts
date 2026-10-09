@@ -6,7 +6,7 @@
  * test/integration/automation-invocations.test.ts.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -19,6 +19,16 @@ import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import type { Team } from "@open-inspect/shared/types/teams";
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import type * as SessionAdmissionModule from "../authorization/session-admission";
+import type * as SessionBindingModule from "../auth-homes/session-binding";
+import type * as AuthHomeAuditModule from "../auth-homes/audit";
+import type * as GitHubEventAdmissionModule from "../automation/github-event-admission";
+import { DatabaseSync } from "node:sqlite";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { applyMigrations } from "../node/migrate";
+import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
+import { UserAuthHomeStore } from "../auth-homes/store";
+import type { AutomationRepositoryInsert } from "../db/automation-store";
 
 const mockSelectSessionMemory = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -118,6 +128,55 @@ vi.mock("../session/skill-resolution", () => ({
     skills: [],
   })),
 }));
+
+/**
+ * Auth-home reads and audit writes go to a real migrated database when a test
+ * provides one; every other test keeps the empty mock database, where no home
+ * is registered and the legacy paths apply.
+ */
+const authHomeDb = vi.hoisted(() => ({ current: null as SqlDatabase | null }));
+vi.mock("../auth-homes/session-binding", async (importOriginal) => {
+  const actual = await importOriginal<typeof SessionBindingModule>();
+  return {
+    ...actual,
+    bindSessionAuthHome: (
+      db: SqlDatabase,
+      input: Parameters<typeof actual.bindSessionAuthHome>[1]
+    ) => actual.bindSessionAuthHome(authHomeDb.current ?? db, input),
+  };
+});
+vi.mock("../auth-homes/audit", async (importOriginal) => {
+  const actual = await importOriginal<typeof AuthHomeAuditModule>();
+  return {
+    ...actual,
+    bindAuthHomeMountedAudit: (input: Parameters<typeof actual.bindAuthHomeMountedAudit>[0]) =>
+      actual.bindAuthHomeMountedAudit({ ...input, db: authHomeDb.current ?? input.db }),
+    bindUnattendedBlockedAudit: (input: Parameters<typeof actual.bindUnattendedBlockedAudit>[0]) =>
+      actual.bindUnattendedBlockedAudit({ ...input, db: authHomeDb.current ?? input.db }),
+  };
+});
+
+const githubAdmission = vi.hoisted(() => ({
+  automation: null as Record<string, unknown> | null,
+}));
+vi.mock("../automation/github-event-admission", async (importOriginal) => {
+  const actual = await importOriginal<typeof GitHubEventAdmissionModule>();
+  return {
+    ...actual,
+    admitGitHubEvent: (async (db, event, start, log) => {
+      if (!githubAdmission.automation) return actual.admitGitHubEvent(db, event, start, log);
+      await start(githubAdmission.automation as never, [
+        {
+          repo_owner: "acme",
+          repo_name: "web-app",
+          repo_id: 12345,
+          base_branch: "main",
+        } as AutomationRepositoryInsert,
+      ]);
+      return { triggered: 1, skipped: 0, invocationIds: [] };
+    }) as typeof actual.admitGitHubEvent,
+  };
+});
 
 const { resolveManagedSkills } = await import("../session/skill-resolution");
 const { AutomationExecutionUnauthorizedError, EXECUTION_DEADLINE_GRACE_MS, Scheduler } =
@@ -4082,6 +4141,135 @@ describe("Scheduler", () => {
       expect((await getInitBody(vi.mocked(stub.fetch))).repositories).toEqual([
         { repoOwner: "acme", repoName: "web-app", repoId: 12345, baseBranch: "main" },
         { repoOwner: "acme", repoName: "api", repoId: 67890, baseBranch: "edited-after-admission" },
+      ]);
+    });
+  });
+  describe("auth homes", () => {
+    let authSqlite: NodeSqlDatabase;
+    const OWNER = "user-1";
+    const COLLEAGUE = "user-colleague";
+
+    beforeEach(async () => {
+      const sqlite = new DatabaseSync(":memory:");
+      applyMigrations(
+        sqlite,
+        resolve(dirname(fileURLToPath(import.meta.url)), "../../../../terraform/d1/migrations")
+      );
+      authSqlite = createNodeSqlDatabase(sqlite);
+      authHomeDb.current = authSqlite;
+      await new UserAuthHomeStore(authSqlite).register({
+        id: "H1",
+        ownerUserIds: [OWNER],
+        pvcName: "sf-home-owner",
+        nodeName: "agent.dokman.io",
+        providers: ["anthropic", "openai"],
+        backgroundConsentAt: now,
+      });
+      mockCheckRepositoryAccess.mockResolvedValue({
+        repoId: 12345,
+        repoOwner: "acme",
+        repoName: "web-app",
+        defaultBranch: "main",
+        isPrivate: true,
+      });
+    });
+    afterEach(() => {
+      authHomeDb.current = null;
+      githubAdmission.automation = null;
+      authSqlite.close();
+    });
+
+    async function auditRows(action: string) {
+      const rows = await authSqlite
+        .prepare(
+          `SELECT principal_kind, actor_service_snapshot, metadata_json
+           FROM authorization_audit_events WHERE action = ?`
+        )
+        .bind(action)
+        .all<{ principal_kind: string; actor_service_snapshot: string; metadata_json: string }>();
+      return rows.results.map((row) => ({
+        principal: row.principal_kind,
+        service: row.actor_service_snapshot,
+        metadata: JSON.parse(row.metadata_json),
+      }));
+    }
+
+    it("refuses a Codex run whose automation consent was withdrawn, and audits it", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([
+        { ...sampleAutomation, model: "openai/gpt-5.5", background_consent_at: null },
+      ]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+
+      await createScheduler().tick();
+
+      expect(mockSessionStoreCreate).not.toHaveBeenCalled();
+      expect(mockStore.updateRun).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          status: "failed",
+          failure_reason: expect.stringContaining("has not consented to background use"),
+        })
+      );
+      expect(await auditRows("credential.unattended_blocked")).toEqual([
+        {
+          principal: "service",
+          service: "control-plane",
+          metadata: expect.objectContaining({
+            reason: "no_consent",
+            trigger_kind: "schedule",
+            trigger_actor: OWNER,
+            automation_id: "auto-1",
+          }),
+        },
+      ]);
+    });
+
+    it("serves an owner's run on an issue a colleague authored and audits the author", async () => {
+      githubAdmission.automation = {
+        ...sampleAutomation,
+        trigger_type: "github_event",
+        event_type: "issues.labeled",
+        background_consent_at: now,
+      };
+      mockUserStoreGetIdentity.mockImplementation(async (provider: string, id: string) =>
+        provider === "github" && id === "101" ? { userId: COLLEAGUE } : null
+      );
+
+      await createScheduler().event({
+        source: "github",
+        eventType: "issues.labeled",
+        triggerKey: "issue:7:labeled",
+        concurrencyKey: "issue:7",
+        contextBlock: "Issue #7 was labeled",
+        meta: {},
+        repositoryId: 12345,
+        repoOwner: "acme",
+        repoName: "web-app",
+        actor: "owner-login",
+        workItemAuthorScmUserId: "101",
+      });
+
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          triggerActorUserId: OWNER,
+          triggerKind: "schedule",
+          workItemAuthorUserId: COLLEAGUE,
+          authHomeId: "H1",
+          authHomeSelection: "own",
+        })
+      );
+      expect(await auditRows("credential.auth_home_mounted")).toEqual([
+        {
+          principal: "service",
+          service: "control-plane",
+          metadata: expect.objectContaining({
+            owner: OWNER,
+            trigger_actor: OWNER,
+            trigger_kind: "schedule",
+            work_item_author: COLLEAGUE,
+            provider: "anthropic",
+          }),
+        },
       ]);
     });
   });
