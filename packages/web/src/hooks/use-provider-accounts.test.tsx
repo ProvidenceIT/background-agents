@@ -49,6 +49,7 @@ const account = {
   displayName: "Primary",
   externalAccountId: "external-1",
   status: "active" as const,
+  ownerUserId: "user-1",
   createdBy: null,
   updatedBy: null,
   lastVerifiedAt: null,
