@@ -104,6 +104,52 @@ describe("ModelReasoningSelector", () => {
     expect(onHarnessChange).toHaveBeenCalledWith("opencode");
   });
 
+  it("offers all three agents, Codex marked as OpenAI's", async () => {
+    const onHarnessChange = vi.fn();
+    render(
+      <ModelReasoningSelector
+        selectedModel="openai/gpt-6-sol"
+        reasoningEffort={undefined}
+        items={items}
+        onModelChange={vi.fn()}
+        onReasoningEffortChange={vi.fn()}
+        harness="codex"
+        onHarnessChange={onHarnessChange}
+      />
+    );
+
+    const trigger = screen.getByRole("button", { name: /^Agent, model and effort: Codex,/ });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    const agentMenu = await screen.findByRole("menuitem", { name: /^agent/i });
+    agentMenu.focus();
+    fireEvent.keyDown(agentMenu, { key: "ArrowRight" });
+    await screen.findByRole("menuitemradio", { name: "Codex" });
+
+    const labels = screen
+      .getAllByRole("menuitemradio")
+      .map((item) => item.querySelector(".truncate")?.textContent);
+    expect(labels).toEqual(["OpenCode", "Claude Agent", "Codex"]);
+    const codex = screen.getByRole("menuitemradio", { name: "Codex" });
+    expect(codex.querySelector("svg title")).toHaveTextContent("OpenAI");
+  });
+
+  it("shows why a session waits next to the trigger", () => {
+    render(
+      <ModelReasoningSelector
+        selectedModel="openai/gpt-6-sol"
+        reasoningEffort={undefined}
+        items={items}
+        onModelChange={vi.fn()}
+        onReasoningEffortChange={vi.fn()}
+        harness="codex"
+        notice="Waiting for your Codex seat (position 1)."
+      />
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Waiting for your Codex seat (position 1)."
+    );
+  });
+
   it("keeps the agent prefix but offers no Agent row once the harness is fixed", async () => {
     render(
       <ModelReasoningSelector

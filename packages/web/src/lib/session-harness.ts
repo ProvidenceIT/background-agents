@@ -8,6 +8,17 @@ import {
 import type { ModelCategory, ReasoningEffort, ValidModel } from "@open-inspect/shared/models";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 
+/**
+ * The enabled models a harness can run: Codex only OpenAI's (served from a
+ * subscription home), the Claude harness only Anthropic's, OpenCode all.
+ */
+export function modelsForHarness<T extends string>(
+  harness: HarnessId,
+  enabledModels: readonly T[]
+): T[] {
+  return filterModelsForHarness(harness, enabledModels);
+}
+
 /** Model picker groups reduced to the models the harness can run. */
 export function filterModelOptionsForHarness(
   harness: HarnessId,

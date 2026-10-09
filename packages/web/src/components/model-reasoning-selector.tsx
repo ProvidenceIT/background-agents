@@ -42,6 +42,8 @@ type ModelReasoningSelectorProps = {
   /** Adds an Agent row to the menu; leave unset once the session's harness is fixed. */
   onHarnessChange?: (harness: HarnessId) => void;
   disabled?: boolean;
+  /** Why the session is not running yet, such as "Waiting for your Codex seat". */
+  notice?: string | null;
 };
 
 const DEFAULT_EFFORT_VALUE = "__default__";
@@ -59,6 +61,7 @@ export function ModelReasoningSelector({
   harness,
   onHarnessChange,
   disabled = false,
+  notice = null,
 }: ModelReasoningSelectorProps) {
   const isMobile = useIsMobile();
   const [mobileView, setMobileView] = useState<"main" | "agent" | "model" | "effort">("main");
@@ -96,6 +99,11 @@ export function ModelReasoningSelector({
           <ChevronDownIcon className="size-3.5 shrink-0 text-secondary-foreground" />
         </button>
       </DropdownMenuTrigger>
+      {notice && (
+        <span role="status" className="min-w-0 truncate text-xs text-warning" title={notice}>
+          {notice}
+        </span>
+      )}
       <DropdownMenuContent
         side="top"
         align="start"

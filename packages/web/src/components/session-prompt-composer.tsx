@@ -5,6 +5,7 @@ import { PromptSkillTextarea } from "@/components/prompt-skill-autocomplete";
 import { ActionBar } from "@/components/action-bar";
 import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
 import { ModelReasoningSelector } from "@/components/model-reasoning-selector";
+import { codexSeatNotice, useCodexSeat } from "@/lib/codex-seat";
 import { PaperclipIcon, SendIcon, StopIcon } from "@/components/ui/icons";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
@@ -71,6 +72,7 @@ export function SessionPromptComposer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasContent = prompt.value.trim().length > 0 || attachments.items.length > 0;
   const sessionPromptable = isSessionPromptable(session.status);
+  const codexSeat = useCodexSeat(session.harness);
   const sendDisabled =
     !hasContent || prompt.draftLocked || prompt.sendBlocked || !sessionPromptable;
   // Keep the complete draft stable while its attachments upload and until
@@ -216,6 +218,7 @@ export function SessionPromptComposer({
                 onReasoningEffortChange={model.onReasoningEffortChange}
                 harness={session.harness}
                 disabled={prompt.draftLocked || !sessionPromptable}
+                notice={codexSeatNotice(codexSeat, session.id)}
               />
             </div>
 

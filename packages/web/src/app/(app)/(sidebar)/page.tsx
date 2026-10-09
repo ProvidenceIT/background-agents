@@ -1,5 +1,6 @@
 "use client";
 
+import { codexSeatNotice, useCodexSeat } from "@/lib/codex-seat";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { toast } from "sonner";
@@ -592,6 +593,7 @@ function HomeContent({
   ) => void;
   providerAccounts: ReturnType<typeof useProviderAccounts>;
 }) {
+  const codexSeat = useCodexSeat(harness);
   const { isOpen } = useSidebarContext();
   const { shortcuts, labels } = useKeyboardShortcuts();
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -755,6 +757,7 @@ function HomeContent({
                       harness={harness}
                       onHarnessChange={setHarness}
                       disabled={creating}
+                      notice={codexSeatNotice(codexSeat)}
                     />
 
                     <SessionSkillSelector
