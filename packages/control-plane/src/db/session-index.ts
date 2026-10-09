@@ -14,6 +14,7 @@ import {
 } from "@open-inspect/shared/session-list-query";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
+import type { AuthHomeSelection, TriggerKind } from "@open-inspect/shared/types/auth-homes";
 import { visibleSessionsPredicate, type SessionReadScope } from "./session-visibility";
 import { assertD1QueryParameterLimit, MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
@@ -110,6 +111,16 @@ export interface SessionEntry {
    * repo-launched/ad-hoc sessions. PR-12 renders it on the session list.
    */
   environmentId?: string | null;
+  /** The canonical user whose activity the session is; checked against its home every turn. */
+  triggerActorUserId?: string | null;
+  /** How the session started; `child` for spawned children, `schedule` for automation runs. */
+  triggerKind?: TriggerKind | null;
+  /** The workspace user who authored the issue or pull request a bot acted on (audited only). */
+  workItemAuthorUserId?: string | null;
+  /** The auth home the resolver chose at create; fixed for the session's life. */
+  authHomeId?: string | null;
+  /** Which resolver rule chose the home. */
+  authHomeSelection?: AuthHomeSelection | null;
   /**
    * Per-status PR counts from session_pull_requests; absent when the session
    * has no tracked PRs. Attached by list() for the global sidebar.
@@ -234,8 +245,8 @@ export class SessionIndexStore {
 
     const sessionStmt = this.db
       .prepare(
-        `INSERT INTO sessions (id, title, repo_owner, repo_name, harness, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at, owner_team_id, visibility)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sessions (id, title, repo_owner, repo_name, harness, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at, owner_team_id, visibility, trigger_actor_user_id, trigger_kind, work_item_author_user_id, auth_home_id, auth_home_selection)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -261,7 +272,12 @@ export class SessionIndexStore {
         session.createdAt,
         session.updatedAt,
         session.ownerTeamId,
-        session.visibility
+        session.visibility,
+        session.triggerActorUserId ?? null,
+        session.triggerKind ?? null,
+        session.workItemAuthorUserId ?? null,
+        session.authHomeId ?? null,
+        session.authHomeSelection ?? null
       );
 
     const repositoryStmts = (session.repositories ?? []).map((repo, position) =>

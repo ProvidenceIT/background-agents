@@ -150,6 +150,8 @@ export interface RepositoryAccessResult {
   repoName: string;
   /** Repository's default branch (e.g., "main") */
   defaultBranch: string;
+  /** Whether the repository is private; absent when the provider did not say. */
+  isPrivate?: boolean;
 }
 
 /**

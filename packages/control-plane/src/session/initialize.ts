@@ -3,6 +3,7 @@ import type { SessionMemorySelection } from "../memory/types";
 import type { Env } from "../types";
 import type { RequestContext } from "../routes/shared";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
+import type { AuthHomeSelection, TriggerKind } from "@open-inspect/shared/types/auth-homes";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
 import {
@@ -91,6 +92,16 @@ export interface SessionInitInput {
   managedSkills: Pinned<SessionSkillManifestInput>;
   /** Complete, immutable provider routing snapshot resolved by the caller. */
   providerAuth: SessionModelProviderAuthInput[];
+
+  // Trigger and auth home (all null on installations without auth homes)
+  /** The canonical user whose activity the session is. */
+  triggerActorUserId?: string | null;
+  triggerKind?: TriggerKind | null;
+  /** The workspace user who authored the issue or pull request a bot acted on. */
+  workItemAuthorUserId?: string | null;
+  /** The auth home the resolver bound the session to. */
+  authHomeId?: string | null;
+  authHomeSelection?: AuthHomeSelection | null;
 }
 
 /**
@@ -208,6 +219,11 @@ export async function initializeSession(
     memory: input.memory,
     managedSkills: input.managedSkills,
     providerAuth: input.providerAuth,
+    triggerActorUserId: input.triggerActorUserId ?? null,
+    triggerKind: input.triggerKind ?? null,
+    workItemAuthorUserId: input.workItemAuthorUserId ?? null,
+    authHomeId: input.authHomeId ?? null,
+    authHomeSelection: input.authHomeSelection ?? null,
   });
 
   // Step 2: runtime init

@@ -30,6 +30,14 @@ import { createSessionMemorySelector } from "../memory/session-memory-selector-f
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
+import {
+  applyAuthHomeToProviderAuth,
+  authHomeRefusalResponse,
+  bindSessionAuthHome,
+} from "../auth-homes/session-binding";
+import { bindAuthHomeMountedAudit, bindUnattendedBlockedAudit } from "../auth-homes/audit";
+import { repositoriesArePrivate } from "../auth-homes/repo-visibility";
+import { resolveSessionTrigger } from "../auth-homes/session-trigger";
 import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
 import { resolveCreationOwnerTeam, teamRequiredResponse } from "./team-ownership";
 import {
@@ -37,6 +45,7 @@ import {
   RepositoryPairValidationError,
 } from "@open-inspect/shared/types/repositories";
 import {
+  createRouteSourceControlProvider,
   error,
   json,
   resolveRepoOrError,
@@ -176,6 +185,10 @@ export async function handleCreateSession(
   const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
   if (resolution instanceof Response) return resolution;
   const resolvedUserId = resolution;
+  // The trigger actor is the admitted user (web login, Teams sender, GitHub
+  // sender); only bots name a trigger kind or a work-item author.
+  const trigger = await resolveSessionTrigger(ctx, userStore, body);
+  if (trigger instanceof Response) return trigger;
   const teamId = body.teamId ?? null;
   const team = await resolveCreationOwnerTeam(ctx, teamId);
   if (team instanceof Response) return team;
@@ -271,6 +284,32 @@ export async function handleCreateSession(
   );
   if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
 
+  const authHome = await bindSessionAuthHome(ctx.db, {
+    actorUserId: resolvedUserId,
+    model,
+    triggerKind: trigger.triggerKind,
+    repoPrivate: () => repositoriesArePrivate(createRouteSourceControlProvider(env), scopeMembers),
+    workItemAuthorUserId: trigger.workItemAuthorUserId,
+  });
+  if (authHome.kind === "refused") {
+    await bindUnattendedBlockedAudit({
+      db: ctx.db,
+      requestId: ctx.request_id,
+      actorUserId: resolvedUserId,
+      sessionId: null,
+      provider: authHome.provider,
+      triggerKind: trigger.triggerKind,
+      reason: authHome.resolution.reason,
+      homeId: authHome.resolution.homeId,
+      homeOwnerUserId: authHome.resolution.homeOwnerUserId,
+      workItemAuthorUserId: trigger.workItemAuthorUserId,
+    }).run();
+    return authHomeRefusalResponse(authHome.resolution.reason, authHome.provider);
+  }
+  if (authHome.kind === "served") {
+    providerAuth = applyAuthHomeToProviderAuth(providerAuth, authHome);
+  }
+
   let managedSkillsManifest;
   try {
     managedSkillsManifest = await resolveManagedSkills(
@@ -323,6 +362,11 @@ export async function handleCreateSession(
     spawnSource,
     managedSkills: resolvedPin(managedSkillsManifest),
     providerAuth,
+    triggerActorUserId: resolvedUserId,
+    triggerKind: trigger.triggerKind,
+    workItemAuthorUserId: trigger.workItemAuthorUserId,
+    authHomeId: authHome.kind === "served" ? authHome.home.id : null,
+    authHomeSelection: authHome.kind === "served" ? authHome.resolution.kind : null,
   };
 
   try {
@@ -334,6 +378,20 @@ export async function handleCreateSession(
       trace_id: ctx.trace_id,
     });
     return error("Failed to create session", 500);
+  }
+  if (authHome.kind === "served") {
+    await bindAuthHomeMountedAudit({
+      db: ctx.db,
+      requestId: ctx.request_id,
+      actorUserId: resolvedUserId,
+      sessionId,
+      provider: authHome.provider,
+      triggerKind: trigger.triggerKind,
+      homeId: authHome.home.id,
+      homeOwnerUserId: authHome.resolution.homeOwnerUserId,
+      selection: authHome.resolution.kind,
+      workItemAuthorUserId: trigger.workItemAuthorUserId,
+    }).run();
   }
 
   const result: CreateSessionResponse = {

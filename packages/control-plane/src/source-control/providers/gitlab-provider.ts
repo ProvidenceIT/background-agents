@@ -146,6 +146,7 @@ const gitlabRepositoryAccessSchema = z.object({
   path: z.string(),
   default_branch: z.string().optional(),
   archived: z.boolean(),
+  visibility: z.enum(["private", "internal", "public"]).optional(),
 });
 
 /** Wire shape of list-projects results, limited to fields displayed downstream. */
@@ -476,6 +477,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         repoOwner: data.namespace.full_path.toLowerCase(),
         repoName: data.path.toLowerCase(),
         defaultBranch: data.default_branch,
+        ...(data.visibility ? { isPrivate: data.visibility !== "public" } : {}),
       };
     } catch (error) {
       if (error instanceof SourceControlProviderError) {

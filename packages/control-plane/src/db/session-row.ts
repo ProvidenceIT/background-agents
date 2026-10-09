@@ -5,6 +5,7 @@ import {
 } from "@open-inspect/shared/harnesses";
 import { sessionStatusSchema, spawnSourceSchema } from "@open-inspect/shared/types/sessions";
 import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
+import { authHomeSelectionSchema, triggerKindSchema } from "@open-inspect/shared/types/auth-homes";
 import { z } from "zod";
 
 /** Persisted D1 session row shared by index and export readers. */
@@ -39,6 +40,11 @@ export const sessionRowSchema = z.object({
   cache_read_tokens: z.number(),
   cache_write_tokens: z.number(),
   environment_id: z.string().nullable(),
+  trigger_actor_user_id: z.string().nullable().optional(),
+  trigger_kind: triggerKindSchema.nullable().optional(),
+  work_item_author_user_id: z.string().nullable().optional(),
+  auth_home_id: z.string().nullable().optional(),
+  auth_home_selection: authHomeSelectionSchema.nullable().optional(),
   created_at: z.number(),
   updated_at: z.number(),
 });
@@ -82,6 +88,13 @@ export function toSessionFields(row: SessionRow) {
     cacheReadTokens: row.cache_read_tokens,
     cacheWriteTokens: row.cache_write_tokens,
     environmentId: row.environment_id,
+    // Trigger and auth-home fields are absent on rows that predate them or
+    // were never resolved, so existing projections keep their shape.
+    ...(row.trigger_actor_user_id ? { triggerActorUserId: row.trigger_actor_user_id } : {}),
+    ...(row.trigger_kind ? { triggerKind: row.trigger_kind } : {}),
+    ...(row.work_item_author_user_id ? { workItemAuthorUserId: row.work_item_author_user_id } : {}),
+    ...(row.auth_home_id ? { authHomeId: row.auth_home_id } : {}),
+    ...(row.auth_home_selection ? { authHomeSelection: row.auth_home_selection } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

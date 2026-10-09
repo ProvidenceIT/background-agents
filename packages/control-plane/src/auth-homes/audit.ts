@@ -1,4 +1,9 @@
 import type { AuditOperationAction } from "@open-inspect/shared/types/audit-events";
+import type {
+  AuthHomeRefusalReason,
+  AuthHomeSelection,
+  TriggerKind,
+} from "@open-inspect/shared/types/auth-homes";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 
 /** The audit vocabulary of subscription auth homes, in `AUDIT_OPERATION_ACTIONS`. */
@@ -71,4 +76,108 @@ export function bindAuthHomeAuditEvent(db: SqlDatabase, event: AuthHomeAuditEven
         ...(event.metadata ?? {}),
       })
     );
+}
+
+/** What a served or refused turn records about the home and the people involved. */
+interface CredentialAuditBase {
+  db: SqlDatabase;
+  requestId: string;
+  /** The trigger actor; null for a scheduler run with no linked owner. */
+  actorUserId: string | null;
+  sessionId: string | null;
+  provider: string;
+  triggerKind: TriggerKind;
+  now?: number;
+}
+
+/** `credential.auth_home_mounted`: a new session was bound to a home at create, spawn or run. */
+export function bindAuthHomeMountedAudit(
+  input: CredentialAuditBase & {
+    homeId: string;
+    homeOwnerUserId: string;
+    selection: AuthHomeSelection;
+    workItemAuthorUserId: string | null;
+  }
+): SqlStatement {
+  return bindAuthHomeAuditEvent(input.db, {
+    requestId: input.requestId,
+    actorUserId: input.actorUserId,
+    action: "credential.auth_home_mounted",
+    resourceType: "session",
+    resourceId: input.sessionId,
+    targetUserId: input.homeOwnerUserId,
+    metadata: {
+      session: input.sessionId,
+      home_id: input.homeId,
+      owner: input.homeOwnerUserId,
+      selection: input.selection,
+      trigger_kind: input.triggerKind,
+      trigger_actor: input.actorUserId,
+      work_item_author: input.workItemAuthorUserId,
+      provider: input.provider,
+    },
+    now: input.now,
+  });
+}
+
+/** `credential.auth_home_prompt`: a turn by `actorUserId` was served from the session's home. */
+export function bindAuthHomePromptAudit(
+  input: CredentialAuditBase & {
+    homeId: string;
+    homeOwnerUserId: string;
+    selection: AuthHomeSelection;
+    /** Which entry point admitted the turn. */
+    channel: "prompt" | "ws_token" | "sandbox_access";
+  }
+): SqlStatement {
+  return bindAuthHomeAuditEvent(input.db, {
+    requestId: input.requestId,
+    actorUserId: input.actorUserId,
+    action: "credential.auth_home_prompt",
+    resourceType: "session",
+    resourceId: input.sessionId,
+    targetUserId: input.homeOwnerUserId,
+    metadata: {
+      home_id: input.homeId,
+      home_owner: input.homeOwnerUserId,
+      actor: input.actorUserId,
+      selection: input.selection,
+      trigger_kind: input.triggerKind,
+      provider: input.provider,
+      channel: input.channel,
+    },
+    now: input.now,
+  });
+}
+
+/** `credential.unattended_blocked`: no home may serve a new session; nothing was started. */
+export function bindUnattendedBlockedAudit(
+  input: CredentialAuditBase & {
+    reason: AuthHomeRefusalReason;
+    homeId?: string;
+    homeOwnerUserId?: string;
+    workItemAuthorUserId?: string | null;
+    automationId?: string | null;
+  }
+): SqlStatement {
+  return bindAuthHomeAuditEvent(input.db, {
+    requestId: input.requestId,
+    actorUserId: input.actorUserId,
+    action: "credential.unattended_blocked",
+    resourceType: input.sessionId ? "session" : "auth_home",
+    resourceId: input.sessionId ?? input.homeId ?? null,
+    targetUserId: input.homeOwnerUserId ?? null,
+    operationResult: "denied",
+    metadata: {
+      reason: input.reason,
+      home_id: input.homeId ?? null,
+      home_owner: input.homeOwnerUserId ?? null,
+      trigger_kind: input.triggerKind,
+      trigger_actor: input.actorUserId,
+      work_item_author: input.workItemAuthorUserId ?? null,
+      automation_id: input.automationId ?? null,
+      provider: input.provider,
+    },
+    now: input.now,
+  });
 }

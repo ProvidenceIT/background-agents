@@ -688,6 +688,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         repoOwner: repo.owner.toLowerCase(),
         repoName: repo.name.toLowerCase(),
         defaultBranch: repo.defaultBranch,
+        isPrivate: repo.private,
       };
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
