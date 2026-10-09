@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
-import { fingerprintWebPrompt, SessionMessageQueue, type UsageQuotaGate } from "./message-queue";
+import {
+  fingerprintWebPrompt,
+  SessionMessageQueue,
+  type AuthHomeTurnGate,
+  type UsageQuotaGate,
+} from "./message-queue";
+import { AuthHomeTurnRefusedError } from "../auth-homes/session-binding";
 import { UsageQuotaExceededError } from "../authorization/usage-quotas";
 import { AttachmentClaimConflictError } from "./session-attachment-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
@@ -140,7 +146,8 @@ it("creates a canonical SHA-256 web prompt fingerprint", async () => {
 function buildQueue(
   mayDispatch: () => boolean = () => true,
   getSandboxPromptBlockReason: () => string | null = () => null,
-  usageQuotas: UsageQuotaGate = { admitPrompt: vi.fn(async () => undefined) }
+  usageQuotas: UsageQuotaGate = { admitPrompt: vi.fn(async () => undefined) },
+  authHomeTurns: AuthHomeTurnGate = { admitPrompt: vi.fn(async () => undefined) }
 ) {
   // Mutable so tests can pin that the deadline honors the value current at
   // dispatch time — the thunk exists because settings can be persisted after
@@ -307,12 +314,14 @@ function buildQueue(
     () => executionTimeoutMs,
     mayDispatch,
     getSandboxPromptBlockReason,
-    usageQuotas
+    usageQuotas,
+    authHomeTurns
   );
 
   return {
     queue,
     usageQuotas,
+    authHomeTurns,
     executionStop,
     repository,
     attachmentRepository,
@@ -2357,6 +2366,36 @@ describe("SessionMessageQueue", () => {
       });
 
       expect(admitPrompt).toHaveBeenCalledWith("alice");
+      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+      expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+    });
+
+    it("gates every socket prompt on the session's subscription home and enqueues nothing when refused", async () => {
+      const refusal = {
+        reason: "no_eligible_home" as const,
+        provider: "anthropic",
+        message: "There is no eligible subscription home for anthropic",
+      };
+      const admitPrompt = vi.fn(async () => {
+        throw new AuthHomeTurnRefusedError(refusal);
+      });
+      const h = buildQueue(undefined, undefined, undefined, { admitPrompt });
+      const ws = {} as WebSocket;
+
+      await h.queue.handlePromptMessage(ws, createClientInfo({ userId: "colleague" }), {
+        content: "Continue",
+        model: "anthropic/claude-sonnet-4-6",
+        clientRequestId: "req-1",
+      });
+
+      expect(admitPrompt).toHaveBeenCalledWith("colleague", "anthropic/claude-sonnet-4-6");
+      expect(h.wsManager.send).toHaveBeenCalledWith(ws, {
+        type: "error",
+        code: "AUTH_HOME_REFUSED",
+        message: refusal.message,
+        clientRequestId: "req-1",
+      });
+      expect(h.participantService.create).not.toHaveBeenCalled();
       expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
       expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
     });

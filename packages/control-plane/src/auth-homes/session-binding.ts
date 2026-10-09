@@ -115,6 +115,25 @@ export function authHomeRefusalResponse(reason: AuthHomeRefusalReason, provider:
   );
 }
 
+/** Which entry point admitted a later turn; recorded on `credential.auth_home_prompt`. */
+export type AuthHomeTurnChannel =
+  "prompt" | "ws_token" | "ws_prompt" | "sandbox_access" | "slack_steer";
+
+/** Why a later turn may not run on the session's home. */
+export interface AuthHomeTurnRefusal {
+  reason: AuthHomeRefusalReason;
+  provider: string;
+  message: string;
+}
+
+/** Thrown by a prompt path that cannot answer with an HTTP response (a WebSocket prompt). */
+export class AuthHomeTurnRefusedError extends Error {
+  constructor(readonly refusal: AuthHomeTurnRefusal) {
+    super(refusal.message);
+    this.name = "AuthHomeTurnRefusedError";
+  }
+}
+
 export interface AuthHomeTurnInput {
   db: SqlDatabase;
   requestId: string;
@@ -126,7 +145,11 @@ export interface AuthHomeTurnInput {
   triggerKind: TriggerKind;
   /** A model the turn switches to; the session's model otherwise. */
   model?: string | null;
-  channel: "prompt" | "ws_token" | "sandbox_access";
+  channel: AuthHomeTurnChannel;
+}
+
+function turnRefusal(reason: AuthHomeRefusalReason, provider: string): AuthHomeTurnRefusal {
+  return { reason, provider, message: authHomeRefusalMessage(reason, provider) };
 }
 
 /**
@@ -134,9 +157,12 @@ export interface AuthHomeTurnInput {
  * an actor eligible for that home under the current policy, and only on a
  * provider the home carries. Returns the refusal, or null to proceed (and
  * then records `credential.auth_home_prompt`). Sessions without a home are
- * not gated here.
+ * not gated here. Every path that adds a turn to a session runs it: the
+ * HTTP prompt route, a WebSocket prompt, a Slack thread steer.
  */
-export async function enforceAuthHomeTurn(input: AuthHomeTurnInput): Promise<Response | null> {
+export async function admitAuthHomeTurn(
+  input: AuthHomeTurnInput
+): Promise<AuthHomeTurnRefusal | null> {
   const session =
     input.session === undefined
       ? await new SessionIndexStore(input.db).get(input.sessionId)
@@ -147,7 +173,7 @@ export async function enforceAuthHomeTurn(input: AuthHomeTurnInput): Promise<Res
   const provider = providerForModel(input.model ?? session.model);
   const home = await new UserAuthHomeStore(input.db).getById(homeId);
   if (home && !(home.providers as readonly string[]).includes(provider)) {
-    return authHomeRefusalResponse("no_eligible_home", provider);
+    return turnRefusal("no_eligible_home", provider);
   }
   const resolution = await checkTurnEligibility({
     db: input.db,
@@ -162,7 +188,7 @@ export async function enforceAuthHomeTurn(input: AuthHomeTurnInput): Promise<Res
       channel: input.channel,
       request_id: input.requestId,
     });
-    return authHomeRefusalResponse(resolution.reason, provider);
+    return turnRefusal(resolution.reason, provider);
   }
   await bindAuthHomePromptAudit({
     db: input.db,
@@ -177,6 +203,12 @@ export async function enforceAuthHomeTurn(input: AuthHomeTurnInput): Promise<Res
     channel: input.channel,
   }).run();
   return null;
+}
+
+/** `admitAuthHomeTurn` for an HTTP route: the refusal as the response to send. */
+export async function enforceAuthHomeTurn(input: AuthHomeTurnInput): Promise<Response | null> {
+  const refusal = await admitAuthHomeTurn(input);
+  return refusal ? authHomeRefusalResponse(refusal.reason, refusal.provider) : null;
 }
 
 /** The trigger kind of a later turn, by who sends it: a person prompts, a bot relays. */

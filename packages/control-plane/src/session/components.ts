@@ -54,6 +54,7 @@ import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecyc
 import { SandboxAccess } from "../sandbox/lifecycle/sandbox-access";
 import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
 import { createSessionAuthHomeLookup } from "../auth-homes/sandbox-mount";
+import { admitAuthHomeTurn, AuthHomeTurnRefusedError } from "../auth-homes/session-binding";
 import { McpServerStore } from "../db/mcp-servers";
 import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
@@ -643,6 +644,22 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           sessionId,
           requestId: crypto.randomUUID(),
         });
+      },
+    },
+    {
+      admitPrompt: async (userId, model) => {
+        const sessionId = getPublicSessionId();
+        if (!sessionId) return;
+        const refusal = await admitAuthHomeTurn({
+          db,
+          requestId: crypto.randomUUID(),
+          sessionId,
+          actorUserId: userId,
+          triggerKind: "prompt",
+          model: model ?? null,
+          channel: "ws_prompt",
+        });
+        if (refusal) throw new AuthHomeTurnRefusedError(refusal);
       },
     }
   );

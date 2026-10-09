@@ -3,6 +3,7 @@ import {
   getValidHarnessOrDefault,
 } from "@open-inspect/shared/harnesses";
 import { UsageQuotaExceededError } from "../authorization/usage-quotas";
+import { AuthHomeTurnRefusedError } from "../auth-homes/session-binding";
 import { generateId, hashToken } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
@@ -161,6 +162,18 @@ export interface UsageQuotaGate {
 
 const NO_USAGE_QUOTA_GATE: UsageQuotaGate = { admitPrompt: async () => undefined };
 
+/**
+ * The per-turn subscription-home gate for a prompt that arrives over the
+ * session's own socket; throws `AuthHomeTurnRefusedError` to refuse. A
+ * socket outlives the policy it was minted under, so every prompt on it is
+ * checked again and audited, exactly like an HTTP prompt.
+ */
+export interface AuthHomeTurnGate {
+  admitPrompt(userId: string, model: string | undefined): Promise<void>;
+}
+
+const NO_AUTH_HOME_TURN_GATE: AuthHomeTurnGate = { admitPrompt: async () => undefined };
+
 /** The identity a participant's usage is metered under. */
 function meteredUserId(participant: Pick<ParticipantRow, "user_id" | "canonical_user_id">) {
   return participant.canonical_user_id ?? participant.user_id;
@@ -190,7 +203,8 @@ export class SessionMessageQueue {
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
     private readonly getSandboxPromptBlockReason: () => string | null,
-    private readonly usageQuotas: UsageQuotaGate = NO_USAGE_QUOTA_GATE
+    private readonly usageQuotas: UsageQuotaGate = NO_USAGE_QUOTA_GATE,
+    private readonly authHomeTurns: AuthHomeTurnGate = NO_AUTH_HOME_TURN_GATE
   ) {}
 
   async enqueueAutofix(
@@ -284,6 +298,7 @@ export class SessionMessageQueue {
     try {
       this.assertPromptableSession();
       this.assertSandboxAcceptingPrompts();
+      await this.authHomeTurns.admitPrompt(client.userId, data.model);
       let participant = this.participantRepository.getParticipantById(client.participantId);
       participant ??= this.participantService.getByUserId(client.userId);
       if (!participant) {
@@ -325,6 +340,15 @@ export class SessionMessageQueue {
         this.wsManager.send(ws, {
           type: "error",
           code: "SANDBOX_RECOVERY_REQUIRED",
+          message: error.message,
+          clientRequestId: data.clientRequestId,
+        });
+        return;
+      }
+      if (error instanceof AuthHomeTurnRefusedError) {
+        this.wsManager.send(ws, {
+          type: "error",
+          code: "AUTH_HOME_REFUSED",
           message: error.message,
           clientRequestId: data.clientRequestId,
         });

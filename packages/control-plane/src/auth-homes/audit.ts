@@ -136,7 +136,7 @@ export function bindAuthHomePromptAudit(
     homeOwnerUserId: string;
     selection: AuthHomeSelection;
     /** Which entry point admitted the turn. */
-    channel: "prompt" | "ws_token" | "sandbox_access";
+    channel: "prompt" | "ws_token" | "ws_prompt" | "sandbox_access" | "slack_steer";
   }
 ): SqlStatement {
   return bindAuthHomeAuditEvent(input.db, {
