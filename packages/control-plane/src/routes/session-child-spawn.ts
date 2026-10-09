@@ -294,6 +294,7 @@ export async function handleSpawnChild(
     actorUserId: triggerActorUserId,
     model,
     triggerKind: "child",
+    harness,
     repoPrivate: () =>
       repositoriesArePrivate(
         createRouteSourceControlProvider(env),

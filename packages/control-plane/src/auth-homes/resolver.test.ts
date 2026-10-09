@@ -252,6 +252,49 @@ describe("auth-home resolver", () => {
     });
   });
 
+  it("queues a Codex session for a busy home instead of refusing it, and only Codex", async () => {
+    await homes.register({
+      id: "HX",
+      ownerUserIds: [OWNER],
+      pvcName: "sf-home-codex-owner",
+      nodeName: "agent.dokman.io",
+      providers: ["openai"],
+      maxConcurrent: 1,
+      now: REGISTERED_AT,
+    });
+    await insertSession("s-busy", "HX", "active");
+    const forHarness = (harness: "codex" | "opencode") =>
+      resolveAuthHome({
+        db,
+        actorUserId: OWNER,
+        provider: "openai",
+        triggerKind: "prompt",
+        repoPrivate: true,
+        harness,
+      });
+
+    expect(await forHarness("codex")).toEqual({
+      kind: "own",
+      homeId: "HX",
+      homeOwnerUserId: OWNER,
+    });
+    expect(await forHarness("opencode")).toMatchObject({
+      kind: "refused",
+      reason: "auth_home_unavailable",
+    });
+    // The seat does not lift the other Codex gates.
+    expect(
+      await resolveAuthHome({
+        db,
+        actorUserId: OWNER,
+        provider: "openai",
+        triggerKind: "prompt",
+        repoPrivate: false,
+        harness: "codex",
+      })
+    ).toMatchObject({ kind: "refused", reason: "public_repo" });
+  });
+
   it("ignores disabled homes", async () => {
     await registerHouseholdHomes();
     await homes.update("H2", { status: "disabled" });

@@ -1,3 +1,4 @@
+import { CODEX_SEAT } from "@open-inspect/shared/types/auth-homes";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,7 +9,6 @@ import {
   AUTH_HOME_LEASE_EXPIRY_MS,
   AUTH_HOME_LEASE_QUEUE_STALE_MS,
   AuthHomeLeaseStore,
-  CODEX_SEAT,
   codexClaimName,
   type AuthHomeClaimFence,
   type AuthHomeClaimPod,

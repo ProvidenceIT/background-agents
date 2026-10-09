@@ -165,6 +165,45 @@ describe("POST /sessions with auth homes", () => {
     expect(runtimeInits).toEqual([sessionId]);
   });
 
+  it("creates a Codex session on the owner's home, bound to it for OpenAI", async () => {
+    await new UserAuthHomeStore(store).update("H1", {
+      providers: ["anthropic", "openai", "zai-coding-plan"],
+    });
+
+    const response = await post(OWNER, { model: "openai/gpt-6-sol", harness: "codex" });
+
+    expect(response.status).toBe(201);
+    const auth = await store
+      .prepare(
+        "SELECT auth_mode FROM session_model_provider_auth WHERE provider = 'openai' AND session_id = (SELECT id FROM sessions)"
+      )
+      .first<{ auth_mode: string }>();
+    expect(auth).toEqual({ auth_mode: "auth_home" });
+    expect(await store.prepare("SELECT harness, auth_home_id FROM sessions").first()).toEqual({
+      harness: "codex",
+      auth_home_id: "H1",
+    });
+  });
+
+  it("refuses a Codex session whose home does not carry OpenAI, before anything is created", async () => {
+    const response = await post(OWNER, { model: "openai/gpt-6-sol", harness: "codex" });
+
+    expect(response.status).toBe(403);
+    expect(await sessionCount()).toBe(0);
+  });
+
+  it("refuses a Codex session with no home in force: there is no key to run it on", async () => {
+    await new UserAuthHomeStore(store).remove("H1");
+
+    const response = await post(OWNER, { model: "openai/gpt-6-sol", harness: "codex" });
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toBe(
+      "The Codex harness runs openai only on a subscription home; enrol one under Settings > Subscription homes."
+    );
+    expect(await sessionCount()).toBe(0);
+  });
+
   it("refuses an unenrolled user with no_eligible_home and creates nothing", async () => {
     const response = await post(UNENROLLED, { model: MODEL, harness: "claude" });
     expect(response.status).toBe(403);

@@ -277,19 +277,13 @@ export async function handleCreateSession(
     if (e instanceof ProviderAccountSelectionPolicyError) return error(e.message, e.status);
     throw e;
   }
-  const harnessAuthIncompatibility = checkHarnessCompatibility(
-    harness,
-    model,
-    Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
-  );
-  if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
-
   const authHome = await bindSessionAuthHome(ctx.db, {
     actorUserId: resolvedUserId,
     model,
     triggerKind: trigger.triggerKind,
     repoPrivate: () => repositoriesArePrivate(createRouteSourceControlProvider(env), scopeMembers),
     workItemAuthorUserId: trigger.workItemAuthorUserId,
+    harness,
   });
   if (authHome.kind === "refused") {
     await bindUnattendedBlockedAudit({
@@ -309,6 +303,15 @@ export async function handleCreateSession(
   if (authHome.kind === "served") {
     providerAuth = applyAuthHomeToProviderAuth(providerAuth, authHome);
   }
+  // Checked against the auth the session will actually run on: a home the
+  // resolver bound replaces the installation's mode for the providers it
+  // carries, and Codex runs OpenAI on nothing else.
+  const harnessAuthIncompatibility = checkHarnessCompatibility(
+    harness,
+    model,
+    Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
+  );
+  if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
 
   let managedSkillsManifest;
   try {

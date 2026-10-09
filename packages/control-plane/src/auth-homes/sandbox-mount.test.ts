@@ -32,12 +32,12 @@ describe("createSessionAuthHomeLookup", () => {
   });
   afterEach(() => db.close());
 
-  async function session(id: string, authHomeId: string | null) {
+  async function session(id: string, authHomeId: string | null, harness = "opencode") {
     await db
       .prepare(
-        "INSERT INTO sessions (id, user_id, auth_home_id, created_at, updated_at) VALUES (?, 'u2', ?, 1, 1)"
+        "INSERT INTO sessions (id, user_id, auth_home_id, harness, created_at, updated_at) VALUES (?, 'u2', ?, ?, 1, 1)"
       )
-      .bind(id, authHomeId)
+      .bind(id, authHomeId, harness)
       .run();
   }
 
@@ -47,6 +47,15 @@ describe("createSessionAuthHomeLookup", () => {
       pvcName: "sf-home-bram",
       ownerUserId: "u1",
       providers: ["anthropic", "openai"],
+    });
+  });
+
+  it("mounts the home's Codex claim, carrying only the Codex login, for a Codex session", async () => {
+    await session("s1", "ah_bram", "codex");
+    await expect(lookup.getForSession("s1")).resolves.toEqual({
+      pvcName: "sf-home-bram-codex",
+      ownerUserId: "u1",
+      providers: ["openai"],
     });
   });
 

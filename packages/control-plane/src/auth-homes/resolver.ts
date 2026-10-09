@@ -1,5 +1,6 @@
 import {
   authHomeOwnerUserId,
+  CODEX_SEAT,
   AUTH_HOME_SELECTION_SOURCES,
   type AuthHome,
   type AuthHomeRefusalReason,
@@ -8,6 +9,7 @@ import {
   type SubscriptionSharingPolicy,
   type TriggerKind,
 } from "@open-inspect/shared/types/auth-homes";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { SqlDatabase } from "../db/sql-database";
 import { SubscriptionSharingStore, UserAuthHomeStore } from "./store";
 
@@ -24,7 +26,8 @@ import { SubscriptionSharingStore, UserAuthHomeStore } from "./store";
  * Gates inside the chosen home: the trigger kind must be enabled; OpenAI (the
  * Codex path) serves private repositories only and needs background consent
  * (the home's, and the automation's on a scheduled run) for every kind but
- * `prompt`; a home already running `maxConcurrent` turns is unavailable.
+ * `prompt`; a home already running `maxConcurrent` turns is unavailable,
+ * except to a Codex session, which waits for the home's Codex seat instead.
  */
 
 /** The provider whose subscription is spent through Codex, with its stricter gates. */
@@ -49,6 +52,12 @@ export interface ResolveAuthHomeInput {
    * undefined for turns that are not automation runs.
    */
   automationConsentAt?: number | null;
+  /**
+   * The session's harness. A Codex session is not refused for a busy home:
+   * it queues for the home's Codex seat at launch (`lease.ts`), which holds
+   * Codex to one running session per home whatever `maxConcurrent` says.
+   */
+  harness?: HarnessId | null;
 }
 
 /** The registry state one resolution reads; loaded once per call. */
@@ -123,7 +132,8 @@ function gateFailure(
       if (input.automationConsentAt === null) return "no_consent";
     }
   }
-  if (running >= home.maxConcurrent) return "auth_home_unavailable";
+  const seated = input.provider === CODEX_PROVIDER && input.harness === CODEX_SEAT;
+  if (!seated && running >= home.maxConcurrent) return "auth_home_unavailable";
   return null;
 }
 

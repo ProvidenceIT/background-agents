@@ -1,6 +1,7 @@
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { describe, expect, it, vi } from "vitest";
 import { SandboxRuntimeEventHandler } from "./runtime.handler";
+import type { SandboxEventContext } from "./context";
 
 type ReadyEvent = Extract<SandboxEvent, { type: "ready" }>;
 
@@ -67,5 +68,48 @@ describe("SandboxRuntimeEventHandler.handleReady with a mounted auth home", () =
     );
     await drain();
     expect(recordClaudeExpiry).not.toHaveBeenCalled();
+  });
+});
+
+function heartbeatHandler(onHeartbeat?: () => void) {
+  const sandboxRepository = { updateSandboxHeartbeat: vi.fn() };
+  const updateLastActivity = vi.fn();
+  const runtime = new SandboxRuntimeEventHandler(
+    {} as never,
+    sandboxRepository as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    vi.fn() as never,
+    updateLastActivity,
+    vi.fn(),
+    vi.fn(),
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    undefined,
+    onHeartbeat
+  );
+  return { runtime, sandboxRepository };
+}
+
+const heartbeatContext = { now: 1234, processingMessage: null } as unknown as SandboxEventContext;
+
+describe("SandboxRuntimeEventHandler.handleHeartbeat", () => {
+  it("records the heartbeat and tells the liveness observer", () => {
+    const onHeartbeat = vi.fn();
+    const { runtime, sandboxRepository } = heartbeatHandler(onHeartbeat);
+
+    runtime.handleHeartbeat(heartbeatContext);
+
+    expect(sandboxRepository.updateSandboxHeartbeat).toHaveBeenCalledWith(1234);
+    expect(onHeartbeat).toHaveBeenCalledOnce();
+  });
+
+  it("works without an observer", () => {
+    const { runtime, sandboxRepository } = heartbeatHandler();
+    runtime.handleHeartbeat(heartbeatContext);
+    expect(sandboxRepository.updateSandboxHeartbeat).toHaveBeenCalledWith(1234);
   });
 });

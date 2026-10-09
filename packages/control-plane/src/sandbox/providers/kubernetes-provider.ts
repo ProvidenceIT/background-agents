@@ -17,6 +17,7 @@
  * deny-all egress policy in its namespace.
  */
 
+import type { AuthHomeClaimFence } from "../../auth-homes/lease";
 import {
   DEFAULT_KUBERNETES_CPU_CORES,
   DEFAULT_KUBERNETES_CPU_LIMIT_CORES,
@@ -709,6 +710,31 @@ export class KubernetesSandboxProvider implements SandboxProvider {
       throw classifyKubernetesError(`Failed to list pods mounting ${pvcName}`, error);
     }
     return pods.filter((pod) => podMountsClaim(pod, pvcName));
+  }
+
+  /**
+   * The Codex seat's view of a home's claim: each pod mounting it, with the
+   * session its sandbox belongs to, and a uid-guarded delete.
+   */
+  authHomeClaimFence(): AuthHomeClaimFence {
+    return {
+      listPodsMountingClaim: async (claimName) =>
+        (await this.listPodsMountingClaim(claimName)).map((pod) => ({
+          name: pod.metadata.name,
+          uid: pod.metadata.uid,
+          sessionId: pod.metadata.annotations?.[ANNOTATIONS.sessionId] ?? null,
+          terminating: !!pod.metadata.deletionTimestamp,
+        })),
+      deletePod: async (pod) => {
+        try {
+          await this.api.deletePod(pod.name, { uid: pod.uid });
+        } catch (error) {
+          // The name now holds a pod the fence did not list; it lists again next poll.
+          if (error instanceof KubernetesConflictError) return;
+          throw classifyKubernetesError(`Failed to delete pod ${pod.name}`, error);
+        }
+      },
+    };
   }
 
   /** Delete the sandbox's pods (optionally only up to a generation); returns the names deleted. */

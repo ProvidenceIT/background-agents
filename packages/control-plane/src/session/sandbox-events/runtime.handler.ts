@@ -44,11 +44,14 @@ export class SandboxRuntimeEventHandler {
     private readonly log: Logger,
     private readonly lifecycle: SandboxReadiness,
     /** Store the Claude token expiry a mounted auth home reported; absent where no home exists. */
-    private readonly recordClaudeExpiry?: (expiresAt: number) => Promise<void>
+    private readonly recordClaudeExpiry?: (expiresAt: number) => Promise<void>,
+    /** Liveness consumers outside the session row, such as the Codex seat. */
+    private readonly onHeartbeat?: () => void
   ) {}
 
   handleHeartbeat(context: SandboxEventContext): void {
     this.sandboxRepository.updateSandboxHeartbeat(context.now);
+    this.onHeartbeat?.();
     // A quiet tool call may emit no events for longer than the inactivity
     // timeout. While its message is processing, the bridge heartbeat proves
     // the sandbox is still occupied and should renew its activity timestamp.

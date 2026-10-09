@@ -5,6 +5,7 @@
  * enabling unit testing and future provider support.
  */
 
+import type { AuthHomeClaimFence } from "../auth-homes/lease";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
@@ -702,6 +703,13 @@ export interface SandboxProvider {
    * Only available if `capabilities.supportsExplicitStop` is true.
    */
   stopSandbox?(config: StopConfig): Promise<StopResult>;
+
+  /**
+   * The pods mounting a subscription home's claim, and their deletion: what
+   * the Codex seat fences a silent holder with. Only a provider declaring
+   * `supportsAuthHomeMounts` offers it.
+   */
+  authHomeClaimFence?(): AuthHomeClaimFence;
 }
 
 /** Existing capability-based preserve-stop policy; resume support is checked separately at startup. */

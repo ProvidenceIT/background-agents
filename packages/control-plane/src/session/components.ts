@@ -169,6 +169,7 @@ import { SessionStatusService } from "./session-status-service";
 import { createSessionRuntimeClientForTrace } from "./runtime-client";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
+import { createCodexSeatGate } from "../auth-homes/codex-seat";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
 import { parseTeamsEnforcementMode, resolverDecides } from "../authorization/teams-enforcement";
 import {
@@ -329,9 +330,14 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const usageQuotas = new UsageQuotaService(db);
   const messenger: SessionMessenger = projectSandboxLiveness(new SessionMessengerImpl(wsManager), {
     sink: {
-      live: (sessionId) =>
-        usageQuotas.assertSandboxRunning(sessionId, Date.now() + getExecutionTimeoutMs()),
-      dead: (sessionId) => usageQuotas.releaseSandbox(sessionId),
+      live: async (sessionId) => {
+        await usageQuotas.assertSandboxRunning(sessionId, Date.now() + getExecutionTimeoutMs());
+        await codexSeat.heartbeat();
+      },
+      dead: async (sessionId) => {
+        await usageQuotas.releaseSandbox(sessionId);
+        await codexSeat.release();
+      },
     },
     getSessionId: getPublicSessionId,
     backgroundTasks,
@@ -499,6 +505,18 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // Tier 5: access precedes shutdown and the lifecycle manager, so retirement has no manager cycle.
   const sandboxBackend = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
   const sandboxProvider = createSandboxProviderFromEnv(env, sandboxBackend);
+  // One running Codex session per subscription home: the seat is taken
+  // before a launch, renewed by the sandbox's heartbeats and given up when
+  // the sandbox stops (auth-homes/lease.ts).
+  const codexSeat = createCodexSeatGate({
+    db,
+    getSessionId: getPublicSessionId,
+    getHarness: () => sessionCoreRepository.getSession()?.harness,
+    provider: sandboxProvider,
+    scheduleRetry: (at) => alarmScheduler.schedule(at),
+    driveQueue: () => messageQueue.processMessageQueue(),
+    log,
+  });
   const lifecycleSockets = new LifecycleSocketAdapter(wsManager);
   const accessLog = createSessionScopedLogger(
     createLogger("lifecycle-manager"),
@@ -562,6 +580,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       recordSessionWarning(eventRepository, messenger, message, eventId),
     resumeQueuedWork: () => messageQueue.processMessageQueue(),
     admitLaunch: async () => {
+      // The seat first: a session waiting for it must not hold a running-sandbox slot.
+      const seat = await codexSeat.admit();
+      if (!seat.admitted) return seat;
       const sessionId = getPublicSessionId();
       const ownership = await usageQuotas.sessionOwnership(sessionId);
       const admission = await usageQuotas.admitSandboxLaunch({
@@ -569,9 +590,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         ...ownership,
         expiresAt: Date.now() + getExecutionTimeoutMs(),
       });
-      return admission.admitted
-        ? admission
-        : { admitted: false, reason: describeSandboxCapRefusal(admission) };
+      if (admission.admitted) return admission;
+      await codexSeat.release();
+      return { admitted: false, reason: describeSandboxCapRefusal(admission) };
     },
   });
   const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
@@ -715,7 +736,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     lifecycleManager,
     async (expiresAt) => {
       await new UserAuthHomeStore(db).recordClaudeExpiryForSession(getPublicSessionId(), expiresAt);
-    }
+    },
+    () =>
+      backgroundTasks.submit(
+        () => codexSeat.heartbeat(sandboxRepository.getSandbox()?.modal_object_id ?? null),
+        { name: "auth_home.seat_heartbeat", context: {} }
+      )
   );
   const pushService = new SandboxPushService(log, wsManager, () =>
     lifecycleManager.pushAdmissionDecision()
@@ -1104,6 +1130,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         async () => {
           await wsManager.expireAuthorizationLeases(Date.now());
           await alarmHandler.handle();
+          await codexSeat.poll();
         },
         () => alarmScheduler.rearmPending()
       ),

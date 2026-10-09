@@ -7,6 +7,7 @@ import {
   type AuthHomeResolution,
   type TriggerKind,
 } from "@open-inspect/shared/types/auth-homes";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import { SessionIndexStore, type SessionEntry } from "../db/session-index";
@@ -45,6 +46,8 @@ export interface BindSessionAuthHomeInput {
   repoPrivate: () => Promise<boolean | null>;
   workItemAuthorUserId?: string | null;
   automationConsentAt?: number | null;
+  /** The session's harness; Codex queues for a busy home rather than being refused. */
+  harness?: HarnessId;
 }
 
 /** The provider id a model spends, as the registry names it. */
@@ -67,6 +70,7 @@ export async function bindSessionAuthHome(
     repoPrivate: provider === PRIVATE_REPO_PROVIDER ? await input.repoPrivate() : null,
     workItemAuthorUserId: input.workItemAuthorUserId,
     automationConsentAt: input.automationConsentAt,
+    harness: input.harness,
   });
   if (resolution.kind === "refused") return { kind: "refused", provider, resolution };
   const home = await new UserAuthHomeStore(db).getById(resolution.homeId);

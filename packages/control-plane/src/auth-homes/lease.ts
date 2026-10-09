@@ -1,7 +1,9 @@
+import { CODEX_SEAT } from "@open-inspect/shared/types/auth-homes";
 import type { SqlDatabase } from "../db/sql-database";
 
 /**
- * The fenced Codex seat: one running Codex session per subscription home.
+ * The fenced Codex seat (`CODEX_SEAT`): one running Codex session per
+ * subscription home; `max_concurrent` for it is fixed at 1.
  *
  * Codex reads and refreshes the home's `auth.json` itself, and its refresh
  * token is single-use, so two sandboxes running Codex on one home would race
@@ -25,9 +27,6 @@ import type { SqlDatabase } from "../db/sql-database";
  * statement: a grant is an insert that does nothing on conflict, read back;
  * a takeover deletes the stale row only if it is still the row that was read.
  */
-
-/** The seat kind the lease serializes. `max_concurrent` for it is fixed at 1. */
-export const CODEX_SEAT = "codex";
 
 /** How often a holder's sandbox renews the seat. */
 export const AUTH_HOME_LEASE_HEARTBEAT_INTERVAL_MS = 60_000;

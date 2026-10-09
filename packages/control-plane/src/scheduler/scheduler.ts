@@ -1931,6 +1931,7 @@ export class Scheduler {
         repositoriesArePrivate(createSourceControlProviderFromEnv(this.env), scopeMembers),
       workItemAuthorUserId,
       automationConsentAt: automation.background_consent_at ?? null,
+      harness: getValidHarnessOrDefault(automation.harness),
     });
     if (authHome.kind === "refused") {
       await bindUnattendedBlockedAudit({

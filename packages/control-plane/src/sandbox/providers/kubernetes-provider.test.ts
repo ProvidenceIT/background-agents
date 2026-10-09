@@ -1022,6 +1022,31 @@ describe("subscription auth homes", () => {
     expect(afterStop.map((pod) => !!pod.metadata.deletionTimestamp).sort()).toEqual([false, true]);
   });
 
+  it("fences a Codex claim: lists its pods by session and deletes them uid-guarded", async () => {
+    const { api, provider } = setup();
+    api.seedPvc("sf-home-bram-codex", { phase: "Bound" });
+    const codexHome = { ...authHome, pvcName: "sf-home-bram-codex", providers: ["openai"] };
+    await provider.createSandbox({
+      ...baseCreateConfig,
+      sessionId: "sess-codex",
+      authHome: codexHome,
+    });
+    await provider.createSandbox({ ...baseCreateConfig, sessionId: "sess-other" });
+    const fence = provider.authHomeClaimFence();
+
+    const [pod, ...others] = await fence.listPodsMountingClaim("sf-home-bram-codex");
+    expect(others).toEqual([]);
+    expect(pod).toMatchObject({ sessionId: "sess-codex", terminating: false });
+    expect(pod!.uid).toBeTruthy();
+
+    api.podsLinger = true;
+    await fence.deletePod(pod!);
+    expect(api.deletePod).toHaveBeenCalledWith(pod!.name, { uid: pod!.uid });
+    expect(await fence.listPodsMountingClaim("sf-home-bram-codex")).toMatchObject([
+      { name: pod!.name, terminating: true },
+    ]);
+  });
+
   it("the egress preflight does not skip a policy that selects pods by their home", () => {
     const [deny] = defaultNetworkPolicies();
     const byHome = {
