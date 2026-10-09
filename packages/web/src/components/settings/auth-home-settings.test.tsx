@@ -36,7 +36,7 @@ function homeFixture(overrides: Partial<AuthHome> = {}): AuthHome {
     id: "ah_1",
     ownerUserIds: ["user-owner"],
     pvcName: "sf-home-bram",
-    nodeName: "agent.dokman.io",
+    nodeName: "sandbox-node-1",
     providers: ["anthropic", "openai"],
     kindsEnabled: ["prompt", "child", "mention", "issue_label", "pr_event", "schedule"],
     backgroundConsentAt: null,
@@ -184,7 +184,7 @@ describe("AuthHomeSettings", () => {
           path: "/api/me/auth-home",
           body: {
             pvcName: "sf-home-bram",
-            nodeName: "agent.dokman.io",
+            nodeName: "sandbox-node-1",
             providers: ["anthropic", "openai"],
             kindsEnabled: ["prompt", "child", "mention", "issue_label", "pr_event", "schedule"],
             backgroundConsent: false,

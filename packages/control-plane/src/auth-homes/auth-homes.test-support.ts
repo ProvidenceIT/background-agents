@@ -37,7 +37,7 @@ export async function seedHousehold(db: SqlDatabase): Promise<HouseholdFixture> 
     id: HOUSEHOLD.homeId,
     ownerUserIds: [HOUSEHOLD.owner],
     pvcName: "sf-home-owner",
-    nodeName: "agent.dokman.io",
+    nodeName: "sandbox-node-1",
     providers: ["anthropic", "zai-coding-plan"],
     shared: true,
     sharingConsentAt: 1,
@@ -47,7 +47,7 @@ export async function seedHousehold(db: SqlDatabase): Promise<HouseholdFixture> 
     id: "H2",
     ownerUserIds: [HOUSEHOLD.colleague],
     pvcName: "sf-home-colleague",
-    nodeName: "agent.dokman.io",
+    nodeName: "sandbox-node-1",
     providers: ["zai-coding-plan"],
     now: 2,
   });

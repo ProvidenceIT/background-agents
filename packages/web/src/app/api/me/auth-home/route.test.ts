@@ -10,7 +10,7 @@ import { DELETE, GET, PUT } from "./route";
 const params = { params: Promise.resolve(undefined) };
 const registration = {
   pvcName: "sf-home-bram",
-  nodeName: "agent.dokman.io",
+  nodeName: "sandbox-node-1",
   providers: ["anthropic", "openai"],
   kindsEnabled: ["prompt", "mention"],
   backgroundConsent: true,

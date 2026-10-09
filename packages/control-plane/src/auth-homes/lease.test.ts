@@ -74,7 +74,7 @@ describe("AuthHomeLeaseStore (the fenced Codex seat)", () => {
       id: H1,
       ownerUserIds: ["user-bram"],
       pvcName: "sf-home-bram",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["openai"],
       now,
     });

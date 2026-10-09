@@ -4161,7 +4161,7 @@ describe("Scheduler", () => {
         id: "H1",
         ownerUserIds: [OWNER],
         pvcName: "sf-home-owner",
-        nodeName: "agent.dokman.io",
+        nodeName: "sandbox-node-1",
         providers: ["anthropic", "openai"],
         backgroundConsentAt: now,
       });

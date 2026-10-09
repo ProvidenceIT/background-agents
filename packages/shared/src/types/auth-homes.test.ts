@@ -21,7 +21,7 @@ const home = {
   id: "ah_0123456789abcdef0123456789abcdef",
   ownerUserIds: ["user-1", "user-1-merged"],
   pvcName: "sf-home-bram",
-  nodeName: "agent.dokman.io",
+  nodeName: "sandbox-node-1",
   providers: ["anthropic", "openai"],
   kindsEnabled: [...TRIGGER_KINDS],
   backgroundConsentAt: 1_700_000_000_000,
@@ -113,12 +113,12 @@ describe("putAuthHomeRequestSchema", () => {
     expect(
       putAuthHomeRequestSchema.parse({
         pvcName: "sf-home-bram",
-        nodeName: "agent.dokman.io",
+        nodeName: "sandbox-node-1",
         providers: ["anthropic"],
       })
     ).toEqual({
       pvcName: "sf-home-bram",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["anthropic"],
       kindsEnabled: [...TRIGGER_KINDS],
       backgroundConsent: false,
@@ -129,7 +129,7 @@ describe("putAuthHomeRequestSchema", () => {
     expect(
       putAuthHomeRequestSchema.safeParse({
         pvcName: "sf-home-bram",
-        nodeName: "agent.dokman.io",
+        nodeName: "sandbox-node-1",
         providers: ["anthropic"],
         ownerUserIds: ["someone-else"],
       }).success

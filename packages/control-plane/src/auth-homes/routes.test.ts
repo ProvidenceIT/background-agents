@@ -103,7 +103,7 @@ describe("auth-home routes", () => {
 
   const registration = {
     pvcName: "sf-home-u1",
-    nodeName: "agent.dokman.io",
+    nodeName: "sandbox-node-1",
     providers: ["anthropic", "openai"],
   };
 
@@ -116,7 +116,7 @@ describe("auth-home routes", () => {
       id: expect.stringMatching(/^ah_[0-9a-f]{32}$/),
       ownerUserIds: ["U1"],
       pvcName: "sf-home-u1",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["anthropic", "openai"],
       kindsEnabled: ["prompt", "child", "mention", "issue_label", "pr_event", "schedule"],
       backgroundConsentAt: null,
@@ -290,7 +290,7 @@ describe("auth-home routes", () => {
     vi.setSystemTime(FIXED_NOW + 1);
     await call("member", "PUT", "/me/auth-home", {
       pvcName: "sf-home-u2",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["anthropic"],
     });
 

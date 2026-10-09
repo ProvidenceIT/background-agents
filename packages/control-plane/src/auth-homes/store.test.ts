@@ -28,7 +28,7 @@ describe("UserAuthHomeStore", () => {
       id: "H1",
       ownerUserIds: ["U1a", "U1b"],
       pvcName: "sf-home-u1",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["anthropic", "openai"],
       backgroundConsentAt: FIXED_NOW,
       now: FIXED_NOW,
@@ -37,7 +37,7 @@ describe("UserAuthHomeStore", () => {
       id: "H1",
       ownerUserIds: ["U1a", "U1b"],
       pvcName: "sf-home-u1",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["anthropic", "openai"],
       kindsEnabled: ["prompt", "child", "mention", "issue_label", "pr_event", "schedule"],
       backgroundConsentAt: FIXED_NOW,
@@ -54,7 +54,7 @@ describe("UserAuthHomeStore", () => {
       id: "H2",
       ownerUserIds: ["U2"],
       pvcName: "sf-home-u2",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["anthropic"],
       shared: false,
       now: FIXED_NOW + 1,
@@ -77,7 +77,7 @@ describe("UserAuthHomeStore", () => {
       id: "H1",
       ownerUserIds: ["U1"],
       pvcName: "sf-home-u1",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["anthropic"],
       now: FIXED_NOW,
     });
@@ -116,7 +116,7 @@ describe("UserAuthHomeStore", () => {
       store.register({
         ownerUserIds: ["U1"],
         pvcName: "sf-home-u1",
-        nodeName: "agent.dokman.io",
+        nodeName: "sandbox-node-1",
         providers: ["anthropic"],
         shared: true,
       })
@@ -125,14 +125,14 @@ describe("UserAuthHomeStore", () => {
       store.register({
         ownerUserIds: ["U1"],
         pvcName: "workspace-u1",
-        nodeName: "agent.dokman.io",
+        nodeName: "sandbox-node-1",
         providers: ["anthropic"],
       })
     ).rejects.toThrow(/pvcName/);
     const home = await store.register({
       ownerUserIds: ["U1"],
       pvcName: "sf-home-u1",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["anthropic"],
     });
     expect(home.id).toMatch(/^ah_[0-9a-f]{32}$/);
@@ -140,7 +140,7 @@ describe("UserAuthHomeStore", () => {
       store.register({
         ownerUserIds: ["U2"],
         pvcName: "sf-home-u1",
-        nodeName: "agent.dokman.io",
+        nodeName: "sandbox-node-1",
         providers: ["anthropic"],
       })
     ).rejects.toThrow(/UNIQUE/);
@@ -202,7 +202,7 @@ describe("UserAuthHomeStore.recordClaudeExpiryForSession", () => {
       id: "H1",
       ownerUserIds: ["U1"],
       pvcName: "sf-home-u1",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["anthropic"],
       now: FIXED_NOW,
     });

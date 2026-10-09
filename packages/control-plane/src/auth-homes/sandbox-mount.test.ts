@@ -26,7 +26,7 @@ describe("createSessionAuthHomeLookup", () => {
       id: "ah_bram",
       ownerUserIds: ["u1", "u1-alt"],
       pvcName: "sf-home-bram",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["anthropic", "openai"],
     });
   });

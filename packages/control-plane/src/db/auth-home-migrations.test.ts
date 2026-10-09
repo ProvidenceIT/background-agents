@@ -124,18 +124,18 @@ describe("migrations 0089-0091 (subscription auth homes)", () => {
 
     db.exec(
       `INSERT INTO user_auth_homes (id, owner_user_ids, pvc_name, node_name, providers, kinds_enabled, shared, sharing_consent_at, registered_at, updated_at)
-       VALUES ('H1', '["u1"]', 'sf-home-u1', 'agent.dokman.io', '["anthropic"]', '["prompt"]', 1, 7, 7, 7)`
+       VALUES ('H1', '["u1"]', 'sf-home-u1', 'sandbox-node-1', '["anthropic"]', '["prompt"]', 1, 7, 7, 7)`
     );
     expect(() =>
       db.exec(
         `INSERT INTO user_auth_homes (id, owner_user_ids, pvc_name, node_name, providers, kinds_enabled, shared, registered_at, updated_at)
-         VALUES ('H2', '["u2"]', 'sf-home-u2', 'agent.dokman.io', '[]', '[]', 1, 7, 7)`
+         VALUES ('H2', '["u2"]', 'sf-home-u2', 'sandbox-node-1', '[]', '[]', 1, 7, 7)`
       )
     ).toThrow(/CHECK constraint failed/);
     expect(() =>
       db.exec(
         `INSERT INTO user_auth_homes (id, owner_user_ids, pvc_name, node_name, providers, kinds_enabled, registered_at, updated_at)
-         VALUES ('H3', '["u3"]', 'sf-home-u1', 'agent.dokman.io', '[]', '[]', 7, 7)`
+         VALUES ('H3', '["u3"]', 'sf-home-u1', 'sandbox-node-1', '[]', '[]', 7, 7)`
       )
     ).toThrow(/UNIQUE constraint failed/);
   });
@@ -150,7 +150,7 @@ describe("migration 0094 (auth-home token expiry and notices)", () => {
     applyThrough(db, "0091");
     db.exec(
       `INSERT INTO user_auth_homes (id, owner_user_ids, pvc_name, node_name, providers, kinds_enabled, registered_at, updated_at)
-       VALUES ('H1', '["u1"]', 'sf-home-u1', 'agent.dokman.io', '["anthropic"]', '["prompt"]', 7, 7)`
+       VALUES ('H1', '["u1"]', 'sf-home-u1', 'sandbox-node-1', '["anthropic"]', '["prompt"]', 7, 7)`
     );
   });
   afterEach(() => db.close());

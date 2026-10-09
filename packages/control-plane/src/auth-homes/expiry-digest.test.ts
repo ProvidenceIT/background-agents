@@ -76,7 +76,7 @@ describe("subscription-home notices", () => {
       id: "H1",
       ownerUserIds: ["U1"],
       pvcName: "sf-home-bram",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["anthropic"],
       shared: true,
       sharingConsentAt: 1,
@@ -225,7 +225,7 @@ describe("subscription-home notices", () => {
       },
     ]);
     const wire = JSON.stringify(sent);
-    for (const forbidden of ["sf-home-bram", "agent.dokman.io", TOKEN_PLACEHOLDER, "oauth"]) {
+    for (const forbidden of ["sf-home-bram", "sandbox-node-1", TOKEN_PLACEHOLDER, "oauth"]) {
       expect(wire).not.toContain(forbidden);
     }
   });
@@ -235,7 +235,7 @@ describe("subscription-home notices", () => {
       id: "H3",
       ownerUserIds: ["U3"],
       pvcName: "sf-home-author",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["anthropic"],
       claudeExpiresAt: WEDNESDAY + DAY_MS,
       now: Date.UTC(2026, 8, 1),

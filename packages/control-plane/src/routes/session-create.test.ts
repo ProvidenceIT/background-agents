@@ -61,7 +61,7 @@ describe("POST /sessions with auth homes", () => {
       id: "H1",
       ownerUserIds: [OWNER],
       pvcName: "sf-home-owner",
-      nodeName: "agent.dokman.io",
+      nodeName: "sandbox-node-1",
       providers: ["anthropic", "zai-coding-plan"],
       shared: true,
       sharingConsentAt: 1,
