@@ -7,7 +7,7 @@
  * return surface rather than the fakes.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { UserEnvResolver } from "./user-env-resolver";
 import { resolveSessionRepoId } from "./repo-id-resolution";
 import {
@@ -23,7 +23,8 @@ import type { SqlDatabase, SqlResult, SqlStatement } from "../db/sql-database";
 import type { SqlResult as StorageSqlResult, SqlStorage } from "./sql-storage";
 import type { SessionProviderAuthMode } from "@open-inspect/shared/types/provider-accounts";
 import type { SessionRepositoryRow, SessionRow } from "./types";
-import { TRIGGER_KINDS } from "@open-inspect/shared/types/auth-homes";
+import { TRIGGER_KINDS, type AuthHome } from "@open-inspect/shared/types/auth-homes";
+import type { SubscriptionSecretSharing } from "./subscription-secret-owners";
 
 const ENCRYPTION_KEY = generateEncryptionKey();
 
@@ -260,8 +261,14 @@ function makeHarness(
     resolveRepoId?: (session: SessionRow) => Promise<number>;
     /** SUBSCRIPTION_SECRET_OWNERS as the deployment sets it. */
     subscriptionSecretOwners?: string;
+    /** The sharing state owner-tagged secrets follow; household with no homes by default. */
+    sharing?: SubscriptionSecretSharing;
   } = {}
 ) {
+  const sharingPort = {
+    load: vi.fn(async () => options.sharing ?? { policy: "household" as const, homes: [] }),
+    recordShared: vi.fn(async () => undefined),
+  };
   const session = options.session === undefined ? sessionRow() : options.session;
   const storage = fakeSqlStorage({ session, memberRows: options.memberRows ?? [] });
   const db = new FakeSqlDatabase();
@@ -312,12 +319,14 @@ function makeHarness(
     repoSecretsEncryptionKey: options.encryptionKey ?? ENCRYPTION_KEY,
     secretsCapEnforcement: options.capEnforcement,
     subscriptionSecretOwners: options.subscriptionSecretOwners,
+    subscriptionSecretSharing: sharingPort,
     log,
   });
 
   return {
     resolver,
     db,
+    sharingPort,
     logs,
     sqlCalls: storage.calls,
     resolveRepoIdCalls: () => resolveRepoIdCalls,
@@ -699,8 +708,12 @@ describe("UserEnvResolver", () => {
   describe("owner-tagged subscription secrets", () => {
     const OWNERS = JSON.stringify({ ZHIPU_API_KEY: ["u1"] });
 
-    async function envFor(triggerActorUserId: string, triggerKind: string) {
-      const h = makeHarness({ subscriptionSecretOwners: OWNERS, memberRows: [] });
+    async function envFor(
+      triggerActorUserId: string,
+      triggerKind: string,
+      sharing?: SubscriptionSecretSharing
+    ) {
+      const h = makeHarness({ subscriptionSecretOwners: OWNERS, memberRows: [], sharing });
       h.db.sessionIndexRow = {
         ...h.db.sessionIndexRow,
         trigger_actor_user_id: triggerActorUserId,
@@ -712,8 +725,58 @@ describe("UserEnvResolver", () => {
         OTHER_SECRET: "other-placeholder",
       });
       h.db.repoSecretRowsByRepoId.set(90101, []);
-      return { env: await h.resolver.getUserEnvVars(), logs: h.logs };
+      return { env: await h.resolver.getUserEnvVars(), logs: h.logs, port: h.sharingPort };
     }
+
+    function home(id: string, owner: string, shared: boolean): AuthHome {
+      return {
+        id,
+        ownerUserIds: [owner],
+        pvcName: `sf-home-${owner}`,
+        nodeName: "sandbox-node-1",
+        providers: ["zai-coding-plan"],
+        kindsEnabled: [...TRIGGER_KINDS],
+        backgroundConsentAt: null,
+        maxConcurrent: 3,
+        shared,
+        sharingConsentAt: shared ? 1 : null,
+        status: "active",
+        claudeExpiresAt: null,
+        registeredAt: 1,
+        updatedAt: 1,
+      };
+    }
+
+    it("reaches an enrolled colleague only while the owner's home is shared under household, audited", async () => {
+      const household = {
+        policy: "household" as const,
+        homes: [home("H1", "u1", true), home("H2", "u2", false)],
+      };
+
+      const served = await envFor("u2", "prompt", household);
+      expect(served.env?.ZHIPU_API_KEY).toBe("zhipu-placeholder");
+      expect(served.port.recordShared).toHaveBeenCalledWith({
+        sessionId: expect.any(String),
+        actorUserId: "u2",
+        uses: [{ key: "ZHIPU_API_KEY", homeId: "H1", homeOwnerUserId: "u1" }],
+      });
+
+      for (const sharing of [
+        { ...household, policy: "owner_only" as const },
+        { ...household, homes: [home("H1", "u1", false), home("H2", "u2", false)] },
+        // The colleague is not enrolled.
+        { ...household, homes: [home("H1", "u1", true)] },
+      ]) {
+        const withheld = await envFor("u2", "prompt", sharing);
+        expect(withheld.env && "ZHIPU_API_KEY" in withheld.env).toBe(false);
+        expect(withheld.port.recordShared).not.toHaveBeenCalled();
+      }
+
+      // The owner's own sessions never go through sharing.
+      const owner = await envFor("u1", "prompt", { ...household, policy: "owner_only" });
+      expect(owner.env?.ZHIPU_API_KEY).toBe("zhipu-placeholder");
+      expect(owner.port.recordShared).not.toHaveBeenCalled();
+    });
 
     it("reaches the listed trigger actor and nobody else, for every trigger kind", async () => {
       for (const kind of TRIGGER_KINDS) {

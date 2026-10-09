@@ -35,9 +35,13 @@ import type { SessionRepositoryEntry } from "./repository-target";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionRow } from "./types";
 import {
+  createSubscriptionSecretSharing,
   parseSubscriptionSecretOwners,
   withoutForeignSubscriptionSecrets,
+  type SharedSubscriptionSecret,
   type SubscriptionSecretOwners,
+  type SubscriptionSecretSharing,
+  type SubscriptionSecretSharingPort,
 } from "./subscription-secret-owners";
 
 /**
@@ -58,11 +62,17 @@ export interface UserEnvResolverDeps {
   secretsCapEnforcement: string | undefined;
   /** `SUBSCRIPTION_SECRET_OWNERS`: owner-tagged secrets, see subscription-secret-owners.ts. */
   subscriptionSecretOwners?: string;
+  /** The sharing state owner-tagged secrets follow; read from `db` when omitted. */
+  subscriptionSecretSharing?: SubscriptionSecretSharingPort;
   /** The session-scoped logger; the composition root creates it before this class. */
   log: Logger;
 }
 
 interface UserEnvContext {
+  sessionId: string;
+  actorUserId: string | null;
+  /** Owner-tagged secrets the actor gets only through the owner's shared home. */
+  sharedSecrets: SharedSubscriptionSecret[];
   sandboxEnv: Record<string, string>;
   providerAuthModes: Record<SubscriptionProviderId, SessionProviderAuthMode>;
   /** Bound account per provider in provider_account mode. */
@@ -77,6 +87,7 @@ export class UserEnvResolver {
   private readonly repoSecretsEncryptionKey: string;
   private readonly secretsCapEnforcement: string | undefined;
   private readonly subscriptionSecretOwners: string | undefined;
+  private readonly subscriptionSecretSharing: SubscriptionSecretSharingPort;
   private readonly log: Logger;
 
   constructor(deps: UserEnvResolverDeps) {
@@ -87,6 +98,8 @@ export class UserEnvResolver {
     this.repoSecretsEncryptionKey = deps.repoSecretsEncryptionKey;
     this.secretsCapEnforcement = deps.secretsCapEnforcement;
     this.subscriptionSecretOwners = deps.subscriptionSecretOwners;
+    this.subscriptionSecretSharing =
+      deps.subscriptionSecretSharing ?? createSubscriptionSecretSharing(deps.db);
     this.log = deps.log;
   }
 
@@ -97,6 +110,20 @@ export class UserEnvResolver {
   async getUserEnvVars(): Promise<Record<string, string> | undefined> {
     const context = await this.loadUserEnvContext();
     if (!context) return undefined;
+    // The environment goes to a sandbox: record every key it carries only
+    // because its owner's home is shared with the actor.
+    if (context.actorUserId && context.sharedSecrets.length > 0) {
+      await this.subscriptionSecretSharing.recordShared({
+        sessionId: context.sessionId,
+        actorUserId: context.actorUserId,
+        uses: context.sharedSecrets,
+      });
+      this.log.info("subscription_secrets.shared", {
+        event: "subscription_secrets.shared",
+        keys: context.sharedSecrets.map((use) => use.key),
+        trigger_actor: context.actorUserId,
+      });
+    }
     return Object.keys(context.sandboxEnv).length === 0 ? undefined : context.sandboxEnv;
   }
 
@@ -226,31 +253,45 @@ export class UserEnvResolver {
           ? source.label === "environment"
           : primary && source.label === `${primary.repoOwner}/${primary.repoName}`)
     );
-    // A secret that is someone's own subscription reaches only that person's
-    // activity: the trigger actor (the owner on rows that predate it).
+    // A secret that is someone's own subscription reaches that person's
+    // activity (the trigger actor; the owner on rows that predate it), and
+    // others only as the owner's home is shared with them.
     const owners = parseSubscriptionSecretOwners(this.subscriptionSecretOwners);
     const actorUserId = indexedSession.triggerActorUserId ?? indexedSession.userId ?? null;
-    const exposed = this.ownedSecrets(merge.merged, owners, actorUserId);
-    const managedSecrets = this.ownedSecrets(
+    const sharing = owners.size > 0 ? await this.subscriptionSecretSharing.load() : undefined;
+    const exposed = this.ownedSecrets(merge.merged, owners, actorUserId, sharing);
+    const managed = this.ownedSecrets(
       mergeSecretSources(managedSources).merged,
       owners,
-      actorUserId
+      actorUserId,
+      sharing
     );
     const sandboxEnv = prepareManagedProviderEnv({
-      exposedSecrets: exposed,
-      brokerSecrets: managedSecrets,
+      exposedSecrets: exposed.secrets,
+      brokerSecrets: managed.secrets,
       providerAuthModes,
     });
-    return { sandboxEnv, providerAuthModes, providerAccountIds };
+    const sharedSecrets = [...exposed.shared, ...managed.shared].filter(
+      (use, index, all) => all.findIndex((other) => other.key === use.key) === index
+    );
+    return {
+      sessionId,
+      actorUserId,
+      sharedSecrets,
+      sandboxEnv,
+      providerAuthModes,
+      providerAccountIds,
+    };
   }
 
   private ownedSecrets(
     secrets: Record<string, string>,
     owners: SubscriptionSecretOwners,
-    actorUserId: string | null
-  ): Record<string, string> {
-    if (owners.size === 0) return secrets;
-    const result = withoutForeignSubscriptionSecrets(secrets, owners, actorUserId);
+    actorUserId: string | null,
+    sharing: SubscriptionSecretSharing | undefined
+  ): { secrets: Record<string, string>; shared: SharedSubscriptionSecret[] } {
+    if (owners.size === 0) return { secrets, shared: [] };
+    const result = withoutForeignSubscriptionSecrets(secrets, owners, actorUserId, sharing);
     if (result.stripped.length > 0) {
       this.log.info("subscription_secrets.withheld", {
         event: "subscription_secrets.withheld",
@@ -258,7 +299,7 @@ export class UserEnvResolver {
         trigger_actor: actorUserId ?? undefined,
       });
     }
-    return result.secrets;
+    return { secrets: result.secrets, shared: result.shared };
   }
 
   /**

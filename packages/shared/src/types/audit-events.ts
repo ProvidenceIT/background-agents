@@ -119,6 +119,7 @@ export const AUDIT_OPERATION_ACTIONS = [
   "credential.auth_home_mounted",
   "credential.auth_home_prompt",
   "credential.unattended_blocked",
+  "credential.subscription_secret_shared",
   "auth_home.claim_assigned",
   "auth_home.claim_unassigned",
   "auth_home.registered",

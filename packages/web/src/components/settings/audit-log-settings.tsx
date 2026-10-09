@@ -99,6 +99,7 @@ const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "credential.auth_home_mounted": "Subscription home mounted for a session",
   "credential.auth_home_prompt": "Subscription home served a turn",
   "credential.unattended_blocked": "Subscription home refused a turn",
+  "credential.subscription_secret_shared": "Subscription secret used through a shared home",
   "auth_home.claim_assigned": "Subscription home claim assigned",
   "auth_home.claim_unassigned": "Subscription home claim unassigned",
   "auth_home.registered": "Subscription home registered",
