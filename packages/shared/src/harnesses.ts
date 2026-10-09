@@ -20,7 +20,7 @@ import type {
   SessionProviderAuthMode,
 } from "./types/provider-accounts";
 
-export const HARNESS_IDS = ["opencode", "claude"] as const;
+export const HARNESS_IDS = ["opencode", "claude", "codex"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 export const DEFAULT_HARNESS: HarnessId = "opencode";
 export const harnessIdSchema = z.enum(HARNESS_IDS);
@@ -52,6 +52,17 @@ export const HARNESS_CATALOG = {
     modelFamilies: ["anthropic"],
     providerAuth: {
       anthropic: ["api_key", "provider_account", "auth_home"],
+    },
+    resume: "session_id",
+  },
+  // ChatGPT through the Codex CLI, on the `auth.json` a subscription home
+  // carries. There is no key path: Codex reads and refreshes that file itself,
+  // so a session runs only where the resolver bound a home.
+  codex: {
+    label: "Codex",
+    modelFamilies: ["openai"],
+    providerAuth: {
+      openai: ["auth_home"],
     },
     resume: "session_id",
   },
@@ -192,13 +203,22 @@ export function checkHarnessCompatibility(
   const { provider } = extractProviderAndModel(model);
   const mode = providerAuthModes?.[provider];
   if (mode && !harnessSupportsProviderAuth(harness, provider, mode)) {
-    return {
-      code: "provider_auth",
-      message:
-        mode === "provider_account"
-          ? `The ${label} harness cannot use a connected ${provider} account; select an API key for this session.`
-          : `The ${label} harness cannot run ${provider} in ${mode} mode.`,
-    };
+    return { code: "provider_auth", message: providerAuthMessage(harness, provider, mode) };
   }
   return null;
+}
+
+function providerAuthMessage(
+  harness: HarnessId,
+  provider: string,
+  mode: SessionProviderAuthMode
+): string {
+  const label = getHarnessLabel(harness);
+  const modes = getHarnessCapabilities(harness).providerAuth[provider] ?? [];
+  if (modes.length > 0 && modes.every((candidate) => candidate === "auth_home")) {
+    return `The ${label} harness runs ${provider} only on a subscription home; enrol one under Settings > Subscription homes.`;
+  }
+  return mode === "provider_account"
+    ? `The ${label} harness cannot use a connected ${provider} account; select an API key for this session.`
+    : `The ${label} harness cannot run ${provider} in ${mode} mode.`;
 }
