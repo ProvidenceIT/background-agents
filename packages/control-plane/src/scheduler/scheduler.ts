@@ -314,7 +314,7 @@ interface StartInvocationParams {
 }
 
 /** No auth home may serve the run; the run fails with the refusal, nothing is started. */
-export class AutomationAuthHomeRefusedError extends Error {
+class AutomationAuthHomeRefusedError extends Error {
   constructor(
     readonly reason: AuthHomeRefusalReason,
     provider: string
