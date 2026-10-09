@@ -351,6 +351,7 @@ describe("POST /api/messages", () => {
       repoOwner: "ProvidenceIT",
       repoName: "playground",
       model: DEFAULT_MODEL,
+      triggerKind: "mention",
       actorDisplayName: "Casey",
     });
     expect(prompt.headers[ACTOR_HEADER.toLowerCase()]).toBe(`microsoft:${USER_OID}`);
@@ -566,6 +567,7 @@ describe("POST /api/messages", () => {
       repoOwner: "ProvidenceIT",
       repoName: "playground",
       model: "zai-coding-plan/glm-5.3",
+      triggerKind: "mention",
       actorDisplayName: "Casey",
     });
     expect(prompt.body).toEqual({
@@ -649,6 +651,7 @@ describe("POST /api/messages", () => {
       repoOwner: "ProvidenceIT",
       repoName: "playground",
       model: "zai-coding-plan/glm-5.3",
+      triggerKind: "mention",
       actorDisplayName: "Casey",
     });
     expect(inlinePrompt.body).not.toHaveProperty("reasoningEffort");
@@ -769,6 +772,114 @@ describe("POST /api/messages", () => {
       lastMessageId: "message-1",
       turnState: "working",
     });
+  });
+
+  it("starts the sender's own session when the thread's home refuses their follow-up", async () => {
+    const colleague = "99999999-8888-7777-6666-555555555555";
+    const h = harness({
+      [`GET /channel-bindings/msteams/${CHANNEL_ID}`]: boundChannel,
+      "POST /sessions/session-1/prompt": () =>
+        json(
+          {
+            error: "no eligible subscription home for anthropic: refused",
+            message: "no eligible subscription home for anthropic: refused",
+            code: "no_eligible_home",
+            reason: "no_eligible_home",
+          },
+          403
+        ),
+      "POST /sessions": () => json({ sessionId: "session-2", status: "created" }),
+      "POST /sessions/session-2/prompt": promptQueued,
+    });
+    h.store.putThreadSession({
+      threadKey: THREAD_KEY,
+      sessionId: "session-1",
+      actor: `microsoft:${USER_OID}`,
+      teamId: "team-platform",
+      repoFullName: "ProvidenceIT/playground",
+      model: DEFAULT_MODEL,
+      reasoningEffort: null,
+      serviceUrl: SERVICE_URL,
+      channelId: CHANNEL_ID,
+      rootActivityId: ROOT_ID,
+    });
+    await h.post(
+      activityFixture({
+        id: "2",
+        replyToId: ROOT_ID,
+        from: { id: "29:2user", name: "Riley", aadObjectId: colleague },
+        text: "<at>Open-Inspect</at> also update the docs",
+      })
+    );
+
+    const creates = h.controlPlaneRemote.requests.filter(
+      (request) => request.method === "POST" && new URL(request.url).pathname === "/sessions"
+    );
+    expect(creates).toHaveLength(1);
+    expect(creates[0].headers[ACTOR_HEADER.toLowerCase()]).toBe(`microsoft:${colleague}`);
+    expect(creates[0].body).toMatchObject({
+      repoOwner: "ProvidenceIT",
+      repoName: "playground",
+      model: DEFAULT_MODEL,
+      triggerKind: "mention",
+    });
+    const texts = h.replies().map((reply) => reply.text);
+    expect(texts).not.toContain(SESSION_NOT_ACCESSIBLE_MESSAGE);
+    expect(texts).toEqual([WORKING_TEXT]);
+    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+      sessionId: "session-2",
+      actor: `microsoft:${colleague}`,
+    });
+  });
+
+  it("renders the refusal verbatim when the sender's own session is refused too", async () => {
+    const colleague = "99999999-8888-7777-6666-555555555555";
+    const refusal =
+      "no eligible subscription home for anthropic: enrol one under Settings > Subscription homes, or ask an enrolled colleague to share theirs";
+    const refused = () => json({ error: refusal, message: refusal, code: "no_eligible_home" }, 403);
+    const h = harness({
+      [`GET /channel-bindings/msteams/${CHANNEL_ID}`]: boundChannel,
+      "POST /sessions/session-1/prompt": refused,
+      "POST /sessions": refused,
+    });
+    h.store.putThreadSession({
+      threadKey: THREAD_KEY,
+      sessionId: "session-1",
+      actor: `microsoft:${USER_OID}`,
+      teamId: "team-platform",
+      repoFullName: "ProvidenceIT/playground",
+      model: DEFAULT_MODEL,
+      reasoningEffort: null,
+      serviceUrl: SERVICE_URL,
+      channelId: CHANNEL_ID,
+      rootActivityId: ROOT_ID,
+    });
+    await h.post(
+      activityFixture({
+        id: "2",
+        replyToId: ROOT_ID,
+        from: { id: "29:2user", name: "Riley", aadObjectId: colleague },
+        text: "<at>Open-Inspect</at> hi",
+      })
+    );
+    expect(h.replies().map((reply) => reply.text)).toEqual([refusal]);
+    expect(h.store.getThreadSession(THREAD_KEY)?.sessionId).toBe("session-1");
+  });
+
+  it("attributes a mention in a 19: thread to its sender, never the thread's starter", async () => {
+    const sender = "77777777-6666-5555-4444-333333333333";
+    const h = harness({
+      [`GET /channel-bindings/msteams/${CHANNEL_ID}`]: boundChannel,
+      "POST /sessions": sessionCreated,
+      "POST /sessions/session-1/prompt": promptQueued,
+    });
+    await h.post(activityFixture({ from: { id: "29:3user", name: "Sam", aadObjectId: sender } }));
+    const create = h.controlPlaneRemote.requests.find(
+      (request) => request.method === "POST" && new URL(request.url).pathname === "/sessions"
+    );
+    expect(THREAD_KEY.startsWith("19:")).toBe(true);
+    expect(create?.headers[ACTOR_HEADER.toLowerCase()]).toBe(`microsoft:${sender}`);
+    expect(create?.body).toMatchObject({ triggerKind: "mention" });
   });
 
   it("closes the thread when the session is gone for its owner and refuses later follow-ups", async () => {

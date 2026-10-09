@@ -102,6 +102,7 @@ describe("ControlPlaneClient", () => {
       repoOwner: "ProvidenceIT",
       repoName: "playground",
       model: "anthropic/claude-sonnet-4.5",
+      triggerKind: "mention",
       actorDisplayName: "Casey",
     });
     expect(request.headers[ACTOR_HEADER.toLowerCase()]).toBe(`microsoft:${USER_OID}`);

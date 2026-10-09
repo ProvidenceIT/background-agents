@@ -20,7 +20,8 @@ import {
 } from "../teams/message";
 import { WORKING_TEXT } from "../teams/reply-sink";
 import type { TeamsActivity } from "../types";
-import { parseCommand, type Command } from "./commands";
+import { parseCommand, type Command, type RepositoryRef } from "./commands";
+import { NO_ELIGIBLE_HOME } from "@open-inspect/shared/types/auth-homes";
 import { launchSession, renderFailure, resolveModelSelection } from "./launcher";
 import {
   FOLLOW_UP_FAILED_MESSAGE,
@@ -84,8 +85,29 @@ function accountOf(value: { id?: string; name?: string } | undefined) {
   return value?.id ? { id: value.id, ...(value.name ? { name: value.name } : {}) } : undefined;
 }
 
+/** The repository a thread's session runs on, for a follow-up that starts its own session. */
+function threadRepository(thread: ThreadSessionRecord): RepositoryRef | null {
+  if (!thread.repoFullName) return null;
+  const slash = thread.repoFullName.lastIndexOf("/");
+  if (slash <= 0) return null;
+  return {
+    owner: thread.repoFullName.slice(0, slash),
+    name: thread.repoFullName.slice(slash + 1),
+    fullName: thread.repoFullName,
+  };
+}
+
 export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandler {
   const enqueue = deps.enqueue ?? createKeyedQueue();
+  const launchDeps = () => ({
+    controlPlane: deps.controlPlane,
+    bot: deps.bot,
+    store: deps.store,
+    log: deps.log,
+    webAppUrl: deps.webAppUrl,
+    defaultModel: deps.defaultModel,
+    defaultReasoningEffort: deps.defaultReasoningEffort,
+  });
 
   const reply = (ctx: ThreadContext, text: string) =>
     deps.bot.replyToActivity(ctx.address, ctx.rootActivityId, text);
@@ -172,6 +194,28 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
       ctx.traceId
     );
     if (!prompt.ok) {
+      if (prompt.status === 403 && prompt.code === NO_ELIGIBLE_HOME) {
+        // The thread's session runs on a subscription home this sender may
+        // not spend: the follow-up becomes a session of the sender's own,
+        // resolved for them (and refused with its own message if none fits).
+        deps.log.info("follow_up.forked", {
+          trace_id: ctx.traceId,
+          thread_key: ctx.threadKey,
+          session_id: thread.sessionId,
+        });
+        await launchSession(launchDeps(), {
+          activity: ctx.activity,
+          threadKey: ctx.threadKey,
+          address: ctx.address,
+          rootActivityId: ctx.rootActivityId,
+          actor: ctx.actor,
+          repo: threadRepository(thread),
+          prompt: content,
+          options: { ...command.options, model: selection.selection.model },
+          traceId: ctx.traceId,
+        });
+        return;
+      }
       if (prompt.reason === "not_found") {
         // The control plane also answers 404 when THIS user may not read the
         // session (private, or team enforcement), so only the user who started
@@ -231,28 +275,17 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
           await handleFollowUp(ctx, thread, command);
           return;
         }
-        await launchSession(
-          {
-            controlPlane: deps.controlPlane,
-            bot: deps.bot,
-            store: deps.store,
-            log: deps.log,
-            webAppUrl: deps.webAppUrl,
-            defaultModel: deps.defaultModel,
-            defaultReasoningEffort: deps.defaultReasoningEffort,
-          },
-          {
-            activity: ctx.activity,
-            threadKey: ctx.threadKey,
-            address: ctx.address,
-            rootActivityId: ctx.rootActivityId,
-            actor: ctx.actor,
-            repo: command.repo,
-            prompt: formatQuotedReplyContext(teamsQuotedReplyContext(ctx.activity)) + command.text,
-            options: command.options,
-            traceId: ctx.traceId,
-          }
-        );
+        await launchSession(launchDeps(), {
+          activity: ctx.activity,
+          threadKey: ctx.threadKey,
+          address: ctx.address,
+          rootActivityId: ctx.rootActivityId,
+          actor: ctx.actor,
+          repo: command.repo,
+          prompt: formatQuotedReplyContext(teamsQuotedReplyContext(ctx.activity)) + command.text,
+          options: command.options,
+          traceId: ctx.traceId,
+        });
         return;
     }
   }

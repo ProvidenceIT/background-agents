@@ -270,11 +270,14 @@ export class ControlPlaneClient {
     input: CreateSessionInput,
     traceId?: string
   ): Promise<ControlPlaneResult<CreateSessionResponse>> {
+    // A Teams session is always its sender's mention; the control plane
+    // resolves the subscription home for that sender.
     const body = JSON.stringify({
       teamId: input.teamId,
       repoOwner: input.repoOwner,
       repoName: input.repoName,
       model: input.model,
+      triggerKind: "mention",
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       ...(input.actorDisplayName ? { actorDisplayName: input.actorDisplayName } : {}),
     });
