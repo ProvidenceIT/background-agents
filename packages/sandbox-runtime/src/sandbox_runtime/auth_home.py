@@ -9,15 +9,20 @@ It never opens the token or reports any other file.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .boot_events import REDACTED_VALUE
 from .harness.claude_env import (
     AUTH_HOME_CLAUDE_EXPIRES_AT,
+    AUTH_HOME_CLAUDE_TOKEN,
     AUTH_HOME_ENV_VAR,
     AUTH_HOME_PROVIDERS_ENV_VAR,
 )
+from .harness.codex_env import AUTH_HOME_CODEX_AUTH
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -52,3 +57,124 @@ def _read_expires_at(path: Path) -> int | str | None:
     if not raw or len(raw) > _MAX_EXPIRES_AT_CHARS:
         return None
     return int(raw) if raw.isdigit() else raw
+
+
+# The env file next to the Claude token (provider plan keys).
+_AUTH_HOME_ENV_FILE = "env"
+# Shorter values are not credentials and would redact ordinary words.
+_MIN_SECRET_CHARS = 8
+# A Claude subscription token has this shape whether or not it is the one in
+# the home (a stale copy, one pasted into a prompt).
+_CLAUDE_OAUTH_TOKEN = re.compile(r"sk-ant-oat01-[A-Za-z0-9_-]+")
+
+
+class AuthHomeSecretRedactor:
+    """Removes the mounted home's credentials from what the bridge sends out.
+
+    The agent runs as the uid that owns the mounted files and inherits the
+    CLI's environment, so a tool call can print a credential (``env``, ``cat
+    $SF_AUTH_HOME/...``). Tool output becomes session events the control
+    plane stores, so every outbound event is scrubbed of the values the home
+    holds now: the Claude token, the ``env`` file's values and every string
+    in Codex's ``auth.json``, plus anything shaped like a Claude token. The
+    files are re-read only when they change.
+    """
+
+    def __init__(self, home: Path) -> None:
+        self._home = home
+        self._cache: dict[str, tuple[tuple[int, int] | None, tuple[str, ...]]] = {}
+
+    @classmethod
+    def from_environ(cls, environ: Mapping[str, str] = os.environ) -> AuthHomeSecretRedactor | None:
+        """A redactor for the mounted home, or ``None`` when no home is mounted."""
+        home = environ.get(AUTH_HOME_ENV_VAR)
+        return cls(Path(home)) if home else None
+
+    def secrets(self) -> tuple[str, ...]:
+        """The home's current credential values, longest first."""
+        values: set[str] = set()
+        values.update(self._read(AUTH_HOME_CLAUDE_TOKEN, _token_values))
+        values.update(self._read(_AUTH_HOME_ENV_FILE, _env_values))
+        values.update(self._read(AUTH_HOME_CODEX_AUTH, _json_string_values))
+        return tuple(sorted(values, key=len, reverse=True))
+
+    def redact(self, event: dict[str, Any]) -> dict[str, Any]:
+        """``event`` with every credential value replaced; the input is not changed."""
+        secrets = self.secrets()
+        return _redact_value(event, secrets)
+
+    def _read(self, relative: str, parse: Any) -> tuple[str, ...]:
+        path = self._home / relative
+        try:
+            stat = path.stat()
+            signature: tuple[int, int] | None = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            signature = None
+        cached = self._cache.get(relative)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        values: tuple[str, ...] = ()
+        if signature is not None:
+            try:
+                values = tuple(
+                    value
+                    for value in parse(path.read_text(encoding="utf-8"))
+                    if len(value) >= _MIN_SECRET_CHARS
+                )
+            except (OSError, UnicodeDecodeError, ValueError):
+                values = ()
+        self._cache[relative] = (signature, values)
+        return values
+
+
+def _token_values(text: str) -> list[str]:
+    return [text.strip()]
+
+
+def _env_values(text: str) -> list[str]:
+    values = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        _, separator, value = line.removeprefix("export ").partition("=")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        if separator and value:
+            values.append(value)
+    return values
+
+
+def _json_string_values(text: str) -> list[str]:
+    found: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, str):
+            found.append(node)
+        elif isinstance(node, dict):
+            for item in node.values():
+                walk(item)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(json.loads(text))
+    return found
+
+
+def _redact_text(text: str, secrets: tuple[str, ...]) -> str:
+    for secret in secrets:
+        if secret in text:
+            text = text.replace(secret, REDACTED_VALUE)
+    return _CLAUDE_OAUTH_TOKEN.sub(REDACTED_VALUE, text)
+
+
+def _redact_value(value: Any, secrets: tuple[str, ...]) -> Any:
+    if isinstance(value, str):
+        return _redact_text(value, secrets)
+    if isinstance(value, dict):
+        return {key: _redact_value(item, secrets) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_value(item, secrets) for item in value]
+    return value

@@ -264,6 +264,12 @@ in `-codex` are Codex claims (below) and are never registered as a home.
   mounted and `claude/expires_at`, never a value.
 - The claim carries `app.kubernetes.io/managed-by=open-inspect` (the claims policy requires it) and
   no `openinspect.dev/role` label.
+- The agent runs as the uid that owns the mounted files and inherits the CLI's environment, so a
+  tool call can read a credential (`env`, `cat $SF_AUTH_HOME/...`). The bridge therefore replaces
+  every value the home holds (the Claude token, the `env` file's values, every string in Codex's
+  `auth.json`) and anything shaped like a Claude token in each event before it leaves the sandbox,
+  so tool output never carries them into the control plane's event store. The agent itself can still
+  read them; a home is only as private as the sessions that may mount it.
 
 #### Codex sessions and the Codex seat
 

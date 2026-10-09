@@ -43,7 +43,7 @@ from .attachment_processor import (
     AttachmentProcessor,
     parse_session_image_attachments,
 )
-from .auth_home import auth_home_boot_report
+from .auth_home import AuthHomeSecretRedactor, auth_home_boot_report
 from .boot_attach import RECONNECT_BACKOFF_BASE, RECONNECT_MAX_DELAY_SECONDS, BootAttach
 from .constants import (
     BRIDGE_FATAL_ERROR_FILE_PATH,
@@ -228,7 +228,13 @@ class AgentBridge:
 
         # Reconnect-safe event delivery: buffers while the WS is down and
         # re-sends unacknowledged critical events (see event_forwarder.py).
-        self.event_forwarder = BufferedEventForwarder(sandbox_id=sandbox_id, log=self.log)
+        # A mounted subscription home's credentials never leave in an event.
+        redactor = AuthHomeSecretRedactor.from_environ()
+        self.event_forwarder = BufferedEventForwarder(
+            sandbox_id=sandbox_id,
+            log=self.log,
+            redact=redactor.redact if redactor else None,
+        )
         self.boot_attach = BootAttach(
             early_connect=early_connect,
             harness=harness,

@@ -18,6 +18,8 @@ from .event_size import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from websockets import ClientConnection
 
     from .log_config import StructuredLogger
@@ -76,8 +78,12 @@ class BufferedEventForwarder:
         log: StructuredLogger,
         max_buffer_size: int = MAX_EVENT_BUFFER_SIZE,
         send_timeout_seconds: float = SEND_TIMEOUT_SECONDS,
+        redact: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
         self._sandbox_id = sandbox_id
+        # Applied to every event before it is sized, buffered or sent, so
+        # nothing the control plane receives skips it.
+        self._redact = redact
         self._log = log
         self._max_buffer_size = max_buffer_size
         self._send_timeout_seconds = send_timeout_seconds
@@ -159,6 +165,12 @@ class BufferedEventForwarder:
         relay's cursor) must not advance it on a buffered event: the buffer
         lives only as long as this process.
         """
+        if self._redact is not None:
+            # In place: callers keep the event they passed (its ackId, too).
+            redacted = self._redact(event)
+            if redacted != event:
+                event.clear()
+                event.update(redacted)
         event_type = event.get("type", "unknown")
         event["sandboxId"] = self._sandbox_id
         event["timestamp"] = event.get("timestamp", time.time())
