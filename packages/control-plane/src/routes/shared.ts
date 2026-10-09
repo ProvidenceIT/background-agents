@@ -110,6 +110,7 @@ export function activeSelf(options?: { auditAllowed?: boolean }): RouteAuthoriza
 export const ACTIVE_SELF = activeSelf();
 
 const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
+  "auth_homes.read_all",
   "automations.create",
   "automations.manage.any",
   "automations.manage.own",
@@ -139,6 +140,7 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
   "skill_profiles.manage_own",
   "memories.manage_own",
   "skills.manage",
+  "subscription_sharing.manage",
   "usage_quotas.manage",
   "workspace.members.manage",
   "workspace.transfer_ownership",

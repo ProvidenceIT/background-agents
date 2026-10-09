@@ -6,6 +6,7 @@
  */
 
 import type { RouteModule } from "../routing/hono-env";
+import { authHomeRoutes } from "../auth-homes/routes";
 import { webhookRoutes } from "../webhooks";
 import { analyticsRoutes } from "./analytics";
 import { auditEventRoutes } from "./audit-events";
@@ -78,6 +79,8 @@ export const catalog: readonly RouteModule[] = [
   modelProviderAccountRoutes,
   // Delivery of stored provider secrets to sandboxes (Anthropic)
   providerRuntimeCredentialRoutes,
+  // Subscription auth-home registry and the workspace sharing policy
+  authHomeRoutes,
 
   // Integration settings
   integrationSettingsRoutes,
