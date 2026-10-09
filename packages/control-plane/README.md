@@ -412,6 +412,12 @@ Automations:
   the weekly digest), claimed before it is posted so each goes out at most once.
 - `subscription_sharing`: the single-row (`id = 'global'`) workspace policy, `household` (default,
   read when the row is absent) or `owner_only`, managed by `/subscription-sharing`.
+- `auth_home_leases` and `auth_home_lease_queue`: the Codex seat, one running Codex session per home
+  (`provider = 'codex'`). The lease names the holding session and its last heartbeat (renewed by the
+  sandbox's heartbeats, released when it stops); a holder silent for 10 minutes is fenced (its pods
+  deleted and gone) before the seat moves on, and the seat is never granted while another session's
+  pod mounts the home's `sf-home-*-codex` claim. Waiting sessions queue first in, first out. The
+  caller's own seat is read at `GET /me/auth-home/lease`.
 - `sessions.trigger_actor_user_id`, `trigger_kind`, `work_item_author_user_id`, `auth_home_id` and
   `auth_home_selection`: who and what started a session and which home the resolver chose for it;
   `model_provider_accounts.owner_user_id` names the one user whose activity may spend a connected

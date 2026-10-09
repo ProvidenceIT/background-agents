@@ -259,13 +259,41 @@ control plane never reads the volume.
 - The claim carries `app.kubernetes.io/managed-by=open-inspect` (the claims policy requires it) and
   no `openinspect.dev/role` label.
 
+#### Codex sessions and the Codex seat
+
+A session on the `codex` harness mounts a second claim of the same home, `sf-home-<name>-codex`
+(label `sf.dokman.io/auth-home-owner=<name>-codex`), with `SF_AUTH_HOME_PROVIDERS=openai`. It holds
+one directory, `codex/`, which is the session's `CODEX_HOME`: the owner's own
+`codex login --device-auth` login (`codex/auth.json`, never a copy of a login from elsewhere),
+Codex's state databases and its `sessions/` rollouts, from which a later turn or a restored sandbox
+resumes the conversation. The operator creates and binds this claim like the home's own claim; a
+missing one refuses the launch with `auth_home_unavailable`, a missing `codex/auth.json` stops the
+harness with a request to log in again.
+
+Codex refreshes the login's single-use token itself, so two sandboxes must never run Codex on the
+same claim. The control plane holds a per-home **Codex seat** (`auth_home_leases`, with the FIFO
+`auth_home_lease_queue`) and admits a Codex launch only to its holder:
+
+- A busy seat refuses the launch with "Waiting for your Codex seat", keeps the prompt queued, and
+  the session asks again every 30 s. `GET /me/auth-home/lease` shows the holder and the queue.
+- The holder renews the seat with its sandbox's heartbeats and releases it when the sandbox stops or
+  fails. A holder silent for 10 minutes (a control-plane outage, a lost bridge) is fenced: the next
+  waiter has its pods deleted and is granted the seat only once no other session's pod mounting
+  `sf-home-<name>-codex` is left in the API server, terminating ones included.
+- The seat is never granted while another session's pod mounts the claim, lease row or not.
+- An in-pod file lock would not do: under gVisor each sandbox's locks stay in its own sentry.
+
+The literal alternative, one Codex login per concurrent stream on claims `sf-home-<name>-codex-<n>`,
+is not built.
+
 ## Operations
 
 - **Node drains and reboots.** A drained pod is deleted; the claim survives. The next prompt resumes
   the sandbox on a new pod. Do not put a PodDisruptionBudget on sandboxes: it would block drains.
 - **Image upgrades.** Change `KUBERNETES_SANDBOX_IMAGE` and the policy's `sandboxImages` together
   (list both while sessions on the old image may resume). Resumed sessions run the new image on
-  their old volume.
+  their old volume. Codex sessions need an image built with the `codex` CLI
+  (`packages/sandbox-images/toolchain.json`).
 - **Admission policy values** are policy variables, not a params ConfigMap: on k3s v1.36.5 the API
   server did not notice a params ConfigMap created or changed after its binding.
 
