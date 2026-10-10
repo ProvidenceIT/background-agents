@@ -41,6 +41,7 @@ from .claude_env import (
     CLAUDE_POLICY_SETTINGS,
     ClaudeCredential,
     auth_home_claude_token_file,
+    auth_home_has_claude_token,
     bundled_claude_binary,
     harness_env,
     resolve_api_key_credential,
@@ -268,7 +269,7 @@ class ClaudeHarness:
         # token is a refusal, never a fall back to a key.
         token_file = auth_home_claude_token_file(self.environ)
         if token_file is not None:
-            if not token_file.is_file():
+            if not auth_home_has_claude_token(token_file):
                 raise HarnessStartError(AUTH_HOME_TOKEN_MISSING)
             return ClaudeCredential.auth_home(token_file)
         if self.config.oauth_managed:

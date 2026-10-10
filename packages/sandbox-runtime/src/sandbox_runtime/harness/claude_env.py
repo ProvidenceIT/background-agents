@@ -34,6 +34,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+from . import claude_pool
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -64,6 +66,10 @@ BARE_FLAG: Final = "--bare"
 AUTH_HOME_TOKEN_MISSING: Final = f"subscription home mounted but {AUTH_HOME_CLAUDE_TOKEN} missing"
 
 WRAPPER_NAME: Final = "claude-clean-env"
+# The pool picker's copy next to the wrapper, and the record of its last pick
+# in the child's config dir (slot name and headroom, never a token).
+POOL_MODULE_NAME: Final = "sf_claude_pool"
+POOL_PICK_FILE: Final = "sf-claude-pool-pick.json"
 
 CLAUDE_POLICY_SETTINGS: Final = json.dumps(
     {
@@ -182,6 +188,11 @@ def auth_home_claude_token_file(environ: Mapping[str, str] = os.environ) -> Path
     return Path(home) / AUTH_HOME_CLAUDE_TOKEN
 
 
+def auth_home_has_claude_token(token_file: Path) -> bool:
+    """Whether the home holds a Claude token: the single file or any pool slot."""
+    return bool(claude_pool.pool_slots(token_file.parent))
+
+
 def denylist_for(mode: ClaudeAuthMode) -> tuple[str, ...]:
     """The credential family the child must never see in ``mode``.
 
@@ -240,16 +251,36 @@ def write_clean_env_wrapper(
     if mode is ClaudeAuthMode.AUTH_HOME:
         if token_file is None:
             raise ValueError("auth_home mode needs the home's token file")
+        # The pool picker runs from a copy next to the wrapper (the script's
+        # own directory is first on sys.path), so it needs no installed package.
         handoff = [
             f"TOKEN_FILE = {str(token_file)!r}",
-            "try:",
-            "    with open(TOKEN_FILE, encoding='utf-8') as handle:",
-            "        token = handle.read().strip()",
-            "except OSError:",
-            "    token = ''",
+            f"PICK_FILE_NAME = {POOL_PICK_FILE!r}",
+            "import json",
+            "import time",
+            "from pathlib import Path",
+            "sys.dont_write_bytecode = True",
+            f"import {POOL_MODULE_NAME} as pool",
+            "pick = pool.pick_slot(Path(TOKEN_FILE).parent, sys.argv[1:])",
+            "token = ''",
+            "if pick is not None:",
+            "    try:",
+            "        token = pick.token_file.read_text(encoding='utf-8').strip()",
+            "    except (OSError, UnicodeDecodeError):",
+            "        token = ''",
             "if not token:",
             f"    sys.stderr.write({AUTH_HOME_TOKEN_MISSING + chr(10)!r})",
             "    sys.exit(78)",
+            # Which subscription this child spends, by slot name only.
+            f"config_dir = env.get({CONFIG_DIR_ENV_VAR!r})",
+            "if config_dir:",
+            "    try:",
+            "        Path(config_dir, PICK_FILE_NAME).write_text(json.dumps({",
+            "            'slot': pick.slot, 'reason': pick.reason,",
+            "            'percentRemaining': pick.percent_remaining, 'at': int(time.time()),",
+            "        }))",
+            "    except OSError:",
+            "        pass",
             f"env[{OAUTH_TOKEN_ENV_VAR!r}] = token",
             f"args = [arg for arg in sys.argv[1:] if arg != {BARE_FLAG!r}]",
         ]
@@ -272,6 +303,10 @@ def write_clean_env_wrapper(
         ]
     )
     directory.mkdir(parents=True, exist_ok=True)
+    if mode is ClaudeAuthMode.AUTH_HOME:
+        (directory / f"{POOL_MODULE_NAME}.py").write_text(
+            Path(claude_pool.__file__).read_text(encoding="utf-8")
+        )
     wrapper = directory / WRAPPER_NAME
     wrapper.write_text(script)
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)

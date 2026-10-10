@@ -12,10 +12,12 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .boot_events import REDACTED_VALUE
+from .harness import claude_pool
 from .harness.claude_env import (
     AUTH_HOME_CLAUDE_EXPIRES_AT,
     AUTH_HOME_CLAUDE_TOKEN,
@@ -42,11 +44,54 @@ def auth_home_boot_report(environ: Mapping[str, str] = os.environ) -> dict[str, 
         for provider in environ.get(AUTH_HOME_PROVIDERS_ENV_VAR, "").split(",")
         if provider.strip()
     ]
-    return {
+    report: dict[str, Any] = {
         "present": root.is_dir(),
         "providers": providers,
         "claude_expires_at": _read_expires_at(root / AUTH_HOME_CLAUDE_EXPIRES_AT),
     }
+    slots = _pool_slot_dirs(root)
+    if slots:
+        # The pool's first expiry is the one the owner has to act on.
+        expiries = [_read_expires_at(slot / _POOL_EXPIRES_AT) for slot in slots]
+        known = [(ms, value) for value in expiries if (ms := _expiry_ms(value)) is not None]
+        report["claude_pool_slots"] = len(slots)
+        report["claude_expires_at"] = min(known)[1] if known else None
+    return report
+
+
+# A pool slot's files, under claude/pool/<slot>/ (see harness/claude_pool.py).
+_POOL_TOKEN = "oauth-token"
+_POOL_EXPIRES_AT = "expires_at"
+
+
+def _pool_slot_dirs(root: Path) -> list[Path]:
+    """The pool slots with a non-empty token file, by directory; empty without a pool.
+
+    Sizes only: the report and the redactor's listing never open a token here.
+    """
+    try:
+        entries = sorted((root / "claude" / claude_pool.POOL_DIR).iterdir())
+    except OSError:
+        return []
+    slots = []
+    for entry in entries:
+        try:
+            if (entry / _POOL_TOKEN).stat().st_size > 0:
+                slots.append(entry)
+        except OSError:
+            continue
+    return slots
+
+
+def _expiry_ms(value: int | str | None) -> float | None:
+    if isinstance(value, int):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000
+        except ValueError:
+            return None
+    return None
 
 
 def _read_expires_at(path: Path) -> int | str | None:
@@ -94,6 +139,9 @@ class AuthHomeSecretRedactor:
         """The home's current credential values, longest first."""
         values: set[str] = set()
         values.update(self._read(AUTH_HOME_CLAUDE_TOKEN, _token_values))
+        for slot in _pool_slot_dirs(self._home):
+            relative = str(slot.relative_to(self._home) / _POOL_TOKEN)
+            values.update(self._read(relative, _token_values))
         values.update(self._read(_AUTH_HOME_ENV_FILE, _env_values))
         values.update(self._read(AUTH_HOME_CODEX_AUTH, _json_string_values))
         return tuple(sorted(values, key=len, reverse=True))
