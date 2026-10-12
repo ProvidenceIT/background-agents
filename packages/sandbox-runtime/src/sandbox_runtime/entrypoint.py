@@ -18,6 +18,7 @@ from .codex_stager import CodexStager, resolve_codex_config_dir, resolve_codex_m
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
 from .docker_service import DockerService
 from .harness.base import HarnessId, HarnessProcessOwner
+from .harness.codex_env import codex_skill_roots
 from .image_build_context_start import (
     IMAGE_BUILD_CONTEXT_START_ARGUMENT,
     deferred_start_requested,
@@ -165,6 +166,7 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
             managed_skills_destination(config.harness, claude_config_dir),
             log,
             write_codex_invocation_policy=config.harness is HarnessId.CODEX,
+            extra_collision_roots=codex_skill_roots() if config.harness is HarnessId.CODEX else (),
         )
     harness_process = build_harness_process(
         config, shutdown_event, log, warnings, claude_config_dir

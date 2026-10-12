@@ -1,15 +1,15 @@
 import asyncio
 import hashlib
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+from sandbox_runtime.codex_skill_policy import CODEX_EXPLICIT_ONLY_POLICY, CODEX_SKILL_POLICY_PATH
 from sandbox_runtime.entrypoint import build_supervisor
 from sandbox_runtime.managed_skills import (
-    CODEX_EXPLICIT_ONLY_POLICY,
-    CODEX_SKILL_POLICY_PATH,
     ManagedSkillsClient,
     ManagedSkillsError,
     ManagedSkillsMaterializer,
@@ -523,7 +523,7 @@ def _skill_document(*skills):
 async def test_materializer_writes_codex_policy_only_for_user_invoked_skills(
     tmp_path, write_policy
 ):
-    authored_policy = "policy:\n  allow_implicit_invocation: true\n"
+    authored_policy = "interface:\n  display_name: Authored\n"
     document = _skill_document(
         ("open-pr", {"SKILL.md": _USER_INVOKED_SKILL}),
         (
@@ -558,8 +558,107 @@ async def test_materializer_writes_codex_policy_only_for_user_invoked_skills(
     assert (
         "\ndisable-model-invocation: true\n" in (destination / "open-pr" / "SKILL.md").read_text()
     )
-    assert (destination / "authored" / CODEX_SKILL_POLICY_PATH).read_text() == authored_policy
+    authored = (destination / "authored" / CODEX_SKILL_POLICY_PATH).read_text()
+    if write_policy:
+        # The author's file (interface only) gets the policy merged in.
+        assert authored == authored_policy + CODEX_EXPLICIT_ONLY_POLICY
+    else:
+        assert authored == authored_policy
     assert not (destination / "review" / "agents").exists()
+
+
+async def test_codex_overrides_an_authored_policy_that_allows_implicit_invocation(tmp_path):
+    document = _skill_document(
+        (
+            "open-pr",
+            {
+                "SKILL.md": _USER_INVOKED_SKILL,
+                CODEX_SKILL_POLICY_PATH: "policy:\n  allow_implicit_invocation: true\n",
+            },
+        )
+    )
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(return_value=json.dumps(document).encode())
+    destination = tmp_path / "skills"
+    log = MagicMock()
+    materializer = ManagedSkillsMaterializer(
+        client,
+        destination,
+        log,
+        bundled_skills_path=tmp_path / "missing-bundled",
+        write_codex_invocation_policy=True,
+    )
+
+    await materializer.materialize((), tmp_path / "workspace")
+
+    policy = destination / "open-pr" / CODEX_SKILL_POLICY_PATH
+    assert policy.read_text() == CODEX_EXPLICIT_ONLY_POLICY
+    assert policy.stat().st_mode & 0o777 == 0o400
+    log.info.assert_any_call(
+        "managed_skills.codex_policy_merged", skill="open-pr", path=CODEX_SKILL_POLICY_PATH
+    )
+
+
+@pytest.mark.parametrize("blocking_path", ["agents", "agents/openai.yaml/notes.md"])
+async def test_codex_leaves_out_only_a_skill_whose_policy_file_cannot_be_written(
+    tmp_path, blocking_path
+):
+    document = _skill_document(
+        ("open-pr", {"SKILL.md": _USER_INVOKED_SKILL, blocking_path: "not a policy\n"}),
+        ("review", {"SKILL.md": "---\nname: review\ndescription: d\n---\n"}),
+    )
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(return_value=json.dumps(document).encode())
+    destination = tmp_path / "skills"
+    log = MagicMock()
+    materializer = ManagedSkillsMaterializer(
+        client,
+        destination,
+        log,
+        bundled_skills_path=tmp_path / "missing-bundled",
+        write_codex_invocation_policy=True,
+    )
+
+    await materializer.materialize((), tmp_path / "workspace")
+
+    assert not (destination / "open-pr").exists()
+    assert (destination / "review" / "SKILL.md").is_file()
+    log.warn.assert_any_call(
+        "managed_skills.codex_policy_unwritable", skill="open-pr", path=CODEX_SKILL_POLICY_PATH
+    )
+    log.info.assert_any_call(
+        "managed_skills.materialized", manifest_sha256=document["manifestSha256"], skill_count=1
+    )
+
+
+async def test_materializer_drops_names_taken_in_extra_collision_roots(tmp_path):
+    codex_skills = tmp_path / "codex-home" / "skills"
+    for root, name in ((codex_skills / ".system", "skill-creator"), (codex_skills, "mine")):
+        (root / name).mkdir(parents=True)
+        (root / name / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\n")
+    document = _skill_document(
+        *(
+            (name, {"SKILL.md": f"---\nname: {name}\ndescription: d\n---\n"})
+            for name in ("skill-creator", "mine", "review")
+        )
+    )
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(return_value=json.dumps(document).encode())
+    destination = tmp_path / "skills"
+    log = MagicMock()
+    materializer = ManagedSkillsMaterializer(
+        client,
+        destination,
+        log,
+        bundled_skills_path=tmp_path / "missing-bundled",
+        extra_collision_roots=(codex_skills, codex_skills / ".system"),
+    )
+
+    await materializer.materialize((), tmp_path / "workspace")
+
+    assert sorted(path.name for path in destination.iterdir()) == ["review"]
+    log.warn.assert_called_once()
+    assert log.warn.call_args.args[0] == "managed_skills.collisions_dropped"
 
 
 async def test_materializer_inside_a_discovery_root_does_not_collide_with_itself(
@@ -599,3 +698,24 @@ def test_supervisor_installs_codex_skills_where_codex_discovers_them(tmp_path):
     assert materializer is not None
     assert materializer.destination == tmp_path / "home" / ".agents" / "skills" / "open-inspect"
     assert materializer.write_codex_invocation_policy is True
+    assert materializer.extra_collision_roots == (Path("/etc/codex/skills"),)
+
+
+def test_supervisor_checks_codex_home_skills_for_collisions(tmp_path):
+    environment = {
+        "CONTROL_PLANE_URL": "https://control.example",
+        "HOME": str(tmp_path / "home"),
+        "SF_AUTH_HOME": str(tmp_path / "auth"),
+        "SESSION_CONFIG": '{"session_id":"session-1","harness":"codex"}',
+    }
+
+    with patch.dict("os.environ", environment, clear=True):
+        supervisor = build_supervisor(asyncio.Event())
+
+    materializer = supervisor.managed_skills
+    assert materializer is not None
+    assert materializer.extra_collision_roots == (
+        tmp_path / "auth" / "codex" / "skills",
+        tmp_path / "auth" / "codex" / "skills" / ".system",
+        Path("/etc/codex/skills"),
+    )

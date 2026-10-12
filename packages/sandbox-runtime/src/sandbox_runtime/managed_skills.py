@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 import httpx
 
+from .codex_skill_policy import CODEX_SKILL_POLICY_PATH, explicit_only_policy
 from .control_plane_fetch import ResponseTooLargeError, fetch_bounded
 from .durable_files import atomic_write_private, fsync_directory
 
@@ -50,10 +51,6 @@ _DISABLE_MODEL_INVOCATION_RE = re.compile(r"^disable-model-invocation:[ \t]*true
 # Skill-reading bound shared by every frontmatter scan of an installed tree.
 _SKILL_MARKDOWN_SCAN_BYTES = 65536
 _STAGING_PREFIX = ".managed-skills-"
-# Codex's per-skill policy file. ``allow_implicit_invocation: false`` keeps a
-# skill out of the model's skill list while ``$name`` still invokes it.
-CODEX_SKILL_POLICY_PATH = "agents/openai.yaml"
-CODEX_EXPLICIT_ONLY_POLICY = "policy:\n  allow_implicit_invocation: false\n"
 
 
 class ManagedSkillsError(RuntimeError):
@@ -403,15 +400,15 @@ def _read_skill_markdown(skill_dir: Path) -> str | None:
         return None
 
 
-def user_invoked_skill_names(skills_dir: Path) -> list[str]:
-    """Installed skills under ``skills_dir`` that only a user may invoke, sorted.
+def user_invoked_skill_dirs(skills_dir: Path) -> dict[str, Path]:
+    """Installed skills under ``skills_dir`` that only a user may invoke, by name.
 
     Reads what the materializer installed, so a harness restart applies the
     same answer without the control plane.
     """
     if not skills_dir.is_dir():
-        return []
-    names: set[str] = set()
+        return {}
+    found: dict[str, Path] = {}
     for child in skills_dir.iterdir():
         if child.name.startswith(".") or not child.is_dir() or child.is_symlink():
             continue
@@ -420,17 +417,26 @@ def user_invoked_skill_names(skills_dir: Path) -> list[str]:
             continue
         name = _canonical_frontmatter_name(markdown)
         if name and _SKILL_NAME_RE.fullmatch(name):
-            names.add(name)
-    return sorted(names)
+            found[name] = child
+    return dict(sorted(found.items()))
+
+
+def user_invoked_skill_names(skills_dir: Path) -> list[str]:
+    """Names of the installed skills only a user may invoke, sorted."""
+    return list(user_invoked_skill_dirs(skills_dir))
 
 
 class ManagedSkillsMaterializer:
     """Install a fetched installation DTO into the platform-owned global skills directory.
 
-    ``write_codex_invocation_policy`` adds Codex's ``agents/openai.yaml``
-    explicit-only policy to skills that disable model invocation and ship no
-    policy file of their own. It is written at install time, never stored, so
-    revision digests are unaffected.
+    ``write_codex_invocation_policy`` writes Codex's ``agents/openai.yaml``
+    explicit-only policy into skills that disable model invocation, merged
+    into the author's file when there is one. It is written at install time,
+    never stored, so revision digests are unaffected.
+
+    ``extra_collision_roots`` are further skill directories the harness
+    discovers (Codex's home and system skills), checked like the repository
+    and home discovery paths.
     """
 
     def __init__(
@@ -441,12 +447,14 @@ class ManagedSkillsMaterializer:
         *,
         bundled_skills_path: Path = Path("/app/sandbox_runtime/skills"),
         write_codex_invocation_policy: bool = False,
+        extra_collision_roots: Sequence[Path] = (),
     ) -> None:
         self.client = client
         self.destination = destination
         self.log = log
         self.bundled_skills_path = bundled_skills_path
         self.write_codex_invocation_policy = write_codex_invocation_policy
+        self.extra_collision_roots = tuple(extra_collision_roots)
 
     @staticmethod
     def _remove_path(path: Path) -> None:
@@ -494,6 +502,7 @@ class ManagedSkillsMaterializer:
 
     def _collision_roots(self, repositories: Sequence[RepoEntry], workdir: Path) -> Iterable[Path]:
         yield self.bundled_skills_path
+        yield from self.extra_collision_roots
         bases = [workdir, *(repository.path for repository in repositories), Path.home()]
         seen: set[Path] = set()
         for base in bases:
@@ -567,40 +576,77 @@ class ManagedSkillsMaterializer:
         staging.mkdir(mode=0o700)
         return staging, backup, journal
 
-    def _stage_skills(self, staging: Path, skills: Sequence[ManagedSkill]) -> None:
+    def _stage_skills(self, staging: Path, skills: Sequence[ManagedSkill]) -> set[str]:
         """Write one batch of validated skills into the staging tree.
 
         Called once per fetched page, so peak memory is a page rather than the
         whole installation. Skill directories are created exclusively, which
         makes a duplicate name that slipped past validation fail here too.
+
+        Returns the skills left out because they could not be installed as
+        their frontmatter requires; the rest of the batch still installs.
         """
+        dropped: set[str] = set()
         for skill in sorted(skills, key=lambda item: item.name.encode("utf-8")):
             skill_dir = staging / skill.name
             skill_dir.mkdir(mode=0o700)
             for file in sorted(skill.files, key=lambda item: item.path.encode("utf-8")):
                 self._write_file(skill_dir / PurePosixPath(file.path), file)
-            if self.write_codex_invocation_policy:
-                self._write_codex_invocation_policy(skill_dir, skill)
+            if self.write_codex_invocation_policy and not self._write_codex_invocation_policy(
+                skill_dir, skill
+            ):
+                self._remove_path(skill_dir)
+                dropped.add(skill.name)
+        return dropped
 
-    def _write_codex_invocation_policy(self, skill_dir: Path, skill: ManagedSkill) -> None:
-        """Keep a user-invoked-only skill out of Codex's implicit skill list."""
+    def _write_codex_invocation_policy(self, skill_dir: Path, skill: ManagedSkill) -> bool:
+        """Keep a user-invoked-only skill out of Codex's implicit skill list.
+
+        An authored ``agents/openai.yaml`` is kept with the policy merged in.
+        Returns False when the policy file cannot be written (the skill ships a
+        plain file at ``agents``, or a directory at the policy path): such a
+        skill would be implicitly invocable, so it must not be installed.
+        """
         markdown = next(file.content for file in skill.files if file.path == "SKILL.md")
         if not disables_model_invocation(markdown):
-            return
-        if any(file.path == CODEX_SKILL_POLICY_PATH for file in skill.files):
-            self.log.info("managed_skills.codex_policy_kept", skill=skill.name)
-            return
-        content = CODEX_EXPLICIT_ONLY_POLICY.encode("utf-8")
+            return True
+        target = skill_dir / PurePosixPath(CODEX_SKILL_POLICY_PATH)
+        authored = next(
+            (file for file in skill.files if file.path == CODEX_SKILL_POLICY_PATH), None
+        )
+        parent_blocked = target.parent.is_symlink() or (
+            target.parent.exists() and not target.parent.is_dir()
+        )
+        target_blocked = authored is None and (target.exists() or target.is_symlink())
+        if parent_blocked or target_blocked:
+            self.log.warn(
+                "managed_skills.codex_policy_unwritable",
+                skill=skill.name,
+                path=CODEX_SKILL_POLICY_PATH,
+            )
+            return False
+        policy = explicit_only_policy(authored.content if authored else None)
+        if policy.change == "kept":
+            return True
+        if authored is not None:
+            self.log.info(
+                "managed_skills.codex_policy_" + policy.change,
+                skill=skill.name,
+                path=CODEX_SKILL_POLICY_PATH,
+            )
+            target.unlink()
+        content = policy.content.encode("utf-8")
         self._write_file(
-            skill_dir / PurePosixPath(CODEX_SKILL_POLICY_PATH),
+            target,
             ManagedSkillFile(
                 CODEX_SKILL_POLICY_PATH,
-                CODEX_EXPLICIT_ONLY_POLICY,
+                policy.content,
                 hashlib.sha256(content).hexdigest(),
                 len(content),
                 False,
             ),
         )
+        return True
 
     def _commit_staging(self, staging: Path, backup: Path, journal: Path) -> None:
         """Swap the staged tree in, recoverably.
@@ -649,6 +695,7 @@ class ManagedSkillsMaterializer:
         instead — see validate_installation_page.
         """
         names: set[str] = set()
+        dropped: set[str] = set()
         content_bytes = 0
         manifest_sha256: str | None = None
         cursor: str | None = None
@@ -663,9 +710,11 @@ class ManagedSkillsMaterializer:
                 expected_manifest_sha256=manifest_sha256,
             )
             manifest_sha256 = page.manifest_sha256
-            self._stage_skills(staging, page.skills)
+            dropped |= self._stage_skills(staging, page.skills)
             if page.next_cursor is None:
-                return manifest_sha256, names
+                # `names` keeps every fetched name for duplicate detection
+                # across pages; only installed ones are reported.
+                return manifest_sha256, names - dropped
             cursor = page.next_cursor
 
     async def materialize(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:
