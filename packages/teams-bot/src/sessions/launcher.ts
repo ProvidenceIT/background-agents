@@ -54,13 +54,17 @@ export interface ModelSelection {
 }
 
 /**
- * The harness a Teams session runs its model on. OpenAI is spent only
- * through Codex on the sender's subscription home (there is no OpenAI key),
- * so an `openai/*` model asks for Codex; anything else keeps the control
- * plane's built-in harness.
+ * The harness a Teams session runs its model on. Subscriptions are spent
+ * only through their own CLIs on the sender's subscription home: OpenAI
+ * through Codex (there is no OpenAI key) and Anthropic through the Claude
+ * Agent, whose wrapper reads the home's setup token (OpenCode cannot). Any
+ * other model keeps the control plane's built-in harness.
  */
 function harnessForModel(model: string): HarnessId | undefined {
-  return extractProviderAndModel(model).provider === "openai" ? "codex" : undefined;
+  const { provider } = extractProviderAndModel(model);
+  if (provider === "openai") return "codex";
+  if (provider === "anthropic") return "claude";
+  return undefined;
 }
 
 /** Apply inline flags to the defaults, or say why they cannot be applied. */

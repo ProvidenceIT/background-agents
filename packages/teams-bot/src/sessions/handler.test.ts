@@ -352,6 +352,8 @@ describe("POST /api/messages", () => {
       repoName: "playground",
       model: DEFAULT_MODEL,
       triggerKind: "mention",
+      // DEFAULT_MODEL is an Anthropic model: it runs on the Claude Agent.
+      harness: "claude",
       actorDisplayName: "Casey",
     });
     expect(prompt.headers[ACTOR_HEADER.toLowerCase()]).toBe(`microsoft:${USER_OID}`);
@@ -618,7 +620,7 @@ describe("POST /api/messages", () => {
     });
   });
 
-  it("runs an inline !model openai/* on Codex and leaves other models on the default harness", async () => {
+  it("runs openai/* on Codex, anthropic/* on the Claude Agent and other models on the default harness", async () => {
     const routes = {
       [`GET /channel-bindings/msteams/${CHANNEL_ID}`]: boundChannel,
       "POST /sessions": sessionCreated,
@@ -641,7 +643,15 @@ describe("POST /api/messages", () => {
       actorDisplayName: "Casey",
     });
 
-    const plain = harness(routes, { defaultModel: "anthropic/claude-sonnet-4-6" });
+    const claude = harness(routes, { defaultModel: "anthropic/claude-sonnet-4-6" });
+    await claude.post(activityFixture());
+    const [, claudeCreate] = claude.controlPlaneRemote.requests;
+    expect(claudeCreate.body).toMatchObject({
+      model: "anthropic/claude-sonnet-4-6",
+      harness: "claude",
+    });
+
+    const plain = harness(routes, { defaultModel: "zai-coding-plan/glm-5.3" });
     await plain.post(activityFixture());
     const [, plainCreate] = plain.controlPlaneRemote.requests;
     expect(plainCreate.body).not.toHaveProperty("harness");
