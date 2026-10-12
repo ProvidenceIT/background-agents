@@ -326,6 +326,7 @@ describe("fetchSkillImport", () => {
           "allowed-tools: [Bash, Read]",
           "model: opus",
           "effort: high",
+          "context: fork",
           "hooks:",
           "  PreToolUse: []",
           "user-invocable: false",
@@ -344,11 +345,12 @@ describe("fetchSkillImport", () => {
       "denied-frontmatter",
       "denied-frontmatter",
       "denied-frontmatter",
+      "denied-frontmatter",
       "preserved-frontmatter",
     ]);
     expect(result.warnings[0].message).toContain('"allowed-tools" grants permissions');
     const markdown = result.files.find((file) => file.path === "SKILL.md")!.content;
-    expect(markdown).not.toMatch(/allowed-tools|model:|hooks|effort/);
+    expect(markdown).not.toMatch(/allowed-tools|model:|hooks|effort|context|fork/);
   });
 
   it("drops keys and values preserved frontmatter cannot hold", async () => {
@@ -382,6 +384,71 @@ describe("fetchSkillImport", () => {
     ]);
     expect(result.warnings[2].message).toContain("finite number");
     expect(result.warnings[3].message).toContain("nests deeper");
+  });
+
+  it("keeps numbers JSON would rewrite as written and says so", async () => {
+    const provider = fakeProvider({
+      "SKILL.md": {
+        content: [
+          "---",
+          "name: deploy-service",
+          "description: Deploys",
+          "version: 1.10",
+          "issue-id: 12345678901234567890",
+          "priority: 2",
+          "---",
+          "body",
+          "",
+        ].join("\n"),
+      },
+    });
+
+    const result = await fetchSkillImport(provider, source());
+
+    expect(result.content.frontmatter).toEqual({
+      version: "1.10",
+      "issue-id": "12345678901234567890",
+      priority: 2,
+    });
+    expect(result.warnings.map((warning) => warning.message)).toEqual([
+      'SKILL.md frontmatter "version" was preserved; "version" kept as written, as text, because JSON cannot hold the number exactly',
+      'SKILL.md frontmatter "issue-id" was preserved; "issue-id" kept as written, as text, because JSON cannot hold the number exactly',
+      'SKILL.md frontmatter "priority" was preserved as-is',
+    ]);
+    const markdown = result.files.find((file) => file.path === "SKILL.md")!.content;
+    expect(markdown).toContain('\nversion: "1.10"\n');
+    expect(markdown).toContain('\nissue-id: "12345678901234567890"\n');
+  });
+
+  it("imports keys written without a value as null instead of failing", async () => {
+    const provider = fakeProvider({
+      "SKILL.md": {
+        content: "---\nname: deploy-service\ndescription: Deploys\ntags: {beta, internal}\n---\n",
+      },
+    });
+
+    const result = await fetchSkillImport(provider, source());
+
+    expect(result.content.frontmatter).toEqual({ tags: { beta: null, internal: null } });
+  });
+
+  it("drops a preserved map holding a __proto__ key instead of losing the key", async () => {
+    const provider = fakeProvider({
+      "SKILL.md": {
+        content:
+          "---\nname: deploy-service\ndescription: Deploys\nreminder: {__proto__: x, when: always}\n---\n",
+      },
+    });
+
+    const result = await fetchSkillImport(provider, source());
+
+    expect(result.content.frontmatter).toEqual({});
+    expect(result.warnings.map((warning) => [warning.code, warning.message])).toEqual([
+      [
+        "unsupported-frontmatter",
+        'SKILL.md frontmatter "reminder" was not imported: frontmatter "reminder.__proto__" uses the reserved key "__proto__"',
+      ],
+    ]);
   });
 
   it("rejects preserved frontmatter over the size limit", async () => {

@@ -53,6 +53,72 @@ describe("parseSkillMarkdown", () => {
     expect(() => frontmatterOf(block)).toThrow(message);
   });
 
+  it("keeps numbers JSON would rewrite as the text they were written as", () => {
+    const frontmatter = frontmatterOf(
+      [
+        "version: 1.10",
+        "mode: 0755",
+        "id: 12345678901234567890",
+        "hex: 0x1F",
+        "whole: 1.0",
+        "count: 3",
+        "ratio: 0.5",
+        "below: -2",
+        "nested: {build: 2.50, steps: [1, 01]}",
+      ].join("\n")
+    );
+    const keptAsText: string[] = [];
+    const value = (key: string) =>
+      frontmatterNodeValue(frontmatter.get(key)!, key, (path) => keptAsText.push(path));
+
+    expect(
+      ["version", "mode", "id", "hex", "whole", "count", "ratio", "below", "nested"].map(value)
+    ).toEqual([
+      "1.10",
+      "0755",
+      "12345678901234567890",
+      "0x1F",
+      "1.0",
+      3,
+      0.5,
+      -2,
+      { build: "2.50", steps: [1, "01"] },
+    ]);
+    expect(keptAsText).toEqual([
+      "version",
+      "mode",
+      "id",
+      "hex",
+      "whole",
+      "nested.build",
+      "nested.steps[1]",
+    ]);
+  });
+
+  it("reads keys written without a value as null", () => {
+    const frontmatter = frontmatterOf("tags: {beta, internal}\nmixed: [a, {b}]\n? bare");
+
+    expect(frontmatterNodeValue(frontmatter.get("tags")!, "tags")).toEqual({
+      beta: null,
+      internal: null,
+    });
+    expect(frontmatterNodeValue(frontmatter.get("mixed")!, "mixed")).toEqual(["a", { b: null }]);
+    expect(frontmatterNodeValue(frontmatter.get("bare")!, "bare")).toBeNull();
+  });
+
+  it.each([
+    ["null spellings", "~: 1\nnull: 2", ["~", "null"]],
+    ["integer spellings", "1: a\n01: b", ["1", "01"]],
+  ])("keeps keys that differ as written (%s)", (_case, block, keys) => {
+    expect([...frontmatterOf(block).keys()]).toEqual(keys);
+  });
+
+  it("refuses a __proto__ key inside a preserved map", () => {
+    const node = frontmatterOf("reminder: {__proto__: x, when: always}").get("reminder")!;
+
+    expect(() => frontmatterNodeValue(node, "reminder")).toThrow(/reserved key "__proto__"/);
+  });
+
   it("refuses non-finite numbers as preserved values", () => {
     const node = frontmatterOf("ratio: .nan").get("ratio")!;
 

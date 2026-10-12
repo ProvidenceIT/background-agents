@@ -113,7 +113,8 @@ export const RESERVED_SKILL_FRONTMATTER_KEYS: readonly string[] = [
 /**
  * Keys never preserved because they grant a harness power or change what a
  * session costs: tool pre-approval, hooks and shells that run commands, model
- * and effort selection, subagent, MCP/LSP server and settings definitions, and
+ * and effort selection, running the skill in a forked subagent (`context`,
+ * with `agent` choosing which), MCP/LSP server and settings definitions, and
  * permission maps. Compared case-insensitively with `-` and `_` ignored, so
  * `allowed_tools` and `allowedTools` are denied with `allowed-tools`.
  */
@@ -125,6 +126,7 @@ export const DENIED_SKILL_FRONTMATTER_KEYS: readonly string[] = [
   "reasoning-effort",
   "model-reasoning-effort",
   "shell",
+  "context",
   "agent",
   "agents",
   "mcp-servers",
@@ -253,7 +255,25 @@ export const skillFrontmatterValueSchema: z.ZodType<SkillFrontmatterValue> = z.l
 /** Stored frontmatter as returned on reads; validated strictly only on write. */
 export const storedSkillFrontmatterSchema = z.record(z.string(), skillFrontmatterValueSchema);
 
-export const skillFrontmatterSchema = storedSkillFrontmatterSchema.superRefine((value, context) => {
+/** Path of the first own `__proto__` key at any depth, or null. */
+function protoKeyPath(value: unknown, path: string): string | null {
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      const found = protoKeyPath(item, `${path}[${index}]`);
+      if (found) return found;
+    }
+  } else if (value !== null && typeof value === "object") {
+    for (const key of Object.keys(value)) {
+      const childPath = path ? `${path}.${key}` : key;
+      if (key === "__proto__") return childPath;
+      const found = protoKeyPath((value as Record<string, unknown>)[key], childPath);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+const strictSkillFrontmatterSchema = storedSkillFrontmatterSchema.superRefine((value, context) => {
   for (const [key, item] of Object.entries(value)) {
     const keyProblem = skillFrontmatterKeyProblem(key);
     if (keyProblem) {
@@ -274,57 +294,101 @@ export const skillFrontmatterSchema = storedSkillFrontmatterSchema.superRefine((
   }
 });
 
-export const skillContentInputSchema = z
-  .strictObject({
-    description: wellFormedString.trim().min(1).max(MAX_SKILL_DESCRIPTION_LENGTH),
-    body: wellFormedString,
-    license: wellFormedString.trim().min(1).max(200).nullish(),
-    compatibility: wellFormedString.trim().min(1).max(MAX_SKILL_COMPATIBILITY_LENGTH).nullish(),
-    metadata: skillMetadataSchema.optional().default({}),
-    frontmatter: skillFrontmatterSchema.optional().default({}),
-    files: z
-      .array(skillFileInputSchema)
-      .max(MAX_SKILL_FILES - 1)
-      .optional()
-      .default([]),
-  })
+/**
+ * Frontmatter as written by the editor, the API and imports. A `__proto__`
+ * key (own data, as `JSON.parse` makes it) is rejected before the record
+ * parser runs, because that parser rebuilds the object and drops it silently.
+ */
+export const skillFrontmatterSchema = z
+  .unknown()
   .superRefine((value, context) => {
-    const seen = new Set<string>();
-    let totalBytes =
-      utf8.encode(value.body).byteLength +
-      utf8.encode(value.description).byteLength +
-      skillFrontmatterBytes(value.frontmatter);
-    for (const file of value.files) {
-      if (seen.has(file.path)) {
-        context.addIssue({
-          code: "custom",
-          path: ["files"],
-          message: `duplicate path: ${file.path}`,
-        });
-      }
-      seen.add(file.path);
-      totalBytes += utf8.encode(file.content).byteLength;
+    const path = protoKeyPath(value, "");
+    if (path) {
+      context.addIssue({
+        code: "custom",
+        message: `frontmatter "${path}" uses the reserved key "__proto__"`,
+      });
     }
-    const paths = [...seen].sort();
-    for (let index = 0; index < paths.length; index++) {
-      for (let other = index + 1; other < paths.length; other++) {
-        if (paths[other].startsWith(`${paths[index]}/`)) {
-          context.addIssue({
-            code: "custom",
-            path: ["files"],
-            message: `file path conflicts with directory path: ${paths[index]}`,
-          });
-        }
-      }
-    }
-    if (totalBytes > MAX_SKILL_REVISION_BYTES) {
+  })
+  .pipe(strictSkillFrontmatterSchema);
+
+const skillContentFields = {
+  description: wellFormedString.trim().min(1).max(MAX_SKILL_DESCRIPTION_LENGTH),
+  body: wellFormedString,
+  license: wellFormedString.trim().min(1).max(200).nullish(),
+  compatibility: wellFormedString.trim().min(1).max(MAX_SKILL_COMPATIBILITY_LENGTH).nullish(),
+  metadata: skillMetadataSchema.optional().default({}),
+  files: z
+    .array(skillFileInputSchema)
+    .max(MAX_SKILL_FILES - 1)
+    .optional()
+    .default([]),
+};
+
+function refineSkillContent(
+  value: {
+    description: string;
+    body: string;
+    frontmatter?: Record<string, SkillFrontmatterValue>;
+    files: { path: string; content: string }[];
+  },
+  context: z.RefinementCtx
+): void {
+  const seen = new Set<string>();
+  let totalBytes =
+    utf8.encode(value.body).byteLength +
+    utf8.encode(value.description).byteLength +
+    skillFrontmatterBytes(value.frontmatter ?? {});
+  for (const file of value.files) {
+    if (seen.has(file.path)) {
       context.addIssue({
         code: "custom",
         path: ["files"],
-        message: `revision must be at most ${MAX_SKILL_REVISION_BYTES} UTF-8 bytes`,
+        message: `duplicate path: ${file.path}`,
       });
     }
-  });
+    seen.add(file.path);
+    totalBytes += utf8.encode(file.content).byteLength;
+  }
+  const paths = [...seen].sort();
+  for (let index = 0; index < paths.length; index++) {
+    for (let other = index + 1; other < paths.length; other++) {
+      if (paths[other].startsWith(`${paths[index]}/`)) {
+        context.addIssue({
+          code: "custom",
+          path: ["files"],
+          message: `file path conflicts with directory path: ${paths[index]}`,
+        });
+      }
+    }
+  }
+  if (totalBytes > MAX_SKILL_REVISION_BYTES) {
+    context.addIssue({
+      code: "custom",
+      path: ["files"],
+      message: `revision must be at most ${MAX_SKILL_REVISION_BYTES} UTF-8 bytes`,
+    });
+  }
+}
+
+export const skillContentInputSchema = z
+  .strictObject({
+    ...skillContentFields,
+    frontmatter: skillFrontmatterSchema.optional().default({}),
+  })
+  .superRefine(refineSkillContent);
+
+/**
+ * Content for replacing a skill's revision. An omitted `frontmatter` keeps the
+ * current revision's: clients that predate the field (an open tab on an older
+ * web bundle, an API script) must not silently wipe it. Send `{}` to clear it.
+ */
+export const replaceSkillContentInputSchema = z
+  .strictObject({
+    ...skillContentFields,
+    frontmatter: skillFrontmatterSchema.optional(),
+  })
+  .superRefine(refineSkillContent);
 
 export const skillAssignmentInputSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("global") }),
@@ -341,7 +405,7 @@ export const createSkillInputSchema = z.strictObject({
 export const setSkillEnabledInputSchema = z.strictObject({ enabled: z.boolean() });
 
 export const replaceSkillContentAndAssignmentsInputSchema = z.strictObject({
-  content: skillContentInputSchema,
+  content: replaceSkillContentInputSchema,
   assignments: z.array(skillAssignmentInputSchema),
 });
 

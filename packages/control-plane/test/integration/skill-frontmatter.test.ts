@@ -138,7 +138,7 @@ describe("preserved skill frontmatter", () => {
     expect(previewed.skillMarkdown).toContain("\ndisable-model-invocation: true\n");
     expect(previewed.revisionSha256).toBe(skill.revisionSha256);
 
-    for (const key of ["allowed-tools", "hooks", "model", "name"]) {
+    for (const key of ["allowed-tools", "hooks", "model", "context", "name"]) {
       const denied = await serviceFetch("https://test.local/skills/preview", {
         method: "POST",
         body: JSON.stringify({
@@ -160,6 +160,37 @@ describe("preserved skill frontmatter", () => {
     expect(replaced.status).toBe(200);
     await expect(replaced.json()).resolves.toMatchObject({
       skill: { revisionNumber: 2, frontmatter: { "argument-hint": "[pr]" } },
+    });
+  });
+
+  it("keeps the current frontmatter when a replace omits the field", async () => {
+    const skills = new SkillStore(env.DB);
+    const skill = await skills.create({ name: "pr", content, assignments: [] }, "user_1", source);
+    const { frontmatter: _omitted, ...withoutFrontmatter } = content;
+
+    const replaced = await serviceFetch(`https://test.local/skills/${skill.id}`, {
+      method: "PUT",
+      headers: { "If-Match": skill.currentRevisionId },
+      body: JSON.stringify({
+        content: { ...withoutFrontmatter, description: "Opens pull requests carefully" },
+        assignments: [],
+      }),
+    });
+
+    expect(replaced.status).toBe(200);
+    const { skill: updated } = await replaced.json<{ skill: Skill }>();
+    expect(updated.revisionNumber).toBe(2);
+    expect(updated.frontmatter).toEqual(frontmatter);
+    expect(skillMarkdown(updated)).toContain("\ndisable-model-invocation: true\n");
+
+    const cleared = await serviceFetch(`https://test.local/skills/${skill.id}`, {
+      method: "PUT",
+      headers: { "If-Match": updated.currentRevisionId },
+      body: JSON.stringify({ content: { ...content, frontmatter: {} }, assignments: [] }),
+    });
+    expect(cleared.status).toBe(200);
+    await expect(cleared.json()).resolves.toMatchObject({
+      skill: { revisionNumber: 3, frontmatter: {} },
     });
   });
 });

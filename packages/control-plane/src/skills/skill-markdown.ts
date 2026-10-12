@@ -10,6 +10,10 @@
  * `version: 1.0` stays `"1.0"`. `value` is the core-typed reading, which is
  * what preserved frontmatter stores, so `disable-model-invocation: true`
  * stays a boolean.
+ *
+ * A key written without a value (`{beta, internal}`, `? key`) reads as YAML
+ * null, as `key:` does. Keys are compared as written, so `~:` and `null:`, or
+ * `1:` and `01:`, are distinct keys, as they were before scalars were typed.
  */
 
 import type { SkillFrontmatterValue } from "@open-inspect/shared/types/skills";
@@ -84,8 +88,12 @@ function keyText(value: unknown, path: string): string {
   return text;
 }
 
+// What `key:` reads as; the parser leaves a value-less flow or `?` entry empty.
+const EMPTY_SCALAR: SkillFrontmatterNode = { kind: "scalar", text: "", value: null };
+
 function readNode(value: unknown, path: string): SkillFrontmatterNode {
-  if (!isNode(value)) throw new SkillMarkdownError(`${nodeLabel(path)} must not be empty`);
+  if (value === null || value === undefined) return EMPTY_SCALAR;
+  if (!isNode(value)) throw new SkillMarkdownError(`${nodeLabel(path)} has an unsupported value`);
   const node: Node = value;
   assertPlainNode(node, path);
   if (isScalar(node)) {
@@ -128,24 +136,41 @@ function readNode(value: unknown, path: string): SkillFrontmatterNode {
 /**
  * The core-typed JSON reading of a node, as preserved frontmatter stores it.
  *
- * @throws SkillMarkdownError for values JSON cannot represent (`.inf`, `.nan`).
+ * A number is kept only when JSON writes it exactly as the source did. Any
+ * other number (`1.10`, `0755`, `0x1F`, an integer beyond 2^53) stays the
+ * string it was written as, so neither the stored value nor the rendered
+ * `SKILL.md` changes it; `onNumberKeptAsText` hears the path of each.
+ *
+ * @throws SkillMarkdownError for values JSON cannot represent (`.inf`, `.nan`)
+ *   and for a `__proto__` map key, which JSON object parsing would drop.
  */
 export function frontmatterNodeValue(
   node: SkillFrontmatterNode,
-  path: string
+  path: string,
+  onNumberKeptAsText?: (path: string) => void
 ): SkillFrontmatterValue {
   if (node.kind === "scalar") {
-    if (typeof node.value === "number" && !Number.isFinite(node.value)) {
+    if (typeof node.value !== "number") return node.value;
+    if (!Number.isFinite(node.value)) {
       throw new SkillMarkdownError(`${nodeLabel(path)} must be a finite number`);
     }
-    return node.value;
+    if (JSON.stringify(node.value) === node.text) return node.value;
+    onNumberKeptAsText?.(path);
+    return node.text;
   }
   if (node.kind === "sequence") {
-    return node.items.map((item, index) => frontmatterNodeValue(item, `${path}[${index}]`));
+    return node.items.map((item, index) =>
+      frontmatterNodeValue(item, `${path}[${index}]`, onNumberKeptAsText)
+    );
   }
-  // fromEntries defines own properties, so a "__proto__" key stays data.
   return Object.fromEntries(
-    node.entries.map(([key, child]) => [key, frontmatterNodeValue(child, `${path}.${key}`)])
+    node.entries.map(([key, child]) => {
+      const childPath = `${path}.${key}`;
+      if (key === "__proto__") {
+        throw new SkillMarkdownError(`${nodeLabel(childPath)} uses the reserved key "__proto__"`);
+      }
+      return [key, frontmatterNodeValue(child, childPath, onNumberKeptAsText)];
+    })
   );
 }
 
@@ -162,7 +187,9 @@ export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
 
   const document = parseDocument(lines.slice(1, closingIndex).join("\n"), {
     schema: "core",
-    uniqueKeys: true,
+    // readNode rejects keys that are equal as written; the parser's own check
+    // compares typed keys, which would make `~:` and `null:` duplicates.
+    uniqueKeys: false,
     strict: true,
   });
   const problem = document.errors[0] ?? document.warnings[0];

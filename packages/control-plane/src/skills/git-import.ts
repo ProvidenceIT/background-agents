@@ -289,9 +289,10 @@ function preserveFrontmatter(
     }
     let problem = skillFrontmatterKeyProblem(key);
     let value: SkillFrontmatterValue | undefined;
+    const numbersKeptAsText: string[] = [];
     if (!problem) {
       try {
-        value = frontmatterNodeValue(node, key);
+        value = frontmatterNodeValue(node, key, (path) => numbersKeptAsText.push(path));
         if (skillFrontmatterDepth(value) > MAX_SKILL_FRONTMATTER_DEPTH) {
           problem = `"${key}" nests deeper than ${MAX_SKILL_FRONTMATTER_DEPTH} levels`;
         }
@@ -310,7 +311,12 @@ function preserveFrontmatter(
     preserved.push([key, value]);
     warnings.push({
       code: "preserved-frontmatter",
-      message: `SKILL.md frontmatter "${key}" was preserved as-is`,
+      message:
+        numbersKeptAsText.length === 0
+          ? `SKILL.md frontmatter "${key}" was preserved as-is`
+          : `SKILL.md frontmatter "${key}" was preserved; ${numbersKeptAsText
+              .map((path) => `"${path}"`)
+              .join(", ")} kept as written, as text, because JSON cannot hold the number exactly`,
     });
   }
   const result = Object.fromEntries(preserved);

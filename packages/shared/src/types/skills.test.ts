@@ -9,6 +9,7 @@ import {
   skillFrontmatterSchema,
   skillSchema,
   importSkillInputSchema,
+  replaceSkillContentAndAssignmentsInputSchema,
   listSkillsResponseSchema,
   sessionSkillSelectionSchema,
   skillContentInputSchema,
@@ -200,6 +201,7 @@ describe("preserved skill frontmatter", () => {
       "hooks",
       "Model",
       "effort",
+      "context",
     ]) {
       expect(isDeniedSkillFrontmatterKey(key)).toBe(true);
       expect(skillFrontmatterSchema.safeParse({ [key]: "x" }).success).toBe(false);
@@ -210,6 +212,41 @@ describe("preserved skill frontmatter", () => {
     expect(
       skillFrontmatterSchema.safeParse({ when_to_use: "x", "user-invocable": false }).success
     ).toBe(true);
+  });
+
+  it("rejects a __proto__ key at any depth instead of dropping it", () => {
+    for (const json of [
+      '{"__proto__": {"a": 1}}',
+      '{"x": {"__proto__": {"a": 1}, "b": 2}}',
+      '{"x": [1, {"__proto__": "y"}]}',
+    ]) {
+      const parsed = skillContentInputSchema.safeParse({
+        ...content,
+        frontmatter: JSON.parse(json),
+      });
+      expect(parsed.success).toBe(false);
+      expect(parsed.error?.issues[0]?.message).toMatch(/reserved key "__proto__"/);
+    }
+  });
+
+  it("leaves frontmatter absent on replace so the current revision's is kept", () => {
+    const replace = (frontmatter?: Record<string, unknown>) =>
+      replaceSkillContentAndAssignmentsInputSchema.parse({
+        content: frontmatter === undefined ? content : { ...content, frontmatter },
+        assignments: [],
+      }).content.frontmatter;
+
+    expect(replace()).toBeUndefined();
+    expect(replace({})).toEqual({});
+    expect(replace({ "disable-model-invocation": true })).toEqual({
+      "disable-model-invocation": true,
+    });
+    expect(
+      replaceSkillContentAndAssignmentsInputSchema.safeParse({
+        content: { ...content, frontmatter: { model: "opus" } },
+        assignments: [],
+      }).success
+    ).toBe(false);
   });
 
   it("caps nesting depth and serialized size", () => {
