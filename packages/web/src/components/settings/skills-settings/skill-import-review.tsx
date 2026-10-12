@@ -1,6 +1,7 @@
 "use client";
 
 import type { SkillImportPreviewResponse } from "@open-inspect/shared/types/skills";
+import { SkillFrontmatterList } from "./skill-frontmatter-list";
 
 /** Abbreviate a digest the way session provenance does elsewhere in the app. */
 function shortDigest(digest: string): string {
@@ -54,6 +55,13 @@ export function SkillImportReview({ preview }: { preview: SkillImportPreviewResp
             <li key={`${warning.code}:${warning.message}`}>{warning.message}</li>
           ))}
         </ul>
+      )}
+
+      {Object.keys(preview.frontmatter).length > 0 && (
+        <div>
+          <h4 className="text-sm font-medium text-foreground">Preserved frontmatter</h4>
+          <SkillFrontmatterList frontmatter={preview.frontmatter} />
+        </div>
       )}
 
       {!preview.nameAvailable && (

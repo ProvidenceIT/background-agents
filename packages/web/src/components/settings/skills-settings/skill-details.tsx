@@ -2,6 +2,7 @@
 
 import type { Skill, SkillAssignment } from "@open-inspect/shared/types/skills";
 import { Button } from "@/components/ui/button";
+import { SkillFrontmatterList } from "./skill-frontmatter-list";
 
 function assignmentLabel(assignment: SkillAssignment): string {
   if (assignment.type === "global") return "All sessions";
@@ -91,6 +92,13 @@ export function SkillDetails({ skill, onClose }: { skill: Skill; onClose: () => 
               </div>
             ))}
           </dl>
+        </section>
+      )}
+
+      {Object.keys(skill.frontmatter).length > 0 && (
+        <section>
+          <h4 className="text-sm font-medium text-foreground">Frontmatter</h4>
+          <SkillFrontmatterList frontmatter={skill.frontmatter} />
         </section>
       )}
 
