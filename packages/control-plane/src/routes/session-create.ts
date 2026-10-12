@@ -8,6 +8,7 @@ import {
 } from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
 import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
+import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import {
@@ -84,10 +85,25 @@ function externalRefInProgress(): Response {
 const EXTERNAL_REF_REPLAY_ROUNDS = 2;
 
 /**
+ * Statuses a holder at status revision 0 can carry without its runtime having
+ * claimed the row: `created` (init pending or lost), `failed` (init reported
+ * failed, possibly after it committed) and `archived` (the draft sweep retired
+ * a row whose runtime answered 404). Whether a runtime exists decides.
+ */
+const UNCLAIMED_HOLDER_STATUSES: ReadonlySet<SessionStatus> = new Set([
+  "created",
+  "failed",
+  "archived",
+]);
+
+/**
  * Answer a create whose external ref a session already holds: the original
  * session, a retryable or fatal conflict, or `null` to create afresh (no
  * holder, or a dead first attempt was released). `afterConflict` is set when
  * this request just lost the ref's unique index to another attempt.
+ *
+ * A holder the runtime never claimed is probed first: a dead attempt frees its
+ * ref whatever body the retry sends, so a corrected create can reuse the ref.
  */
 async function replayExternalRef(
   env: Env,
@@ -104,39 +120,41 @@ async function replayExternalRef(
     if (holder.userId !== ownerUserId) {
       return json({ error: "Conflict", code: "external_ref_conflict" }, 409);
     }
-    if (holder.fingerprint !== ref.fingerprint) {
-      return json({ error: "Conflict", code: "external_ref_payload_mismatch" }, 409);
-    }
-    const replayed = (): Response => {
-      const result: CreateSessionResponse = {
-        sessionId: holder.id,
-        status: holder.status,
-        replayed: true,
-      };
+    const replayed = (status: SessionStatus = holder.status): Response => {
+      if (holder.fingerprint !== ref.fingerprint) {
+        return json({ error: "Conflict", code: "external_ref_payload_mismatch" }, 409);
+      }
+      const result: CreateSessionResponse = { sessionId: holder.id, status, replayed: true };
       return json(result, 200);
     };
-    if (holder.statusRevision > 0 || (holder.status !== "created" && holder.status !== "failed")) {
+    if (holder.statusRevision > 0 || !UNCLAIMED_HOLDER_STATUSES.has(holder.status)) {
       return replayed();
     }
 
-    let release = holder.status === "failed";
-    if (holder.status === "created") {
-      const runtime = await probeSessionRuntime(env, ctx, holder.id);
-      if (runtime === "exists") return replayed();
-      if (runtime === "unknown") {
-        return withRetryAfter(
-          json({ error: "Service Unavailable", code: "external_ref_indeterminate" }, 503)
-        );
-      }
-      if (Date.now() - holder.createdAt < EXTERNAL_REF_PENDING_LEASE_MS) {
-        return externalRefInProgress();
-      }
-      release = true;
+    const runtime = await probeSessionRuntime(env, ctx, holder.id);
+    if (runtime === "unknown") {
+      return withRetryAfter(
+        json({ error: "Service Unavailable", code: "external_ref_indeterminate" }, 503)
+      );
     }
-    if (release && (await store.releaseExternalRef(holder.id))) {
+    if (runtime === "exists") {
+      // The init committed but its answer was lost, so the row was marked failed.
+      if (holder.status === "failed" && (await store.restoreInitializedSession(holder.id))) {
+        return replayed("created");
+      }
+      return replayed();
+    }
+    if (
+      holder.status === "created" &&
+      Date.now() - holder.createdAt < EXTERNAL_REF_PENDING_LEASE_MS
+    ) {
+      return externalRefInProgress();
+    }
+    if (await store.releaseExternalRef(holder.id)) {
       logger.info("External ref released from a dead first attempt", {
         event: "external_ref.released",
         session_id: holder.id,
+        holder_status: holder.status,
         service: ref.service,
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,

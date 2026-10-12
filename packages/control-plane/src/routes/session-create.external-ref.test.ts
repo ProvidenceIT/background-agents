@@ -19,6 +19,7 @@ import {
 } from "../router.test-support";
 import { EXTERNAL_REF_PENDING_LEASE_MS } from "../session/external-ref";
 import { SessionInternalPaths } from "../session/contracts";
+import { SessionIndexStore } from "../db/session-index";
 import { sessionCreateRoutes } from "./session-create";
 
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
@@ -221,10 +222,16 @@ describe("POST /sessions with an externalRef", () => {
     expect(await refRows()).toHaveLength(0);
   });
 
-  it("releases a first attempt whose runtime init failed and creates afresh", async () => {
+  async function failFirstAttempt(): Promise<string> {
     expect((await post(OWNER, BODY)).status).toBe(201);
-    const [{ id: firstId }] = await refRows();
-    await store.prepare("UPDATE sessions SET status = 'failed' WHERE id = ?").bind(firstId).run();
+    const [{ id }] = await refRows();
+    await store.prepare("UPDATE sessions SET status = 'failed' WHERE id = ?").bind(id).run();
+    return id as string;
+  }
+
+  it("releases a first attempt whose runtime init failed and creates afresh", async () => {
+    const firstId = await failFirstAttempt();
+    initialized.clear();
 
     const retry = await post(OWNER, BODY);
     expect(retry.status).toBe(201);
@@ -235,6 +242,82 @@ describe("POST /sessions with an externalRef", () => {
       status: "failed",
       external_ref: null,
       external_ref_service: null,
+    });
+    expect(rows.find((row) => row.id === sessionId)).toMatchObject({ external_ref: "wi-123:1" });
+  });
+
+  it("replays a failed first attempt whose runtime init did commit", async () => {
+    const firstId = await failFirstAttempt();
+
+    const retry = await post(OWNER, BODY);
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toEqual({
+      sessionId: firstId,
+      status: "created",
+      replayed: true,
+    });
+    expect(runtimeInits).toEqual([firstId]);
+    expect(await refRows()).toEqual([
+      expect.objectContaining({ id: firstId, status: "created", external_ref: "wi-123:1" }),
+    ]);
+  });
+
+  it("answers indeterminate for a failed first attempt the runtime cannot confirm", async () => {
+    await failFirstAttempt();
+    probe = "error";
+
+    const retry = await post(OWNER, BODY);
+    expect(retry.status).toBe(503);
+    await expect(retry.json()).resolves.toMatchObject({ code: "external_ref_indeterminate" });
+    expect(await refRows()).toHaveLength(1);
+  });
+
+  it("releases a failed first attempt to a retry with a corrected body", async () => {
+    const firstId = await failFirstAttempt();
+    initialized.clear();
+
+    const retry = await post(OWNER, { ...BODY, title: "Corrected" });
+    expect(retry.status).toBe(201);
+    const { sessionId } = (await retry.json()) as { sessionId: string };
+    expect(sessionId).not.toBe(firstId);
+  });
+
+  it("releases a lease-expired attempt without a runtime to a corrected body", async () => {
+    expect((await post(OWNER, BODY)).status).toBe(201);
+    const [{ id: firstId }] = await refRows();
+    initialized.clear();
+    await store
+      .prepare("UPDATE sessions SET created_at = ? WHERE id = ?")
+      .bind(Date.now() - EXTERNAL_REF_PENDING_LEASE_MS - 1, firstId)
+      .run();
+
+    const retry = await post(OWNER, { ...BODY, title: "Corrected" });
+    expect(retry.status).toBe(201);
+  });
+
+  it("answers in progress, not a mismatch, while a pending attempt holds the ref", async () => {
+    expect((await post(OWNER, BODY)).status).toBe(201);
+    initialized.clear();
+
+    const retry = await post(OWNER, { ...BODY, title: "Corrected" });
+    expect(retry.status).toBe(409);
+    await expect(retry.json()).resolves.toMatchObject({ code: "external_ref_in_progress" });
+  });
+
+  it("releases an orphan the draft sweep archived and creates afresh", async () => {
+    expect((await post(OWNER, BODY)).status).toBe(201);
+    const [{ id: orphanId }] = await refRows();
+    initialized.clear();
+    await new SessionIndexStore(store).archiveOrphanedDraft(orphanId as string);
+
+    const retry = await post(OWNER, BODY);
+    expect(retry.status).toBe(201);
+    const { sessionId } = (await retry.json()) as { sessionId: string };
+    expect(sessionId).not.toBe(orphanId);
+    const rows = await refRows();
+    expect(rows.find((row) => row.id === orphanId)).toMatchObject({
+      status: "archived",
+      external_ref: null,
     });
     expect(rows.find((row) => row.id === sessionId)).toMatchObject({ external_ref: "wi-123:1" });
   });

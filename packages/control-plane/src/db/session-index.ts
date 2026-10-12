@@ -822,16 +822,33 @@ export class SessionIndexStore {
 
   /**
    * Free the external ref of a first attempt that never reached its runtime
-   * (still `created` or `failed` at status revision 0), marking it failed.
-   * Never touches a session the runtime has claimed. Returns whether it did.
+   * (`created`, `failed` or sweep-`archived` at status revision 0). A
+   * `created` row becomes `failed`; the others keep their status. Never
+   * touches a session the runtime has claimed. Returns whether it did.
    */
   async releaseExternalRef(id: string, updatedAt = Date.now()): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE sessions SET status = 'failed', updated_at = ?,
+        `UPDATE sessions
+         SET status = CASE status WHEN 'created' THEN 'failed' ELSE status END, updated_at = ?,
            external_ref_service = NULL, external_ref = NULL, external_ref_fingerprint = NULL
          WHERE id = ? AND external_ref IS NOT NULL AND status_revision = 0
-           AND status IN ('created', 'failed')`
+           AND status IN ('created', 'failed', 'archived')`
+      )
+      .bind(updatedAt, id)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /**
+   * Put back to `created` a row marked `failed` whose runtime init did commit
+   * (its response was lost). Only an unclaimed row moves. Returns whether it did.
+   */
+  async restoreInitializedSession(id: string, updatedAt = Date.now()): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE sessions SET status = 'created', updated_at = ?
+         WHERE id = ? AND status = 'failed' AND status_revision = 0`
       )
       .bind(updatedAt, id)
       .run();
