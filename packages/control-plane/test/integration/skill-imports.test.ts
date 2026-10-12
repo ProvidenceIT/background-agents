@@ -12,6 +12,7 @@ const content = {
   license: null,
   compatibility: null,
   metadata: {},
+  frontmatter: {},
   files: [{ path: "scripts/deploy.sh", content: "#!/bin/sh\n", executable: true }],
 };
 

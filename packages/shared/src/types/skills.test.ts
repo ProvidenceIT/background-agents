@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalSkillFrontmatterJson,
   createSkillInputSchema,
+  isDeniedSkillFrontmatterKey,
+  MAX_SKILL_FRONTMATTER_BYTES,
+  MAX_SKILL_REVISION_BYTES,
+  skillFrontmatterKeyProblem,
+  skillFrontmatterSchema,
+  skillSchema,
   importSkillInputSchema,
   listSkillsResponseSchema,
   sessionSkillSelectionSchema,
@@ -159,5 +166,102 @@ describe("managed skill contracts", () => {
     expect(
       skillImportSourceSchema.safeParse({ ...source, subdirectory: "../deploy" }).success
     ).toBe(false);
+  });
+});
+
+describe("preserved skill frontmatter", () => {
+  const content = { description: "Review code", body: "Follow the checklist." };
+
+  it("defaults to an empty map and keeps typed values", () => {
+    expect(skillContentInputSchema.parse(content).frontmatter).toEqual({});
+    const parsed = skillContentInputSchema.parse({
+      ...content,
+      frontmatter: {
+        "disable-model-invocation": true,
+        "argument-hint": "[branch]",
+        paths: ["src/**", "docs/*.md"],
+        mode: null,
+        priority: 2,
+        reminder: { every: 3, text: "check" },
+      },
+    });
+    expect(parsed.frontmatter["disable-model-invocation"]).toBe(true);
+    expect(parsed.frontmatter.priority).toBe(2);
+  });
+
+  it("rejects reserved, denied and unsafe keys", () => {
+    for (const key of ["name", "Description", "metadata"]) {
+      expect(skillFrontmatterKeyProblem(key)).toMatch(/structured skill field/);
+    }
+    for (const key of [
+      "allowed-tools",
+      "allowed_tools",
+      "allowedTools",
+      "hooks",
+      "Model",
+      "effort",
+    ]) {
+      expect(isDeniedSkillFrontmatterKey(key)).toBe(true);
+      expect(skillFrontmatterSchema.safeParse({ [key]: "x" }).success).toBe(false);
+    }
+    for (const key of ["1st", "has space", "a:b", "-dash", "yes", "true", "x".repeat(65)]) {
+      expect(skillFrontmatterSchema.safeParse({ [key]: "x" }).success).toBe(false);
+    }
+    expect(
+      skillFrontmatterSchema.safeParse({ when_to_use: "x", "user-invocable": false }).success
+    ).toBe(true);
+  });
+
+  it("caps nesting depth and serialized size", () => {
+    const fourDeep = { a: [{ b: [1] }] };
+    expect(skillFrontmatterSchema.safeParse({ deep: fourDeep }).success).toBe(true);
+    expect(skillFrontmatterSchema.safeParse({ deep: [fourDeep] }).success).toBe(false);
+    expect(
+      skillFrontmatterSchema.safeParse({ big: "x".repeat(MAX_SKILL_FRONTMATTER_BYTES) }).success
+    ).toBe(false);
+    expect(skillFrontmatterSchema.safeParse({ bad: Number.POSITIVE_INFINITY }).success).toBe(false);
+  });
+
+  it("counts frontmatter toward the revision byte limit", () => {
+    const bodyBytes = MAX_SKILL_REVISION_BYTES - "Review code".length - 20;
+    const near = { ...content, body: "x".repeat(bodyBytes) };
+    expect(skillContentInputSchema.safeParse(near).success).toBe(true);
+    expect(
+      skillContentInputSchema.safeParse({ ...near, frontmatter: { reminder: "y".repeat(40) } })
+        .success
+    ).toBe(false);
+  });
+
+  it("serializes canonically with keys in UTF-8 byte order at every level", () => {
+    expect(canonicalSkillFrontmatterJson({ b: { z: 1, "\u00e9": 2, a: 3 }, a: [true, null] })).toBe(
+      '{"a":[true,null],"b":{"a":3,"z":1,"\u00e9":2}}'
+    );
+  });
+
+  it("defaults frontmatter on skill reads from an older control plane", () => {
+    const parsed = skillSchema.safeParse({
+      id: "skill_1",
+      name: "review",
+      description: "Review",
+      enabled: true,
+      currentRevisionId: "rev_1",
+      revisionNumber: 1,
+      revisionSha256: "a".repeat(64),
+      revisionCreatedBy: "user_1",
+      creatorDisplayName: null,
+      lastEditorDisplayName: null,
+      revisionAuthorDisplayName: null,
+      assignments: [],
+      createdBy: "user_1",
+      updatedBy: "user_1",
+      createdAt: 1,
+      updatedAt: 1,
+      body: "",
+      license: null,
+      compatibility: null,
+      metadata: {},
+      files: [],
+    });
+    expect(parsed.success && parsed.data.frontmatter).toEqual({});
   });
 });

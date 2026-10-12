@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   MAX_SKILL_FILE_BYTES,
+  MAX_SKILL_FRONTMATTER_BYTES,
   MAX_SKILL_REVISION_BYTES,
   skillImportSourceInputSchema,
 } from "@open-inspect/shared/types/skills";
@@ -274,22 +275,210 @@ describe("fetchSkillImport", () => {
     }
   });
 
-  it("surfaces frontmatter that has no managed-skill field", async () => {
+  it("preserves host frontmatter with its YAML types and reports each key", async () => {
     const provider = fakeProvider({
       "SKILL.md": {
-        content:
-          "---\nname: deploy-service\ndescription: Deploys\nallowed-tools: [read]\nextension:\n  permissions:\n    - deploy\n---\nbody\n",
+        content: [
+          "---",
+          "name: deploy-service",
+          "description: Deploys",
+          "disable-model-invocation: true",
+          'argument-hint: "[environment]"',
+          "paths:",
+          "  - deploy/**",
+          "mode: ~",
+          "priority: 2",
+          "icon: 🚀",
+          "---",
+          "body",
+          "",
+        ].join("\n"),
       },
     });
 
     const result = await fetchSkillImport(provider, source());
 
+    expect(result.content.frontmatter).toEqual({
+      "disable-model-invocation": true,
+      "argument-hint": "[environment]",
+      paths: ["deploy/**"],
+      mode: null,
+      priority: 2,
+      icon: "🚀",
+    });
+    expect(result.warnings.map((warning) => [warning.code, warning.message])).toEqual(
+      ["disable-model-invocation", "argument-hint", "paths", "mode", "priority", "icon"].map(
+        (key) => ["preserved-frontmatter", `SKILL.md frontmatter "${key}" was preserved as-is`]
+      )
+    );
+    const markdown = result.files.find((file) => file.path === "SKILL.md")!.content;
+    expect(markdown).toContain("\ndisable-model-invocation: true\n");
+    expect(markdown.split("\n")[1]).toBe("name: deploy-service");
+  });
+
+  it("drops frontmatter that grants permissions or changes cost", async () => {
+    const provider = fakeProvider({
+      "SKILL.md": {
+        content: [
+          "---",
+          "name: deploy-service",
+          "description: Deploys",
+          "allowed-tools: [Bash, Read]",
+          "model: opus",
+          "effort: high",
+          "hooks:",
+          "  PreToolUse: []",
+          "user-invocable: false",
+          "---",
+          "body",
+          "",
+        ].join("\n"),
+      },
+    });
+
+    const result = await fetchSkillImport(provider, source());
+
+    expect(result.content.frontmatter).toEqual({ "user-invocable": false });
     expect(result.warnings.map((warning) => warning.code)).toEqual([
-      "unmapped-frontmatter",
-      "unmapped-frontmatter",
+      "denied-frontmatter",
+      "denied-frontmatter",
+      "denied-frontmatter",
+      "denied-frontmatter",
+      "preserved-frontmatter",
     ]);
-    expect(result.warnings[0].message).toContain("allowed-tools");
-    expect(result.warnings[1].message).toContain("extension");
+    expect(result.warnings[0].message).toContain('"allowed-tools" grants permissions');
+    const markdown = result.files.find((file) => file.path === "SKILL.md")!.content;
+    expect(markdown).not.toMatch(/allowed-tools|model:|hooks|effort/);
+  });
+
+  it("drops keys and values preserved frontmatter cannot hold", async () => {
+    const provider = fakeProvider({
+      "SKILL.md": {
+        content: [
+          "---",
+          "name: deploy-service",
+          "description: Deploys",
+          "Name: shadow",
+          "2fa: required",
+          "ratio: .inf",
+          "deep: [[[[[1]]]]]",
+          "kept: [[[[1]]]]",
+          "---",
+          "body",
+          "",
+        ].join("\n"),
+      },
+    });
+
+    const result = await fetchSkillImport(provider, source());
+
+    expect(result.content.frontmatter).toEqual({ kept: [[[[1]]]] });
+    expect(result.warnings.map((warning) => warning.code)).toEqual([
+      "unsupported-frontmatter",
+      "unsupported-frontmatter",
+      "unsupported-frontmatter",
+      "unsupported-frontmatter",
+      "preserved-frontmatter",
+    ]);
+    expect(result.warnings[2].message).toContain("finite number");
+    expect(result.warnings[3].message).toContain("nests deeper");
+  });
+
+  it("rejects preserved frontmatter over the size limit", async () => {
+    const provider = fakeProvider({
+      "SKILL.md": {
+        content: `---\nname: deploy-service\ndescription: Deploys\nreminder: ${"x".repeat(
+          MAX_SKILL_FRONTMATTER_BYTES
+        )}\n---\nbody\n`,
+      },
+    });
+
+    await expect(fetchSkillImport(provider, source())).rejects.toThrow(
+      /frontmatter beyond the mapped fields exceeds/
+    );
+  });
+
+  it.each([
+    ["an alias", "anchor: &a x\nalias: *a", /anchors are not supported/],
+    ["a custom tag", "flag: !!bool true", /tags are not supported/],
+    ["a duplicate key", "mode: a\nmode: b", /SKILL\.md frontmatter is invalid/],
+    ["keys equal as text", '1: a\n"1": b', /duplicate key/],
+  ])("rejects %s anywhere in the frontmatter", async (_case, extra, message) => {
+    const provider = fakeProvider({
+      "SKILL.md": { content: `---\nname: deploy-service\ndescription: d\n${extra}\n---\n` },
+    });
+
+    await expect(fetchSkillImport(provider, source())).rejects.toThrow(message);
+  });
+
+  it("flattens nested metadata to dotted string keys", async () => {
+    const provider = fakeProvider({
+      "SKILL.md": {
+        content: [
+          "---",
+          "name: pr",
+          "description: Opens pull requests",
+          "metadata:",
+          "  version: 1.0",
+          "  credits:",
+          "    skill: pr",
+          "    author: Matt Pocock",
+          "    organisation: AI Hero",
+          "    url: https://example.com/pr",
+          "  tags: [git, github]",
+          "---",
+          "body",
+          "",
+        ].join("\n"),
+      },
+    });
+
+    const result = await fetchSkillImport(provider, source());
+
+    expect(result.content.metadata).toEqual({
+      version: "1.0",
+      "credits.skill": "pr",
+      "credits.author": "Matt Pocock",
+      "credits.organisation": "AI Hero",
+      "credits.url": "https://example.com/pr",
+      tags: '["git","github"]',
+    });
+    expect(result.warnings).toEqual([
+      {
+        code: "flattened-metadata",
+        message:
+          'SKILL.md metadata nests maps or lists; stored as flat string keys "credits.skill", "credits.author", "credits.organisation", "credits.url", "tags"',
+      },
+    ]);
+  });
+
+  it.each([
+    ["a flattened key collision", "  a.b: x\n  a:\n    b: y", /"a\.b" is defined twice/],
+    ["an over-long key", `  ${"k".repeat(101)}: x`, /must be 1 to 100 characters/],
+    ["an over-long value", `  k: ${"v".repeat(501)}`, /longer than 500 characters/],
+    ["a scalar", "", /"metadata" must be a map/],
+  ])("rejects metadata with %s", async (_case, entries, message) => {
+    const metadata = entries ? `metadata:\n${entries}` : "metadata: flat";
+    const provider = fakeProvider({
+      "SKILL.md": { content: `---\nname: deploy-service\ndescription: d\n${metadata}\n---\n` },
+    });
+
+    await expect(fetchSkillImport(provider, source())).rejects.toThrow(message);
+  });
+
+  it("imports the same source to the same revision digest", async () => {
+    const markdown =
+      "---\nname: pr\ndescription: d\ndisable-model-invocation: true\nreminder: {b: 1, a: 2}\n---\nbody\n";
+    const first = await fetchSkillImport(
+      fakeProvider({ "SKILL.md": { content: markdown } }),
+      source()
+    );
+    const second = await fetchSkillImport(
+      fakeProvider({ "SKILL.md": { content: markdown.replace("{b: 1, a: 2}", "{a: 2, b: 1}") } }),
+      source()
+    );
+
+    expect(second.revisionSha256).toBe(first.revisionSha256);
   });
 
   it("carries license, compatibility, and metadata across", async () => {

@@ -9,14 +9,23 @@
  */
 
 import {
+  isDeniedSkillFrontmatterKey,
   MAX_SKILL_FILES,
   MAX_SKILL_FILE_BYTES,
+  MAX_SKILL_FRONTMATTER_BYTES,
+  MAX_SKILL_FRONTMATTER_DEPTH,
+  MAX_SKILL_METADATA_KEY_LENGTH,
+  MAX_SKILL_METADATA_VALUE_LENGTH,
   MAX_SKILL_REVISION_BYTES,
   skillContentInputSchema,
+  skillFrontmatterBytes,
+  skillFrontmatterDepth,
+  skillFrontmatterKeyProblem,
   skillFileInputSchema,
   skillNameSchema,
   type SkillContentInput,
   type SkillFileInput,
+  type SkillFrontmatterValue,
   type SkillImportSource,
   type SkillImportSourceInput,
   type SkillImportWarning,
@@ -28,7 +37,13 @@ import type {
 } from "../source-control";
 import { SourceControlProviderError } from "../source-control";
 import { buildValidatedSkillRevision, hashImportedSourceTree } from "./content-addressing";
-import { parseSkillMarkdown, SkillMarkdownError, type ParsedSkillMarkdown } from "./skill-markdown";
+import {
+  frontmatterNodeValue,
+  parseSkillMarkdown,
+  SkillMarkdownError,
+  type ParsedSkillMarkdown,
+  type SkillFrontmatterNode,
+} from "./skill-markdown";
 
 /** Blobs read concurrently. Bounded to keep one import's subrequest burst small. */
 const BLOB_CONCURRENCY = 6;
@@ -37,8 +52,9 @@ const BLOB_CONCURRENCY = 6;
 const MAX_SUGGESTED_DIRECTORIES = 20;
 
 /**
- * Frontmatter keys that map onto managed-skill fields. Everything else is
- * reported as unmapped rather than dropped without a trace.
+ * Frontmatter keys that map onto managed-skill fields. Every other key is
+ * preserved in `frontmatter`, or dropped with a warning when it is denied or
+ * cannot be stored — never dropped without a trace.
  */
 const MAPPED_FRONTMATTER_KEYS = new Set([
   "name",
@@ -172,12 +188,145 @@ function scalarField(frontmatter: ParsedSkillMarkdown["frontmatter"], key: strin
   if (value.kind !== "scalar") {
     throw new SkillImportError(`SKILL.md frontmatter "${key}" must be a single value`, 400);
   }
-  return value.value;
+  return value.text;
+}
+
+function markdownValue(node: SkillFrontmatterNode, path: string): SkillFrontmatterValue {
+  try {
+    return frontmatterNodeValue(node, path);
+  } catch (error) {
+    if (error instanceof SkillMarkdownError) {
+      throw new SkillImportError(`SKILL.md frontmatter is invalid: ${error.message}`, 400);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Map `metadata` onto the flat string map managed skills store. Scalars keep
+ * their written text; nested maps become dotted keys (`credits.author`) and
+ * lists become JSON strings, each reported once as `flattened-metadata`.
+ */
+function flattenMetadata(
+  node: SkillFrontmatterNode | undefined,
+  warnings: SkillImportWarning[]
+): Record<string, string> {
+  if (node === undefined) return {};
+  if (node.kind !== "map") {
+    throw new SkillImportError('SKILL.md frontmatter "metadata" must be a map', 400);
+  }
+  const flat = new Map<string, string>();
+  const flattened: string[] = [];
+  function assign(key: string, value: string): void {
+    if (flat.has(key)) {
+      throw new SkillImportError(`SKILL.md metadata "${key}" is defined twice`, 400);
+    }
+    if (key.length === 0 || key.length > MAX_SKILL_METADATA_KEY_LENGTH) {
+      throw new SkillImportError(
+        `SKILL.md metadata key "${key}" must be 1 to ${MAX_SKILL_METADATA_KEY_LENGTH} characters`,
+        400
+      );
+    }
+    if (value.length > MAX_SKILL_METADATA_VALUE_LENGTH) {
+      throw new SkillImportError(
+        `SKILL.md metadata "${key}" is longer than ${MAX_SKILL_METADATA_VALUE_LENGTH} characters`,
+        400
+      );
+    }
+    flat.set(key, value);
+  }
+  function visit(entries: [string, SkillFrontmatterNode][], prefix: string, depth: number): void {
+    for (const [key, child] of entries) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      if (child.kind === "map") {
+        if (depth >= MAX_SKILL_FRONTMATTER_DEPTH) {
+          throw new SkillImportError(
+            `SKILL.md metadata "${path}" nests deeper than ${MAX_SKILL_FRONTMATTER_DEPTH} levels`,
+            400
+          );
+        }
+        visit(child.entries, path, depth + 1);
+        continue;
+      }
+      assign(
+        path,
+        child.kind === "scalar"
+          ? child.text
+          : JSON.stringify(markdownValue(child, `metadata.${path}`))
+      );
+      if (prefix || child.kind === "sequence") flattened.push(path);
+    }
+  }
+  visit(node.entries, "", 1);
+  if (flattened.length > 0) {
+    warnings.push({
+      code: "flattened-metadata",
+      message: `SKILL.md metadata nests maps or lists; stored as flat string keys ${flattened
+        .map((key) => `"${key}"`)
+        .join(", ")}`,
+    });
+  }
+  return Object.fromEntries(flat);
+}
+
+/**
+ * Keep every unmapped key that is allowed, as typed JSON. Denied keys and
+ * values `frontmatter` cannot hold are dropped, each with a warning.
+ */
+function preserveFrontmatter(
+  frontmatter: ParsedSkillMarkdown["frontmatter"],
+  warnings: SkillImportWarning[]
+): Record<string, SkillFrontmatterValue> {
+  const preserved: [string, SkillFrontmatterValue][] = [];
+  for (const [key, node] of frontmatter) {
+    if (MAPPED_FRONTMATTER_KEYS.has(key)) continue;
+    if (isDeniedSkillFrontmatterKey(key)) {
+      warnings.push({
+        code: "denied-frontmatter",
+        message: `SKILL.md frontmatter "${key}" grants permissions or changes cost and was not imported`,
+      });
+      continue;
+    }
+    const keyProblem = skillFrontmatterKeyProblem(key);
+    let value: SkillFrontmatterValue | undefined;
+    let problem = keyProblem;
+    if (!problem) {
+      try {
+        value = frontmatterNodeValue(node, key);
+        if (skillFrontmatterDepth(value) > MAX_SKILL_FRONTMATTER_DEPTH) {
+          problem = `"${key}" nests deeper than ${MAX_SKILL_FRONTMATTER_DEPTH} levels`;
+        }
+      } catch (error) {
+        if (!(error instanceof SkillMarkdownError)) throw error;
+        problem = error.message;
+      }
+    }
+    if (problem || value === undefined) {
+      warnings.push({
+        code: "unsupported-frontmatter",
+        message: `SKILL.md frontmatter "${key}" was not imported: ${problem}`,
+      });
+      continue;
+    }
+    preserved.push([key, value]);
+    warnings.push({
+      code: "preserved-frontmatter",
+      message: `SKILL.md frontmatter "${key}" was preserved as-is`,
+    });
+  }
+  const result = Object.fromEntries(preserved);
+  if (skillFrontmatterBytes(result) > MAX_SKILL_FRONTMATTER_BYTES) {
+    throw new SkillImportError(
+      `SKILL.md frontmatter beyond the mapped fields exceeds ${MAX_SKILL_FRONTMATTER_BYTES} bytes as JSON`,
+      400
+    );
+  }
+  return result;
 }
 
 /**
  * Map parsed frontmatter and body onto managed-skill content, collecting a
- * warning for every frontmatter key the managed-skill model has no home for.
+ * warning for every frontmatter key that was preserved, flattened or dropped.
  */
 function mapFrontmatter(
   markdown: string,
@@ -193,27 +342,19 @@ function mapFrontmatter(
     throw error;
   }
   const warnings: SkillImportWarning[] = [];
-  for (const key of parsed.frontmatter.keys()) {
-    if (MAPPED_FRONTMATTER_KEYS.has(key)) continue;
-    warnings.push({
-      code: "unmapped-frontmatter",
-      message: `SKILL.md frontmatter "${key}" has no managed-skill field and was not imported`,
-    });
-  }
   const description = scalarField(parsed.frontmatter, "description");
   if (!description?.trim()) {
     throw new SkillImportError("SKILL.md frontmatter has no description", 400);
   }
-  const metadataValue = parsed.frontmatter.get("metadata");
-  if (metadataValue !== undefined && metadataValue.kind !== "map") {
-    throw new SkillImportError('SKILL.md frontmatter "metadata" must be a map of strings', 400);
-  }
+  const metadata = flattenMetadata(parsed.frontmatter.get("metadata"), warnings);
+  const frontmatter = preserveFrontmatter(parsed.frontmatter, warnings);
   const candidate = {
     description,
     body: parsed.body,
     license: scalarField(parsed.frontmatter, "license"),
     compatibility: scalarField(parsed.frontmatter, "compatibility"),
-    metadata: metadataValue?.kind === "map" ? metadataValue.value : {},
+    metadata,
+    frontmatter,
     files,
   };
   const content = skillContentInputSchema.safeParse(candidate);

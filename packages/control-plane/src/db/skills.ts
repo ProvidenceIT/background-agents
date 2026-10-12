@@ -1,7 +1,9 @@
 import {
+  canonicalSkillFrontmatterJson,
   skillImportProvenanceSchema,
   skillImportSourceSchema,
   skillMetadataSchema,
+  storedSkillFrontmatterSchema,
   type CreateSkillInput,
   type ReplaceSkillContentAndAssignmentsInput,
   type SetSkillEnabledInput,
@@ -45,6 +47,7 @@ interface SkillRow {
   license: string | null;
   compatibility: string | null;
   metadata_json: string;
+  frontmatter_json: string;
   total_bytes: number;
   revision_created_by: string;
   creator_display_name: string | null;
@@ -163,6 +166,7 @@ export class SkillStore {
       license: row.license,
       compatibility: row.compatibility,
       metadata: skillMetadataSchema.parse(JSON.parse(row.metadata_json)),
+      frontmatter: storedSkillFrontmatterSchema.parse(JSON.parse(row.frontmatter_json)),
       files,
     };
   }
@@ -563,7 +567,7 @@ export class SkillStore {
 
   private currentSkillSelect(): string {
     return `SELECT s.*, r.revision_number, r.revision_sha256, r.description, r.body,
-       r.license, r.compatibility, r.metadata_json, r.total_bytes,
+       r.license, r.compatibility, r.metadata_json, r.frontmatter_json, r.total_bytes,
        r.created_by AS revision_created_by,
        creator.display_name AS creator_display_name,
        editor.display_name AS last_editor_display_name,
@@ -804,8 +808,8 @@ export class SkillStore {
       .prepare(
         `INSERT INTO skill_revisions
          (id, skill_id, revision_number, revision_sha256, description, body, license,
-          compatibility, metadata_json, total_bytes, created_by, created_at)
-          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          compatibility, metadata_json, frontmatter_json, total_bytes, created_by, created_at)
+          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
           WHERE ? IS NULL OR EXISTS (
             SELECT 1 FROM skills
             WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL
@@ -821,6 +825,7 @@ export class SkillStore {
         content.license ?? null,
         content.compatibility ?? null,
         JSON.stringify(content.metadata),
+        canonicalSkillFrontmatterJson(content.frontmatter ?? {}),
         revision.totalBytes,
         actorUserId,
         now,

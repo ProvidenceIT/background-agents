@@ -81,10 +81,198 @@ export const skillFileInputSchema = z
     path: ["path"],
   });
 
+export const MAX_SKILL_METADATA_KEY_LENGTH = 100;
+export const MAX_SKILL_METADATA_VALUE_LENGTH = 500;
+
 export const skillMetadataSchema = z.record(
-  wellFormedString.min(1).max(100),
-  wellFormedString.max(500)
+  wellFormedString.min(1).max(MAX_SKILL_METADATA_KEY_LENGTH),
+  wellFormedString.max(MAX_SKILL_METADATA_VALUE_LENGTH)
 );
+
+/**
+ * Additional `SKILL.md` frontmatter preserved verbatim (as typed JSON) and
+ * rendered after `metadata`, for host fields such as
+ * `disable-model-invocation`, `argument-hint` or `paths`.
+ *
+ * The serialized size counts toward {@link MAX_SKILL_REVISION_BYTES}.
+ */
+export const MAX_SKILL_FRONTMATTER_BYTES = 8 * 1024;
+/** Deepest nesting of lists and maps inside one preserved frontmatter value. */
+export const MAX_SKILL_FRONTMATTER_DEPTH = 4;
+export const MAX_SKILL_FRONTMATTER_KEY_LENGTH = 64;
+
+/** Keys that are structured skill fields; they never appear in `frontmatter`. */
+export const RESERVED_SKILL_FRONTMATTER_KEYS: readonly string[] = [
+  "name",
+  "description",
+  "license",
+  "compatibility",
+  "metadata",
+];
+
+/**
+ * Keys never preserved because they grant a harness power or change what a
+ * session costs: tool pre-approval, hooks and shells that run commands, model
+ * and effort selection, subagent, MCP/LSP server and settings definitions, and
+ * permission maps. Compared case-insensitively with `-` and `_` ignored, so
+ * `allowed_tools` and `allowedTools` are denied with `allowed-tools`.
+ */
+export const DENIED_SKILL_FRONTMATTER_KEYS: readonly string[] = [
+  "allowed-tools",
+  "hooks",
+  "model",
+  "effort",
+  "reasoning-effort",
+  "model-reasoning-effort",
+  "shell",
+  "agent",
+  "agents",
+  "mcp-servers",
+  "lsp-servers",
+  "settings",
+  "permission",
+  "permissions",
+  "tools",
+];
+
+/** A preserved frontmatter value: JSON data, as YAML 1.2 core typing reads it. */
+export type SkillFrontmatterValue =
+  | null
+  | boolean
+  | number
+  | string
+  | SkillFrontmatterValue[]
+  | { [key: string]: SkillFrontmatterValue };
+
+const frontmatterKeyPattern = /^[A-Za-z][A-Za-z0-9_-]*$/;
+// Plain keys a YAML 1.1 reader would type as booleans or null.
+const yamlTypedKeyPattern = /^(?:true|false|null|yes|no|on|off|y|n)$/i;
+
+function normalizedFrontmatterKey(key: string): string {
+  return key.toLowerCase().replace(/[-_]/g, "");
+}
+
+const deniedFrontmatterKeys = new Set(DENIED_SKILL_FRONTMATTER_KEYS.map(normalizedFrontmatterKey));
+const reservedFrontmatterKeys = new Set(RESERVED_SKILL_FRONTMATTER_KEYS);
+
+/** Whether a frontmatter key names a structured skill field. */
+export function isReservedSkillFrontmatterKey(key: string): boolean {
+  return reservedFrontmatterKeys.has(key.toLowerCase());
+}
+
+/** Whether a frontmatter key is on the power/cost denylist. */
+export function isDeniedSkillFrontmatterKey(key: string): boolean {
+  return deniedFrontmatterKeys.has(normalizedFrontmatterKey(key));
+}
+
+/**
+ * Why a top-level key cannot be stored in `frontmatter`, or null when it can.
+ * Keys are written plain into `SKILL.md`, so they are limited to a charset no
+ * YAML reader can mistake for anything but a string.
+ */
+export function skillFrontmatterKeyProblem(key: string): string | null {
+  if (isReservedSkillFrontmatterKey(key)) return `"${key}" is a structured skill field`;
+  if (isDeniedSkillFrontmatterKey(key)) {
+    return `"${key}" grants permissions or changes cost and is not allowed`;
+  }
+  if (
+    key.length > MAX_SKILL_FRONTMATTER_KEY_LENGTH ||
+    !frontmatterKeyPattern.test(key) ||
+    yamlTypedKeyPattern.test(key)
+  ) {
+    return `"${key}" must start with a letter and use at most ${MAX_SKILL_FRONTMATTER_KEY_LENGTH} letters, digits, "-" or "_"`;
+  }
+  return null;
+}
+
+/** Container nesting of a value: 0 for a scalar, 1 for a flat list or map. */
+export function skillFrontmatterDepth(value: SkillFrontmatterValue): number {
+  if (Array.isArray(value)) {
+    return 1 + value.reduce<number>((max, item) => Math.max(max, skillFrontmatterDepth(item)), 0);
+  }
+  if (value !== null && typeof value === "object") {
+    return (
+      1 +
+      Object.values(value).reduce<number>(
+        (max, item) => Math.max(max, skillFrontmatterDepth(item)),
+        0
+      )
+    );
+  }
+  return 0;
+}
+
+/** Order strings by their UTF-8 bytes, the order every skill digest uses. */
+export function compareUtf8(left: string, right: string): number {
+  const leftBytes = utf8.encode(left);
+  const rightBytes = utf8.encode(right);
+  const length = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < length; index++) {
+    if (leftBytes[index] !== rightBytes[index]) return leftBytes[index] - rightBytes[index];
+  }
+  return leftBytes.length - rightBytes.length;
+}
+
+/** The value with every map's keys in UTF-8 byte order, so serialization is canonical. */
+export function sortSkillFrontmatterValue(value: SkillFrontmatterValue): SkillFrontmatterValue {
+  if (Array.isArray(value)) return value.map(sortSkillFrontmatterValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort(compareUtf8)
+        .map((key) => [key, sortSkillFrontmatterValue(value[key])])
+    );
+  }
+  return value;
+}
+
+/** Canonical compact JSON of a frontmatter map: what is stored and size-limited. */
+export function canonicalSkillFrontmatterJson(
+  frontmatter: Record<string, SkillFrontmatterValue>
+): string {
+  return JSON.stringify(sortSkillFrontmatterValue(frontmatter));
+}
+
+/** UTF-8 size a frontmatter map adds to a revision; zero when it is empty. */
+export function skillFrontmatterBytes(frontmatter: Record<string, SkillFrontmatterValue>): number {
+  if (Object.keys(frontmatter).length === 0) return 0;
+  return utf8.encode(canonicalSkillFrontmatterJson(frontmatter)).byteLength;
+}
+
+export const skillFrontmatterValueSchema: z.ZodType<SkillFrontmatterValue> = z.lazy(() =>
+  z.union([
+    z.null(),
+    z.boolean(),
+    z.number(),
+    wellFormedString,
+    z.array(skillFrontmatterValueSchema),
+    z.record(wellFormedString, skillFrontmatterValueSchema),
+  ])
+);
+
+/** Stored frontmatter as returned on reads; validated strictly only on write. */
+export const storedSkillFrontmatterSchema = z.record(z.string(), skillFrontmatterValueSchema);
+
+export const skillFrontmatterSchema = storedSkillFrontmatterSchema.superRefine((value, context) => {
+  for (const [key, item] of Object.entries(value)) {
+    const keyProblem = skillFrontmatterKeyProblem(key);
+    if (keyProblem) {
+      context.addIssue({ code: "custom", path: [key], message: keyProblem });
+    } else if (skillFrontmatterDepth(item) > MAX_SKILL_FRONTMATTER_DEPTH) {
+      context.addIssue({
+        code: "custom",
+        path: [key],
+        message: `"${key}" nests deeper than ${MAX_SKILL_FRONTMATTER_DEPTH} levels`,
+      });
+    }
+  }
+  if (skillFrontmatterBytes(value) > MAX_SKILL_FRONTMATTER_BYTES) {
+    context.addIssue({
+      code: "custom",
+      message: `frontmatter must be at most ${MAX_SKILL_FRONTMATTER_BYTES} UTF-8 bytes as JSON`,
+    });
+  }
+});
 
 export const skillContentInputSchema = z
   .strictObject({
@@ -93,6 +281,7 @@ export const skillContentInputSchema = z
     license: wellFormedString.trim().min(1).max(200).nullish(),
     compatibility: wellFormedString.trim().min(1).max(MAX_SKILL_COMPATIBILITY_LENGTH).nullish(),
     metadata: skillMetadataSchema.optional().default({}),
+    frontmatter: skillFrontmatterSchema.optional().default({}),
     files: z
       .array(skillFileInputSchema)
       .max(MAX_SKILL_FILES - 1)
@@ -101,7 +290,10 @@ export const skillContentInputSchema = z
   })
   .superRefine((value, context) => {
     const seen = new Set<string>();
-    let totalBytes = utf8.encode(value.body).byteLength + utf8.encode(value.description).byteLength;
+    let totalBytes =
+      utf8.encode(value.body).byteLength +
+      utf8.encode(value.description).byteLength +
+      skillFrontmatterBytes(value.frontmatter);
     for (const file of value.files) {
       if (seen.has(file.path)) {
         context.addIssue({
@@ -265,6 +457,8 @@ export const skillSchema = skillSummarySchema.extend({
   license: z.string().nullable(),
   compatibility: z.string().nullable(),
   metadata: z.record(z.string(), z.string()),
+  /** Preserved frontmatter; defaulted for responses from a control plane predating it. */
+  frontmatter: storedSkillFrontmatterSchema.optional().default({}),
   files: z.array(skillFileSchema),
 });
 
@@ -315,11 +509,24 @@ export const skillImportSourceInputSchema = z.strictObject({
 });
 
 /**
- * Findings that neither block the import nor survive into stored content.
- * Surfaced in the preview so an importer sees what the mapping did not carry.
+ * Findings that do not block the import, surfaced in the preview so an
+ * importer sees what the mapping changed:
+ *
+ * - `preserved-frontmatter`: a host field kept in `frontmatter` as-is;
+ * - `denied-frontmatter`: a key on the power/cost denylist, dropped;
+ * - `unsupported-frontmatter`: a key or value `frontmatter` cannot hold, dropped;
+ * - `flattened-metadata`: nested `metadata` flattened to dotted string keys;
+ * - `name-derived` / `name-overridden`: where the canonical name came from.
  */
 export const skillImportWarningSchema = z.strictObject({
-  code: z.enum(["unmapped-frontmatter", "name-derived", "name-overridden"]),
+  code: z.enum([
+    "preserved-frontmatter",
+    "denied-frontmatter",
+    "unsupported-frontmatter",
+    "flattened-metadata",
+    "name-derived",
+    "name-overridden",
+  ]),
   message: z.string(),
 });
 
@@ -337,6 +544,7 @@ export const skillImportPreviewResponseSchema = z.strictObject({
   license: z.string().nullable(),
   compatibility: z.string().nullable(),
   metadata: z.record(z.string(), z.string()),
+  frontmatter: storedSkillFrontmatterSchema.optional().default({}),
   revisionSha256: z.string(),
   totalBytes: z.number().int().nonnegative(),
   files: z.array(
@@ -528,3 +736,4 @@ export type SkillImportPreviewResponse = z.infer<typeof skillImportPreviewRespon
 export type ImportSkillInput = z.infer<typeof importSkillInputSchema>;
 export type ReimportSkillPreviewInput = z.infer<typeof reimportSkillPreviewInputSchema>;
 export type ReimportSkillInput = z.infer<typeof reimportSkillInputSchema>;
+export type SkillFrontmatter = z.infer<typeof skillFrontmatterSchema>;

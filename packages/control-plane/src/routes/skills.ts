@@ -259,6 +259,7 @@ async function importPreviewResponse(
     license: result.content.license ?? null,
     compatibility: result.content.compatibility ?? null,
     metadata: result.content.metadata,
+    frontmatter: result.content.frontmatter,
     revisionSha256: result.revisionSha256,
     totalBytes: result.totalBytes,
     files: result.files,
