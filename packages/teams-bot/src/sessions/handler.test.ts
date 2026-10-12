@@ -1063,6 +1063,39 @@ describe("POST /api/messages", () => {
     expect(h.replies().map((reply) => reply.text)).toEqual([NOT_A_CHANNEL_MESSAGE]);
   });
 
+  it("stays silent in a group chat unless mentioned", async () => {
+    const h = harness({ "GET *": boundChannel });
+    const groupChat = {
+      channelData: { tenant: { id: TENANT_ID } },
+      conversation: { id: "19:chat@thread.v2", conversationType: "groupChat", tenantId: TENANT_ID },
+    };
+    await h.post(activityFixture({ ...groupChat, id: "1", entities: [], text: "lunch at noon?" }));
+    expect(h.replies()).toEqual([]);
+    await h.post(activityFixture({ ...groupChat, id: "2" }));
+    expect(h.controlPlaneCalls()).toEqual([]);
+    expect(h.replies().map((reply) => reply.text)).toEqual([NOT_A_CHANNEL_MESSAGE]);
+  });
+
+  it("ignores a channel message that does not mention the bot", async () => {
+    const h = harness({ "GET *": boundChannel });
+    await h.post(activityFixture({ entities: [], text: "ProvidenceIT/playground add a badge" }));
+    expect(h.controlPlaneCalls()).toEqual([]);
+    expect(h.replies()).toEqual([]);
+  });
+
+  it("answers an unmentioned message in its own 1:1 chat", async () => {
+    const h = harness({ "GET *": boundChannel });
+    await h.post(
+      activityFixture({
+        channelData: { tenant: { id: TENANT_ID } },
+        conversation: { id: "a:1chat", conversationType: "personal", tenantId: TENANT_ID },
+        entities: [],
+        text: "hello",
+      })
+    );
+    expect(h.replies().map((reply) => reply.text)).toEqual([NOT_A_CHANNEL_MESSAGE]);
+  });
+
   it("ignores a redelivered activity and the bot's own messages", async () => {
     const h = harness({
       [`GET /channel-bindings/msteams/${CHANNEL_ID}`]: boundChannel,

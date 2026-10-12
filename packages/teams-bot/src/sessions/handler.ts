@@ -13,6 +13,7 @@ import type { TeamsStateStore, ThreadSessionRecord } from "../state/store";
 import {
   checkTeamsActivity,
   formatQuotedReplyContext,
+  messageMentionsBot,
   normalizeTeamsText,
   teamsGetSenderObjectId,
   teamsQuotedReplyContext,
@@ -322,6 +323,16 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
       activity.from.id.toLowerCase() === activity.recipient.id.toLowerCase()
     ) {
       deps.log.debug("activity.dropped", { ...logBase, reject_reason: "own_message" });
+      return;
+    }
+    // Outside the bot's own 1:1 chat, only a message that mentions the bot is
+    // for it. An app installed in a group chat may receive every message
+    // there; answering those would talk over the people in the chat.
+    if (
+      activity.conversation?.conversationType?.toLowerCase() !== "personal" &&
+      !messageMentionsBot(activity)
+    ) {
+      deps.log.debug("activity.dropped", { ...logBase, reject_reason: "not_mentioned" });
       return;
     }
     const threadKey = teamsThreadKey(activity);
