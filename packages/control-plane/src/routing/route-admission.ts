@@ -622,9 +622,15 @@ async function enforceSessionRequirement(
   const sessionId = params[requirement.sessionIdParam];
   if (!sessionId) return { response: json({ error: "Invalid session route" }, 400) };
   try {
-    // An opt-in service reaches only a session it created for the acting user;
-    // any other session answers exactly like a missing one, so it cannot probe.
-    if (ctx.principal?.kind === "service" && isOptInService(ctx.principal.service)) {
+    // An opt-in service reads any session its actor may read, under the usual
+    // rules below. Every other action reaches only a session it created for the
+    // acting user; any other session answers exactly like a missing one, so it
+    // cannot probe.
+    if (
+      ctx.principal?.kind === "service" &&
+      isOptInService(ctx.principal.service) &&
+      requirement.action !== "read"
+    ) {
       const row = await new SessionIndexStore(ctx.db).get(sessionId);
       const actorUserId = authorizationUserId(ctx);
       if (

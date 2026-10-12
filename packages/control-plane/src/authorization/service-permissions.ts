@@ -76,8 +76,9 @@ export function serviceAllowsPermission(service: ServiceName, permission: Permis
 /**
  * Services admitted only on routes that name them in `optInServices`; every
  * other route refuses them before actor enrolment, whatever their ceiling.
- * On session routes they reach only the sessions they created for the acting
- * user (see `enforceSessionRequirement`).
+ * On session routes they read any session the acting user may read, but every
+ * other action reaches only the sessions they created for that user (see
+ * `enforceSessionRequirement`).
  */
 export const OPT_IN_SERVICES = ["motion"] as const satisfies readonly ServiceName[];
 export type OptInServiceName = (typeof OPT_IN_SERVICES)[number];

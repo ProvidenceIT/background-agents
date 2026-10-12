@@ -622,7 +622,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       provider: "microsoft",
       providerUserId: objectId,
     });
-    // Motion reaches only sessions it created for its actor.
+    // Motion stops and prompts only sessions it created for its actor (it reads any it may see).
     const motionSessionId = await createReadySession();
     await env.DB.prepare("UPDATE sessions SET spawn_source = 'motion' WHERE id = ?")
       .bind(motionSessionId)
@@ -668,6 +668,10 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       [
         "GET /sessions",
         "GET /sessions/inbox",
+        "GET /sessions/:id",
+        "GET /sessions/:id/artifacts",
+        "GET /sessions/:id/events",
+        "GET /sessions/:id/messages",
         "POST /sessions",
         "POST /sessions/:id/prompt",
         "POST /sessions/:id/stop",
@@ -675,14 +679,15 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     );
     expect(withoutActor).toEqual([]);
 
-    // Every other bot keeps the inbox closed, with or without an actor.
-    const inbox = `${BASE}/sessions/inbox`;
-    for (const [service, actor] of [
-      ["slack-bot", "slack:U-SENTINEL"],
-      ["teams-bot", `microsoft:${objectId}`],
-    ] as const) {
-      const response = await send(inbox, "GET", await botHeaders(inbox, "GET", service, actor));
-      expect(response.status, service).toBe(403);
+    // Every other bot keeps the inbox and the snapshot closed, with or without an actor.
+    for (const url of [`${BASE}/sessions/inbox`, `${BASE}/sessions/${motionSessionId}`]) {
+      for (const [service, actor] of [
+        ["slack-bot", "slack:U-SENTINEL"],
+        ["teams-bot", `microsoft:${objectId}`],
+      ] as const) {
+        const response = await send(url, "GET", await botHeaders(url, "GET", service, actor));
+        expect(response.status, `${service} ${url}`).toBe(403);
+      }
     }
   });
 

@@ -156,9 +156,10 @@ describe("route-owned principal restrictions", () => {
   it("rejects a service principal on human-user routes", async () => {
     const { env } = createEnv(401);
     const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const request = await signedServiceRequest("https://test.local/sessions/session-1", {
-      service: "linear-bot",
-    });
+    const request = await signedServiceRequest(
+      "https://test.local/sessions/session-1/sandbox-access",
+      { service: "linear-bot" }
+    );
 
     const response = await handleRequest(request, env as never, TEST_BACKGROUND_TASK_CONTEXT);
 
@@ -195,7 +196,8 @@ describe("opt-in service admission", () => {
   }
 
   it.each([
-    ["GET", "/sessions/session-1/events"],
+    ["GET", "/sessions/session-1/participants"],
+    ["GET", "/sessions/session-1/participant-profiles"],
     ["POST", "/sessions/session-1/archive"],
     ["GET", "/repos"],
     ["GET", "/model-preferences"],
@@ -220,6 +222,10 @@ describe("opt-in service admission", () => {
     ["GET", "/sessions/inbox"],
     ["POST", "/sessions/session-1/stop"],
     ["POST", "/sessions/session-1/prompt"],
+    ["GET", "/sessions/session-1"],
+    ["GET", "/sessions/session-1/events"],
+    ["GET", "/sessions/session-1/messages"],
+    ["GET", "/sessions/session-1/artifacts"],
   ])("requires an actor from motion on its opt-in route %s %s", async (method, path) => {
     const response = await motionCall(method, path);
 
@@ -227,6 +233,26 @@ describe("opt-in service admission", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Forbidden",
       code: "service_actor_required",
+    });
+  });
+
+  it.each([
+    ["teams-bot", "microsoft:4f1c2d3e-5a6b-4c7d-8e9f-0a1b2c3d4e5f"],
+    ["slack-bot", "slack:U1"],
+  ])("still refuses %s on the session snapshot", async (service, actor) => {
+    const { env } = createEnv(401);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const request = await signedServiceRequest("https://test.local/sessions/session-1", {
+      service: service as "teams-bot" | "slack-bot",
+      actor,
+    });
+
+    const response = await handleRequest(request, env as never, TEST_BACKGROUND_TASK_CONTEXT);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Forbidden",
+      code: "service_capability_required",
     });
   });
 

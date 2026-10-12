@@ -418,13 +418,17 @@ describe("route policy table", () => {
     expect(new Set(granted)).toEqual(expected);
   });
 
-  it("opts motion into exactly its five routes", () => {
+  it("opts motion into exactly its nine routes", () => {
     const expected = new Set([
       routeFor("POST", "/sessions"),
       routeFor("GET", "/sessions"),
       routeFor("GET", "/sessions/inbox"),
       routeFor("POST", "/sessions/session-1/stop"),
       routeFor("POST", "/sessions/session-1/prompt"),
+      routeFor("GET", "/sessions/session-1"),
+      routeFor("GET", "/sessions/session-1/events"),
+      routeFor("GET", "/sessions/session-1/messages"),
+      routeFor("GET", "/sessions/session-1/artifacts"),
     ]);
     const optedIn = routes.filter(
       (route) =>
@@ -442,6 +446,7 @@ describe("route policy table", () => {
 
   it("keeps every opt-in route within motion's permission ceiling", () => {
     const sessionActionPermission = {
+      read: "sessions.read",
       lifecycle: "sessions.lifecycle",
       collaborate: "sessions.collaborate",
     } as const;
@@ -501,6 +506,14 @@ describe("route policy table", () => {
       kind: "active-user",
       allOf: [{ kind: "permission", permission: "sessions.read" }],
       service: { kind: "actor" },
+    });
+    expect(routeFor("GET", "/sessions/session-1")).toMatchObject({
+      authentication: { kind: "user-or-service" },
+      authorization: {
+        kind: "active-user",
+        allOf: [{ kind: "session", action: "read" }],
+        service: { kind: "deny", optInServices: ["motion"] },
+      },
     });
     expect(routeFor("GET", "/sessions/inbox")).toMatchObject({
       authentication: { kind: "user-or-service" },
@@ -686,7 +699,6 @@ describe("route policy table", () => {
   });
 
   it.each([
-    ["GET", "/sessions/session-1"],
     ["POST", "/sessions/batch-archive"],
     ["GET", "/sessions/session-1/sandbox-access"],
     ["PATCH", "/sessions/session-1/read-state"],

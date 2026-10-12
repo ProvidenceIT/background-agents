@@ -269,6 +269,8 @@ export function requireSession(
     sessionIdParam?: string;
     actorlessGrants?: readonly ActorlessServiceGrant[];
     enforceAlways?: boolean;
+    /** `deny` refuses every service except the opt-in services the route names. */
+    service?: "actor" | "deny";
     optInServices?: readonly OptInServiceName[];
   }
 ): Extract<RouteAuthorization, { kind: "active-user" }> {
@@ -280,13 +282,14 @@ export function requireSession(
         enforceAlways: options?.enforceAlways,
       },
     ],
-    service: options?.enforceAlways
-      ? { kind: "deny", ...optIn(options.optInServices) }
-      : {
-          kind: "actor",
-          actorlessGrants: options?.actorlessGrants,
-          ...optIn(options?.optInServices),
-        },
+    service:
+      options?.enforceAlways || options?.service === "deny"
+        ? { kind: "deny", ...optIn(options?.optInServices) }
+        : {
+            kind: "actor",
+            actorlessGrants: options?.actorlessGrants,
+            ...optIn(options?.optInServices),
+          },
     auditAllowed: action !== "read",
   };
 }

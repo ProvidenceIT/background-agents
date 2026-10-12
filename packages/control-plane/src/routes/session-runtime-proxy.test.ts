@@ -371,6 +371,106 @@ describe("session runtime proxy routes", () => {
     }
   );
 
+  describe("motion reads for an enrolled actor", () => {
+    const MOTION: Principal = {
+      kind: "service",
+      service: "motion",
+      actor: {
+        provider: "microsoft",
+        providerUserId: "4f1c2d3e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+        canonicalUserId: "user-1",
+        participantUserId: "microsoft:4f1c2d3e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+      },
+    };
+
+    function snapshotRuntime() {
+      return vi.fn(async () =>
+        Response.json({
+          session: {
+            id: "session-1",
+            title: "Session",
+            repoOwner: "acme",
+            repoName: "web",
+            baseBranch: "main",
+            branchName: "feature",
+            status: "active",
+            sandboxStatus: "ready",
+            messageCount: 0,
+            createdAt: 1,
+            codeServerUrl: "https://code.example",
+            vncUrl: "https://vnc.example",
+            ttydUrl: "https://terminal.example",
+            tunnelUrls: { "3000": "https://app.example" },
+            sandboxDashboardUrl: "https://provider.example",
+          },
+          artifacts: [],
+          promptQueue: [],
+          timeline: { events: [], hasMore: false, cursor: null },
+        })
+      );
+    }
+
+    it.each(["off", "shadow", "on"] as const)(
+      "reads a session it did not create, without sandbox locations, in %s mode",
+      async (mode) => {
+        authenticateAs(MOTION);
+        const fetch = snapshotRuntime();
+
+        const response = await dispatch(new Request("https://test.local/sessions/session-1"), {
+          ...createEnv(fetch),
+          TEAMS_ENFORCEMENT: mode,
+        });
+
+        expect(response.status).toBe(200);
+        const snapshot = (await response.json()) as { session: Record<string, unknown> };
+        expect(snapshot.session).toMatchObject({
+          branchName: "feature",
+          sandboxStatus: "ready",
+          status: "active",
+        });
+        // The actor is an Owner who may reach the sandbox; motion's ceiling may not.
+        for (const field of [
+          "codeServerUrl",
+          "vncUrl",
+          "ttydUrl",
+          "tunnelUrls",
+          "sandboxDashboardUrl",
+        ]) {
+          expect(snapshot.session).not.toHaveProperty(field);
+        }
+      }
+    );
+
+    it.each([
+      ["a person", USER],
+      ["motion for that person", MOTION],
+    ])("answers 404 to %s for someone else's private session", async (_name, principal) => {
+      authenticateAs(principal);
+      const fetch = snapshotRuntime();
+
+      const response = await dispatch(
+        new Request("https://test.local/sessions/session-1"),
+        createEnv(fetch, { visibility: "private", permissions: ["sessions.read"] })
+      );
+
+      expect(response.status).toBe(404);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it("still stops only sessions it created", async () => {
+      authenticateAs(MOTION);
+      const fetch = vi.fn(async () => Response.json({ status: "stopping" }));
+
+      const response = await dispatch(
+        new Request("https://test.local/sessions/session-1/stop", { method: "POST" }),
+        createEnv(fetch)
+      );
+
+      expect(response.status).toBe(404);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["off", "shadow", "on"] as const)(
     "refuses non-member sandbox access before runtime dispatch in %s mode",
     async (mode) => {

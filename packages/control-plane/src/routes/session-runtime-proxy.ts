@@ -24,6 +24,7 @@ import {
   viewerFromContext,
 } from "../authorization/session-admission";
 import { resolverDecides } from "../authorization/teams-enforcement";
+import { serviceAllowsPermission } from "../authorization/service-permissions";
 import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import type { Env } from "../types";
@@ -200,9 +201,16 @@ async function handleSessionSnapshot(
     ctx.sessionAdmission?.row.collaboratorIds ??
     (await new SessionCollaboratorStore(ctx.db).listUserIds(sessionId));
   const accessRow = { ...row, ownerUserId: row.userId ?? null, collaboratorIds: collaborators };
-  const sandboxAllowed = resolverDecides(teamsEnforcementMode(ctx, env), accessRow, "sandbox")
-    ? checkSessionAccess(viewer, accessRow, "sandbox").allowed
-    : ctx.authorization?.permissions.includes("sessions.sandbox_access");
+  // A service sees sandbox locations only when its ceiling allows sandbox access
+  // as well as its actor; motion's does not, so it always gets the redacted form.
+  const serviceMaySandbox =
+    ctx.principal?.kind !== "service" ||
+    serviceAllowsPermission(ctx.principal.service, "sessions.sandbox_access");
+  const sandboxAllowed =
+    serviceMaySandbox &&
+    (resolverDecides(teamsEnforcementMode(ctx, env), accessRow, "sandbox")
+      ? checkSessionAccess(viewer, accessRow, "sandbox").allowed
+      : ctx.authorization?.permissions.includes("sessions.sandbox_access"));
   const snapshot = sandboxAllowed ? parsed.data : redactSessionSnapshotSandboxAccess(parsed.data);
   snapshot.session = {
     ...snapshot.session,
@@ -382,7 +390,11 @@ sessionRuntimeProxyRoutes.get(
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id",
-  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requireSession("read") }),
+  admit({
+    ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+    // People, and Providence for an enrolled person; every other bot is refused.
+    authorization: requireSession("read", { service: "deny", optInServices: ["motion"] }),
+  }),
   (c) => dispatchSession(c, handleSessionSnapshot)
 );
 sessionRuntimeProxyRoutes.post(
@@ -415,6 +427,7 @@ sessionRuntimeProxyRoutes.get(
         { service: "linear-bot" },
         { service: "teams-bot" },
       ],
+      optInServices: ["motion"],
     }),
   }),
   (c) =>
@@ -433,6 +446,7 @@ sessionRuntimeProxyRoutes.get(
         { service: "linear-bot" },
         { service: "teams-bot" },
       ],
+      optInServices: ["motion"],
     }),
   }),
   (c) => dispatchSession(c, simpleProxy({ internalPath: SessionInternalPaths.artifacts }))
@@ -452,7 +466,10 @@ sessionRuntimeProxyRoutes.get(
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id/messages",
-  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requireSession("read") }),
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requireSession("read", { optInServices: ["motion"] }),
+  }),
   (c) =>
     dispatchSession(
       c,
