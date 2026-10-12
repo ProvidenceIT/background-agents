@@ -287,9 +287,8 @@ function preserveFrontmatter(
       });
       continue;
     }
-    const keyProblem = skillFrontmatterKeyProblem(key);
+    let problem = skillFrontmatterKeyProblem(key);
     let value: SkillFrontmatterValue | undefined;
-    let problem = keyProblem;
     if (!problem) {
       try {
         value = frontmatterNodeValue(node, key);
