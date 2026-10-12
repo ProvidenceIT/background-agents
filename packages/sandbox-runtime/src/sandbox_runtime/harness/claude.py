@@ -28,6 +28,7 @@ from ..credentials.provider_credential_client import (
     RuntimeCredentialDenied,
     RuntimeCredentialUnavailable,
 )
+from ..skill_invocation import expand_explicit_skill_invocations, leading_slash_command
 from .base import (
     EventSink,
     HarnessId,
@@ -619,7 +620,14 @@ class ClaudeHarness:
             return False
 
     async def _user_messages(self, prompt: HarnessPrompt) -> AsyncIterator[dict[str, Any]]:
-        content: list[dict[str, Any]] = [{"type": "text", "text": prompt.text}]
+        # Claude expands a leading `/name` itself, even for a user-invoked-only
+        # skill; `$name` and a later `/name` are expanded here.
+        text = expand_explicit_skill_invocations(
+            prompt.text,
+            self.config.config_dir / "skills",
+            natively_expanded=leading_slash_command(prompt.text),
+        )
+        content: list[dict[str, Any]] = [{"type": "text", "text": text}]
         for attachment in prompt.attachments:
             content.append(
                 {

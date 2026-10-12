@@ -10,6 +10,7 @@ from ..claude_stager import ClaudeHarnessHandoff
 from ..codex_stager import CodexHarnessHandoff
 from ..credentials.provider_credential_client import RuntimeCredentialClient
 from ..memories import append_memory, memory_text
+from ..opencode_server import resolve_opencode_global_config_dir
 from .base import (
     DEFAULT_HARNESS_ID,
     DETERMINISTIC_FAILURE_EXIT_CODE,
@@ -66,6 +67,7 @@ def build_agent_harness(
                 attachment_processor=attachment_processor,
                 log=log,
                 limits=limits,
+                managed_skills_dir=resolve_opencode_global_config_dir() / "skills",
             )
         case HarnessId.CLAUDE:
             handoff = ClaudeHarnessHandoff.read()

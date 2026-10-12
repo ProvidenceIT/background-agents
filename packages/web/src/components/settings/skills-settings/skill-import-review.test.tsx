@@ -28,6 +28,7 @@ const preview: SkillImportPreviewResponse = {
   license: null,
   compatibility: null,
   metadata: {},
+  frontmatter: {},
   revisionSha256: "c".repeat(64),
   totalBytes: 88,
   files: [
@@ -58,5 +59,34 @@ describe("SkillImportReview", () => {
     expect(screen.getByText(/deploy-reviewed-content/)).toBeInTheDocument();
     expect(screen.getByText("executable")).toBeInTheDocument();
     expect(screen.getByText(/name: deploy-service/)).toBeInTheDocument();
+    expect(screen.queryByText("Preserved frontmatter")).not.toBeInTheDocument();
+  });
+
+  it("shows preserved frontmatter and the mapping warnings", () => {
+    render(
+      <SkillImportReview
+        preview={{
+          ...preview,
+          frontmatter: { "disable-model-invocation": true, paths: ["deploy/**"] },
+          warnings: [
+            {
+              code: "preserved-frontmatter",
+              message: 'SKILL.md frontmatter "disable-model-invocation" was preserved as-is',
+            },
+            {
+              code: "denied-frontmatter",
+              message:
+                'SKILL.md frontmatter "allowed-tools" grants permissions or changes cost and was not imported',
+            },
+          ],
+        }}
+      />
+    );
+
+    expect(screen.getByText("Preserved frontmatter")).toBeInTheDocument();
+    expect(screen.getByText("disable-model-invocation")).toBeInTheDocument();
+    expect(screen.getByText('["deploy/**"]')).toBeInTheDocument();
+    expect(screen.getByText(/"disable-model-invocation" was preserved as-is/)).toBeInTheDocument();
+    expect(screen.getByText(/"allowed-tools" grants permissions/)).toBeInTheDocument();
   });
 });

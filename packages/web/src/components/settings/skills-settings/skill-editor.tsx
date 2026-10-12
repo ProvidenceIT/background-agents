@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
+  skillFrontmatterSchema,
   skillMetadataSchema,
   type Skill,
   type SkillAssignmentInput,
@@ -64,6 +65,11 @@ export function SkillEditor({
   const [metadataText, setMetadataText] = useState(() =>
     JSON.stringify(skill?.metadata ?? {}, null, 2)
   );
+  // Preserved SKILL.md frontmatter round-trips through the editor: a save sends
+  // the whole content, and an omitted map would replace it with an empty one.
+  const [frontmatterText, setFrontmatterText] = useState(() =>
+    JSON.stringify(skill?.frontmatter ?? {}, null, 2)
+  );
   const [files, setFiles] = useState<SkillFileInput[]>(
     () =>
       skill?.files
@@ -88,6 +94,7 @@ export function SkillEditor({
     license: skill?.license ?? "",
     compatibility: skill?.compatibility ?? "",
     metadataText: JSON.stringify(skill?.metadata ?? {}, null, 2),
+    frontmatterText: JSON.stringify(skill?.frontmatter ?? {}, null, 2),
     files:
       skill?.files
         .filter(({ path }) => path !== "SKILL.md")
@@ -102,6 +109,7 @@ export function SkillEditor({
       license,
       compatibility,
       metadataText,
+      frontmatterText,
       files,
       assignments: [...assignmentKeys].sort(),
     }) !== initialState;
@@ -123,12 +131,33 @@ export function SkillEditor({
     return parsed.data;
   }
 
+  function parsedFrontmatter(): SkillContentInput["frontmatter"] {
+    let value: unknown;
+    try {
+      value = JSON.parse(frontmatterText);
+    } catch {
+      throw new Error("Frontmatter must be a JSON object");
+    }
+    const parsed = skillFrontmatterSchema.safeParse(value);
+    if (!parsed.success) {
+      throw new Error(
+        `Frontmatter is invalid: ${parsed.error.issues[0]?.message ?? "not a JSON object"}`
+      );
+    }
+    return parsed.data;
+  }
+
+  function structuredContent(): SkillContentInput {
+    return { ...content, metadata: parsedMetadata(), frontmatter: parsedFrontmatter() };
+  }
+
   const content: SkillContentInput = {
     description,
     body,
     license: license.trim() || null,
     compatibility: compatibility.trim() || null,
     metadata: {},
+    frontmatter: {},
     files,
   };
 
@@ -145,7 +174,7 @@ export function SkillEditor({
     if (reposLoading || environmentsLoading || reposError || environmentsError) return;
     setSaving(true);
     try {
-      const saveContent = { ...content, metadata: parsedMetadata() };
+      const saveContent = structuredContent();
       const assignments = buildAssignments(assignmentKeys, repos, environments, initialAssignments);
       if (creating) {
         const created = await createSkill({ name, content: saveContent, assignments });
@@ -168,7 +197,7 @@ export function SkillEditor({
 
   async function preview() {
     try {
-      const result = await previewSkill(name, { ...content, metadata: parsedMetadata() });
+      const result = await previewSkill(name, structuredContent());
       setValidation({
         markdown: result.skillMarkdown,
         sha256: result.revisionSha256,
@@ -263,15 +292,33 @@ export function SkillEditor({
             />
           </div>
         </div>
-        <div>
-          <Label htmlFor="skill-metadata">Metadata (JSON string map)</Label>
-          <Textarea
-            id="skill-metadata"
-            value={metadataText}
-            onChange={(event) => setMetadataText(event.target.value)}
-            rows={4}
-            className="mt-1 font-mono text-xs"
-          />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label htmlFor="skill-metadata">Metadata (JSON string map)</Label>
+            <Textarea
+              id="skill-metadata"
+              value={metadataText}
+              onChange={(event) => setMetadataText(event.target.value)}
+              rows={4}
+              className="mt-1 font-mono text-xs"
+            />
+          </div>
+          <div>
+            <Label htmlFor="skill-frontmatter">Frontmatter (JSON)</Label>
+            <Textarea
+              id="skill-frontmatter"
+              value={frontmatterText}
+              onChange={(event) => setFrontmatterText(event.target.value)}
+              rows={4}
+              className="mt-1 font-mono text-xs"
+              aria-describedby="skill-frontmatter-help"
+            />
+            <p id="skill-frontmatter-help" className="mt-1 text-xs text-muted-foreground">
+              Extra <span className="font-mono">SKILL.md</span> fields such as{" "}
+              <span className="font-mono">{'{"disable-model-invocation": true}'}</span>. Fields that
+              grant permissions or pick a model are not allowed.
+            </p>
+          </div>
         </div>
       </div>
 

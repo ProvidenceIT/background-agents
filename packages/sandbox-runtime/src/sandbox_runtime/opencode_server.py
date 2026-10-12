@@ -14,6 +14,7 @@ import httpx
 
 from .constants import OPENCODE_PORT
 from .git_excludes import install_runtime_git_excludes
+from .managed_skills import user_invoked_skill_names
 from .mcp_packages import McpPackageInstaller
 from .memories import memory_path
 from .process_output import iter_process_lines
@@ -38,6 +39,26 @@ def resolve_opencode_global_config_dir() -> Path:
     xdg = os.environ.get("XDG_CONFIG_HOME")
     base = Path(xdg) if xdg else Path.home() / ".config"
     return base / "opencode"
+
+
+def opencode_permission(user_invoked_skills: Sequence[str]) -> dict[str, Any]:
+    """OpenCode's permission config: allow everything, then hide user-invoked skills.
+
+    OpenCode ignores ``disable-model-invocation``. Its equivalent is a
+    ``skill`` deny rule: ``Skill.available`` drops a denied skill from the
+    model's ``available_skills`` and the skill tool refuses to load it. Only
+    OpenCode's own clients turn ``/name`` into its command; the bridge sends
+    prompts to ``prompt_async`` as text, so it appends the instructions of a
+    user-invoked skill the prompt names itself (see ``skill_invocation``).
+    Rules are evaluated last-match-wins with these
+    config rules after the agent defaults, so the ``"*"`` allow stays first.
+    The ``skill`` map holds only deny rules: JavaScript orders integer-like keys
+    (a skill named ``42``) first, which would put them ahead of an allow there.
+    """
+    permission: dict[str, Any] = {"*": {"*": "allow"}}
+    if user_invoked_skills:
+        permission["skill"] = dict.fromkeys(sorted(user_invoked_skills), "deny")
+    return permission
 
 
 # The subscription auth home's env file (`$SF_AUTH_HOME/env`): KEY=VALUE
@@ -452,7 +473,9 @@ class OpenCodeServer:
         # Build OpenCode config from session settings
         opencode_config: dict[str, Any] = {
             "model": f"{self.provider}/{self.model}",
-            "permission": {"*": {"*": "allow"}},
+            "permission": opencode_permission(
+                user_invoked_skill_names(resolve_opencode_global_config_dir() / "skills")
+            ),
             "provider": {
                 "anthropic": {
                     "models": {

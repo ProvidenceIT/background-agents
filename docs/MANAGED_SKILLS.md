@@ -79,6 +79,10 @@ Use this skill when deploying the API service to staging.
 - **Compatibility** describes environment or tool requirements.
 - **Metadata** accepts a JSON object whose keys and values are strings, for example
   `{"team":"platform"}`.
+- **Frontmatter (JSON)** holds any other `SKILL.md` frontmatter the skill needs, as a JSON object
+  whose values keep their types, for example `{"disable-model-invocation": true}` or
+  `{"argument-hint": "[branch]", "paths": ["src/**"]}`. See
+  [Preserved frontmatter](#preserved-frontmatter) for what is allowed and how each harness uses it.
 
 Open-Inspect generates the skill's `SKILL.md` from these fields. You do not need to create it as a
 supporting file.
@@ -136,12 +140,37 @@ once is not supported; repeat the import for each.
 
 `name`, `description`, `license`, `compatibility`, and `metadata` become the matching fields, and
 everything after the frontmatter becomes the instructions. Every other frontmatter key — for example
-`allowed-tools` or `version` — has no managed-skill field and is reported in the preview rather than
-dropped silently. All other files in the directory are imported as supporting files.
+`disable-model-invocation`, `argument-hint`, or `version` — is kept as
+[preserved frontmatter](#preserved-frontmatter), unless it is on the denylist or cannot be stored.
+All other files in the directory are imported as supporting files.
 
-Open-Inspect regenerates `SKILL.md` from the mapped fields alone. The stored file is therefore
-neither byte-identical to the upstream one nor a superset of it: unmapped frontmatter keys are
-reported in the preview and then left behind.
+Frontmatter is read as YAML 1.2 (core schema): `true`, `2`, and `null` keep their types in preserved
+frontmatter, while the mapped string fields and `metadata` keep the text as written, so
+`version: 1.0` stays `"1.0"`. A number in preserved frontmatter that JSON would write differently
+(`1.10`, `0755`, `0x1F`, or an integer too large to hold exactly) is kept as the text it was written
+as, a string, and the `preserved-frontmatter` warning names it. A key written without a value
+(`tags: {beta, internal}`) reads as `null`. Aliases, anchors, tags, and keys that are equal as
+written are rejected anywhere in the frontmatter.
+
+`metadata` is a flat string map. A nested map is flattened to dotted keys (`credits.author`), and a
+list inside `metadata` becomes a JSON string (`["git","github"]`); the preview reports this with a
+`flattened-metadata` warning. Flattened keys must still fit the metadata limits, and two entries
+that flatten to the same key reject the import.
+
+Open-Inspect regenerates `SKILL.md` from the mapped fields and the preserved frontmatter. The stored
+file is therefore not byte-identical to the upstream one: comments, quoting, and key order are
+normalized, and denied or unsupported keys are left behind.
+
+#### Import warnings
+
+| Warning                   | Meaning                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------ |
+| `preserved-frontmatter`   | The key is kept in the skill's frontmatter, as-is unless the warning says how. |
+| `denied-frontmatter`      | The key grants permissions or changes cost (see the denylist) and was dropped. |
+| `unsupported-frontmatter` | The key or its value cannot be stored (see the rules below) and was dropped.   |
+| `flattened-metadata`      | Nested `metadata` was stored as flat string keys.                              |
+| `name-derived`            | `SKILL.md` has no name; one was derived from the source path.                  |
+| `name-overridden`         | The import was stored under a different name than `SKILL.md` gives.            |
 
 ### Reviewing before saving
 
@@ -176,6 +205,69 @@ replaces those edits with the source's content.
 > Importing makes it easy to pull third-party instructions and scripts into an installation-wide,
 > on-by-default catalog. Review the preview — especially anything under `scripts/` — before
 > confirming.
+
+---
+
+## Preserved Frontmatter
+
+Skills written for Claude Code, OpenCode, or Codex often carry host-specific frontmatter, such as
+`disable-model-invocation: true` for workflows only a person should start. Managed skills keep those
+fields in a structured `frontmatter` map, stored per revision, returned with the skill and the
+import preview, and editable as **Frontmatter (JSON)** in the editor.
+
+Rules for preserved frontmatter:
+
+- Keys start with a letter and contain only letters, digits, `-`, and `_` (at most 64 characters).
+  Keys a YAML reader could type as booleans or null (`yes`, `no`, `on`, `off`, `true`, `null`, …)
+  are not allowed.
+- `name`, `description`, `license`, `compatibility`, and `metadata` are structured fields and cannot
+  appear in it.
+- Values are JSON: booleans, numbers, null, strings, lists, and maps, nested at most 4 levels. A
+  `__proto__` key is rejected at any depth.
+- The whole map is at most 8 KiB as JSON and counts toward the 1 MiB revision limit.
+
+The generated `SKILL.md` lists preserved keys after `metadata`, sorted, one per line, each value
+written as JSON (valid YAML), so `disable-model-invocation: true` stays a boolean. A skill without
+preserved frontmatter renders exactly as it did before the field existed, so existing revision
+digests are unchanged.
+
+Replacing a skill through the API without a `frontmatter` field keeps the current revision's
+frontmatter, so an older client cannot wipe it by accident; send `{}` to clear it.
+
+### Denylist
+
+Fields that would grant an agent permissions or change what a session costs are never stored, from
+imports or from the editor:
+
+`allowed-tools`, `hooks`, `model`, `effort`, `reasoning-effort`, `model-reasoning-effort`, `shell`,
+`context`, `agent`, `agents`, `mcp-servers`, `lsp-servers`, `settings`, `permission`, `permissions`,
+`tools`
+
+`context: fork` would run the skill in a separate subagent with its own context and token budget, so
+it is denied together with `agent`, which picks that subagent.
+
+Matching ignores case, `-`, and `_`, so `allowed_tools` and `allowedTools` are denied too. Managed
+skills are trusted instructions, not a permission boundary; the denylist keeps a skill from silently
+widening tool access or changing models, not from asking the agent to do something.
+
+### How each harness uses `disable-model-invocation`
+
+`disable-model-invocation: true` means a person can still run the skill explicitly, but the agent
+does not choose it on its own.
+
+| Harness      | Behaviour                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Claude**   | Native: the Skill tool refuses the skill. Claude expands a `/name` that opens the prompt itself; for `$name` or a `/name` later in the prompt, the sandbox appends the skill's instructions to the prompt.                                                                                                                                                                                                                                                                                  |
+| **OpenCode** | OpenCode ignores the key, so the sandbox adds a `permission.skill` deny rule per such skill. The skill disappears from the agent's available skills and the skill tool refuses it. OpenCode expands `/name` only in its own clients, so when a prompt names the skill with `/name` or `$name`, the sandbox appends the skill's instructions to the prompt.                                                                                                                                  |
+| **Codex**    | Codex ignores the key, so the sandbox sets `policy.allow_implicit_invocation: false` in the installed skill's `agents/openai.yaml`, writing the file or merging the policy into the skill's own (a file it cannot edit safely is replaced by the bare policy). The skill leaves the agent's skill list and is still available as `$name`. A skill that ships a plain file at `agents` cannot carry the policy and is not installed for Codex. This file is not part of the stored revision. |
+
+Other preserved keys are passed through unchanged; each harness uses the ones it understands (for
+example Claude reads `argument-hint`, `user-invocable`, and `paths`) and ignores the rest.
+
+Codex discovers managed skills in `~/.agents/skills/open-inspect` of the sandbox user, outside every
+repository checkout and the shared subscription home. They share a namespace with the skills in the
+subscription home's `codex/skills` (including Codex's own bundled skills in `.system`, such as
+`skill-creator`) and `/etc/codex/skills`, so those count as collisions too.
 
 ---
 
@@ -286,6 +378,9 @@ the same revisions; it does not pick up newer edits. Start a new session to use 
 | Compatibility                      |        500 characters |
 | Metadata key                       |        100 characters |
 | Metadata value                     |        500 characters |
+| Preserved frontmatter              |       8 KiB (as JSON) |
+| Preserved frontmatter nesting      |              4 levels |
+| Preserved frontmatter key          |         64 characters |
 | Supporting files                   | 99 per skill revision |
 | Individual file                    |               256 KiB |
 | Complete skill revision            |                 1 MiB |
@@ -322,7 +417,7 @@ changed assignments, or newly enabled skills.
 ### A managed skill is missing because of a name collision
 
 When a managed skill has the same name as a repository, user, or bundled skill available in the
-sandbox, Open-Inspect keeps the discovered skill and drops the colliding managed skill. Other
-managed skills are still installed and the session continues to start. Rename or remove the
-discovered skill, or create a new managed skill with a different canonical name and update its
-assignments and profiles.
+sandbox (for Codex sessions, also a skill in the subscription home or Codex's own bundled skills),
+Open-Inspect keeps the discovered skill and drops the colliding managed skill. Other managed skills
+are still installed and the session continues to start. Rename or remove the discovered skill, or
+create a new managed skill with a different canonical name and update its assignments and profiles.

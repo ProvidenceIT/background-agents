@@ -1,22 +1,32 @@
 /**
  * Reader for the YAML frontmatter in portable `SKILL.md` files.
  *
- * The YAML parser owns syntax and scalar folding. This module owns the much
- * smaller product policy: string scalars, flat string maps and string lists;
- * no aliases, anchors, custom tags or deeper nesting.
+ * The YAML parser owns syntax, scalar folding and YAML 1.2 core typing. This
+ * module owns the much smaller product policy: plain data only — no aliases,
+ * anchors, custom tags or duplicate keys anywhere in the block.
+ *
+ * Every scalar keeps both readings. `text` is the scalar as written (after
+ * folding), which is what the mapped string fields and `metadata` store, so
+ * `version: 1.0` stays `"1.0"`. `value` is the core-typed reading, which is
+ * what preserved frontmatter stores, so `disable-model-invocation: true`
+ * stays a boolean.
+ *
+ * A key written without a value (`{beta, internal}`, `? key`) reads as YAML
+ * null, as `key:` does. Keys are compared as written, so `~:` and `null:`, or
+ * `1:` and `01:`, are distinct keys, as they were before scalars were typed.
  */
 
+import type { SkillFrontmatterValue } from "@open-inspect/shared/types/skills";
 import { isAlias, isMap, isNode, isScalar, isSeq, parseDocument, type Node } from "yaml";
 
-/** A frontmatter entry, in the shapes the importer can map or report. */
-type SkillFrontmatterValue =
-  | { kind: "scalar"; value: string }
-  | { kind: "map"; value: Record<string, string> }
-  | { kind: "sequence"; value: string[] }
-  | { kind: "unsupported" };
+/** One frontmatter value, as plain data with both scalar readings. */
+export type SkillFrontmatterNode =
+  | { kind: "scalar"; text: string; value: null | boolean | number | string }
+  | { kind: "sequence"; items: SkillFrontmatterNode[] }
+  | { kind: "map"; entries: [string, SkillFrontmatterNode][] };
 
 export interface ParsedSkillMarkdown {
-  frontmatter: Map<string, SkillFrontmatterValue>;
+  frontmatter: Map<string, SkillFrontmatterNode>;
   body: string;
 }
 
@@ -59,73 +69,109 @@ function assertPlainNode(node: Node, path: string): void {
   }
 }
 
-function stringScalar(value: unknown, path: string): string {
-  if (!isNode(value)) throw new SkillMarkdownError(`${nodeLabel(path)} must not be empty`);
-  const node: Node = value;
-  assertPlainNode(node, path);
-  if (!isScalar(node) || typeof node.value !== "string") {
-    throw new SkillMarkdownError(`${nodeLabel(path)} must be a string`);
-  }
-  if (!hasWellFormedUnicode(node.value)) {
+function assertUnicode(text: string, path: string): void {
+  if (!hasWellFormedUnicode(text)) {
     throw new SkillMarkdownError(`${nodeLabel(path)} must contain valid Unicode`);
   }
-  return node.value;
 }
 
-function keyScalar(node: unknown, path: string): string {
-  return stringScalar(node, path);
+/** A map key as written. Keys are read as text, so `1:` and `"1":` are the same key. */
+function keyText(value: unknown, path: string): string {
+  if (!isNode(value)) throw new SkillMarkdownError(`${nodeLabel(path)} has an empty key`);
+  const node: Node = value;
+  assertPlainNode(node, path);
+  if (!isScalar(node)) {
+    throw new SkillMarkdownError(`${nodeLabel(path)} keys must be strings`);
+  }
+  const text = node.source ?? String(node.value);
+  assertUnicode(text, path);
+  return text;
 }
 
-/** Validate graph/tag and Unicode safety even for values the importer ignores. */
-function assertPlainTree(value: unknown, path: string): void {
-  if (!isNode(value)) return;
+// What `key:` reads as; the parser leaves a value-less flow or `?` entry empty.
+const EMPTY_SCALAR: SkillFrontmatterNode = { kind: "scalar", text: "", value: null };
+
+function readNode(value: unknown, path: string): SkillFrontmatterNode {
+  if (value === null || value === undefined) return EMPTY_SCALAR;
+  if (!isNode(value)) throw new SkillMarkdownError(`${nodeLabel(path)} has an unsupported value`);
   const node: Node = value;
   assertPlainNode(node, path);
   if (isScalar(node)) {
-    if (typeof node.value === "string" && !hasWellFormedUnicode(node.value)) {
-      throw new SkillMarkdownError(`${nodeLabel(path)} must contain valid Unicode`);
+    const typed = node.value;
+    if (
+      typed !== null &&
+      typeof typed !== "boolean" &&
+      typeof typed !== "number" &&
+      typeof typed !== "string"
+    ) {
+      throw new SkillMarkdownError(`${nodeLabel(path)} has an unsupported scalar type`);
     }
-    return;
+    const text = node.source ?? String(typed ?? "");
+    assertUnicode(text, path);
+    if (typeof typed === "string") assertUnicode(typed, path);
+    return { kind: "scalar", text, value: typed };
   }
   if (isSeq(node)) {
-    node.items.forEach((item, index) => assertPlainTree(item, `${path}[${index}]`));
-    return;
-  }
-  if (isMap(node)) {
-    node.items.forEach((pair) => {
-      const childKey = keyScalar(pair.key, path);
-      assertPlainTree(pair.value, path ? `${path}.${childKey}` : childKey);
-    });
-  }
-}
-
-function frontmatterValue(value: unknown, key: string): SkillFrontmatterValue {
-  if (!isNode(value)) throw new SkillMarkdownError(`${nodeLabel(key)} must not be empty`);
-  const node: Node = value;
-  assertPlainNode(node, key);
-  if (isScalar(node)) return { kind: "scalar", value: stringScalar(node, key) };
-  if (isSeq(node)) {
-    if (!node.items.every((item) => isScalar(item) && typeof item.value === "string")) {
-      assertPlainTree(node, key);
-      return { kind: "unsupported" };
-    }
     return {
       kind: "sequence",
-      value: node.items.map((item, index) => stringScalar(item, `${key}[${index}]`)),
+      items: node.items.map((item, index) => readNode(item, `${path}[${index}]`)),
     };
   }
   if (isMap(node)) {
-    if (!node.items.every((pair) => isScalar(pair.value) && typeof pair.value.value === "string")) {
-      assertPlainTree(node, key);
-      return { kind: "unsupported" };
-    }
-    const entries = node.items.map((pair) => {
-      const childKey = keyScalar(pair.key, key);
-      return [childKey, stringScalar(pair.value, `${key}.${childKey}`)] as const;
+    const seen = new Set<string>();
+    const entries = node.items.map((pair): [string, SkillFrontmatterNode] => {
+      const key = keyText(pair.key, path);
+      const childPath = path ? `${path}.${key}` : key;
+      if (seen.has(key)) {
+        throw new SkillMarkdownError(`${nodeLabel(childPath)} is a duplicate key`);
+      }
+      seen.add(key);
+      return [key, readNode(pair.value, childPath)];
     });
-    return { kind: "map", value: Object.fromEntries(entries) };
+    return { kind: "map", entries };
   }
-  return { kind: "unsupported" };
+  throw new SkillMarkdownError(`${nodeLabel(path)} has an unsupported YAML node`);
+}
+
+/**
+ * The core-typed JSON reading of a node, as preserved frontmatter stores it.
+ *
+ * A number is kept only when JSON writes it exactly as the source did. Any
+ * other number (`1.10`, `0755`, `0x1F`, an integer beyond 2^53) stays the
+ * string it was written as, so neither the stored value nor the rendered
+ * `SKILL.md` changes it; `onNumberKeptAsText` hears the path of each.
+ *
+ * @throws SkillMarkdownError for values JSON cannot represent (`.inf`, `.nan`)
+ *   and for a `__proto__` map key, which JSON object parsing would drop.
+ */
+export function frontmatterNodeValue(
+  node: SkillFrontmatterNode,
+  path: string,
+  onNumberKeptAsText?: (path: string) => void
+): SkillFrontmatterValue {
+  if (node.kind === "scalar") {
+    if (typeof node.value !== "number") return node.value;
+    if (!Number.isFinite(node.value)) {
+      throw new SkillMarkdownError(`${nodeLabel(path)} must be a finite number`);
+    }
+    if (JSON.stringify(node.value) === node.text) return node.value;
+    onNumberKeptAsText?.(path);
+    return node.text;
+  }
+  if (node.kind === "sequence") {
+    return node.items.map((item, index) =>
+      frontmatterNodeValue(item, `${path}[${index}]`, onNumberKeptAsText)
+    );
+  }
+  return Object.fromEntries(
+    node.entries.map(([key, child]) => {
+      const childPath = `${path}.${key}`;
+      if (key === "__proto__") {
+        throw new SkillMarkdownError(`${nodeLabel(childPath)} uses the reserved key "__proto__"`);
+      }
+      return [key, frontmatterNodeValue(child, childPath, onNumberKeptAsText)];
+    })
+  );
 }
 
 /** Split a `SKILL.md` into validated frontmatter entries and its Markdown body. */
@@ -140,8 +186,10 @@ export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
   }
 
   const document = parseDocument(lines.slice(1, closingIndex).join("\n"), {
-    schema: "failsafe",
-    uniqueKeys: true,
+    schema: "core",
+    // readNode rejects keys that are equal as written; the parser's own check
+    // compares typed keys, which would make `~:` and `null:` duplicates.
+    uniqueKeys: false,
     strict: true,
   });
   const problem = document.errors[0] ?? document.warnings[0];
@@ -150,11 +198,10 @@ export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
     throw new SkillMarkdownError("SKILL.md frontmatter must be a map");
   }
 
-  assertPlainNode(document.contents, "");
-  const frontmatter = new Map<string, SkillFrontmatterValue>();
-  for (const pair of document.contents.items) {
-    const key = keyScalar(pair.key, "");
-    frontmatter.set(key, frontmatterValue(pair.value, key));
-  }
-  return { frontmatter, body: lines.slice(closingIndex + 1).join("\n") };
+  const root = readNode(document.contents, "");
+  if (root.kind !== "map") throw new SkillMarkdownError("SKILL.md frontmatter must be a map");
+  return {
+    frontmatter: new Map(root.entries),
+    body: lines.slice(closingIndex + 1).join("\n"),
+  };
 }

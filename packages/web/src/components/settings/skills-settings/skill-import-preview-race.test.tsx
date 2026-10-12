@@ -67,6 +67,7 @@ const preview: SkillImportPreviewResponse = {
   license: null,
   compatibility: null,
   metadata: {},
+  frontmatter: {},
   revisionSha256: "c".repeat(64),
   totalBytes: 40,
   files: [
@@ -89,6 +90,7 @@ const importedSkill: Skill = {
   license: null,
   compatibility: null,
   metadata: {},
+  frontmatter: {},
   files: [],
   enabled: true,
   currentRevisionId: "revision-1",

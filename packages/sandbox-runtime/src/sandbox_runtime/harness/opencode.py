@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from ..skill_invocation import expand_explicit_skill_invocations
 from .base import (
     EventSink,
     HarnessId,
@@ -15,6 +16,8 @@ from .base import (
 from .opencode_stream import OpenCodePromptStream
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from ..attachment_processor import AttachmentProcessor
     from ..log_config import StructuredLogger
     from .opencode_client import OpenCodeClient
@@ -38,8 +41,12 @@ class OpencodeHarness:
         attachment_processor: AttachmentProcessor,
         log: StructuredLogger,
         limits: PromptLimits,
+        managed_skills_dir: Path | None = None,
     ) -> None:
         self.client = client
+        # Where managed skills are installed; user-invoked-only skills the
+        # prompt names are expanded from here (see skill_invocation).
+        self.managed_skills_dir = managed_skills_dir
         self.attachment_processor = attachment_processor
         self.log = log
         # Read when the prompt stream is first built, so a caller can still
@@ -100,7 +107,7 @@ class OpencodeHarness:
         return self.prompt_stream.stream_prompt(
             opencode_session_id=self.session_id,
             message_id=prompt.message_id,
-            content=prompt.text,
+            content=expand_explicit_skill_invocations(prompt.text, self.managed_skills_dir),
             model=prompt.model,
             reasoning_effort=prompt.reasoning_effort,
             attachments=list(prompt.attachments),

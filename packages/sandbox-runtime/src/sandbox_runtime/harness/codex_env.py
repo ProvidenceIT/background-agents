@@ -43,6 +43,11 @@ HOME_WITHOUT_CODEX: Final = (
     f"providers): {RELOGIN_HINT}"
 )
 
+# Machine-wide skills Codex discovers in every session.
+CODEX_SYSTEM_SKILLS_DIR: Final = Path("/etc/codex/skills")
+# Inside $CODEX_HOME/skills: the skills Codex itself bundles and installs.
+CODEX_BUNDLED_SKILLS_DIR_NAME: Final = ".system"
+
 # Codex reads an API key from these before it looks at auth.json; the child
 # never sees them, so the subscription login is the only credential it can use.
 OPENAI_CREDENTIAL_VARS: Final = ("OPENAI_API_KEY", "CODEX_API_KEY")
@@ -51,6 +56,22 @@ OPENAI_CREDENTIAL_VARS: Final = ("OPENAI_API_KEY", "CODEX_API_KEY")
 def codex_home_path(auth_home: str) -> Path:
     """Codex's home inside a mounted subscription home: ``<home>/codex``."""
     return Path(auth_home) / AUTH_HOME_CODEX_DIR
+
+
+def codex_skill_roots(environ: Mapping[str, str] = os.environ) -> tuple[Path, ...]:
+    """Skill directories Codex discovers besides the repository and ``~/.agents``.
+
+    ``$CODEX_HOME/skills`` (with Codex's own bundled skills in ``.system``)
+    lives in the shared subscription home, and ``/etc/codex/skills`` is
+    machine-wide. Managed skills share one namespace with them.
+    """
+    roots: list[Path] = []
+    home = environ.get(AUTH_HOME_ENV_VAR)
+    if home:
+        skills = codex_home_path(home) / "skills"
+        roots += [skills, skills / CODEX_BUNDLED_SKILLS_DIR_NAME]
+    roots.append(CODEX_SYSTEM_SKILLS_DIR)
+    return tuple(roots)
 
 
 def codex_home(environ: Mapping[str, str] = os.environ) -> Path:

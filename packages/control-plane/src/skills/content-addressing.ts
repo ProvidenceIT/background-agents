@@ -1,10 +1,13 @@
 import {
+  compareUtf8,
   MAX_SKILL_FILE_BYTES,
   MAX_SKILL_REVISION_BYTES,
+  sortSkillFrontmatterValue,
   type SessionSkillManifestSelection,
   type SkillAssignment,
   type SkillContentInput,
   type SkillFile,
+  type SkillFrontmatterValue,
 } from "@open-inspect/shared/types/skills";
 
 const encoder = new TextEncoder();
@@ -30,6 +33,39 @@ function yamlString(value: string): string {
   return JSON.stringify(value);
 }
 
+// Characters outside YAML's printable set, and line separators some YAML
+// readers break lines on. JSON.stringify leaves them raw; both JSON and YAML
+// double-quoted strings accept the \uXXXX escape written instead.
+const YAML_UNSAFE_CHARACTERS = /[\u007f-\u009f\u2028\u2029\ufeff\ufffe\uffff]/g;
+
+/**
+ * One preserved frontmatter value as JSON — valid YAML 1.2 flow, so booleans,
+ * numbers and null keep their types — with keys in UTF-8 byte order and
+ * `", "`/`": "` separators that YAML 1.1 readers accept too.
+ */
+function renderFrontmatterValue(value: SkillFrontmatterValue): string {
+  function render(item: SkillFrontmatterValue): string {
+    if (Array.isArray(item)) return `[${item.map(render).join(", ")}]`;
+    if (item !== null && typeof item === "object") {
+      const entries = Object.entries(item).map(
+        ([key, child]) => `${JSON.stringify(key)}: ${render(child)}`
+      );
+      return `{${entries.join(", ")}}`;
+    }
+    return JSON.stringify(item);
+  }
+  return render(sortSkillFrontmatterValue(value)).replace(
+    YAML_UNSAFE_CHARACTERS,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`
+  );
+}
+
+/**
+ * Generated `SKILL.md`. `name` stays on the first frontmatter line: the
+ * sandbox runtime reads it from there. Preserved frontmatter follows
+ * `metadata` and adds nothing when empty, so revisions without it keep their
+ * digests.
+ */
 function renderSkillMarkdown(name: string, content: SkillContentInput): string {
   const lines = ["---", `name: ${name}`, `description: ${yamlString(content.description)}`];
   if (content.license) lines.push(`license: ${yamlString(content.license)}`);
@@ -45,6 +81,12 @@ function renderSkillMarkdown(name: string, content: SkillContentInput): string {
       lines.push(`  ${yamlString(key)}: ${yamlString(value)}`);
     }
   }
+  const frontmatter = Object.entries(content.frontmatter ?? {}).sort(([left], [right]) =>
+    compareUtf8(left, right)
+  );
+  for (const [key, value] of frontmatter) {
+    lines.push(`${key}: ${renderFrontmatterValue(value)}`);
+  }
   lines.push("---");
   return `${lines.join("\n")}\n${content.body}`;
 }
@@ -53,18 +95,6 @@ async function sha256Hex(content: Uint8Array | string): Promise<string> {
   const bytes = typeof content === "string" ? encoder.encode(content) : content;
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function compareBytes(left: Uint8Array, right: Uint8Array): number {
-  const length = Math.min(left.length, right.length);
-  for (let index = 0; index < length; index++) {
-    if (left[index] !== right[index]) return left[index] - right[index];
-  }
-  return left.length - right.length;
-}
-
-function compareUtf8(left: string, right: string): number {
-  return compareBytes(encoder.encode(left), encoder.encode(right));
 }
 
 function u32(value: number): Uint8Array {

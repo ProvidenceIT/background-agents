@@ -1,7 +1,10 @@
 import {
+  canonicalSkillFrontmatterJson,
   skillImportProvenanceSchema,
   skillImportSourceSchema,
+  skillContentInputSchema,
   skillMetadataSchema,
+  storedSkillFrontmatterSchema,
   type CreateSkillInput,
   type ReplaceSkillContentAndAssignmentsInput,
   type SetSkillEnabledInput,
@@ -15,10 +18,39 @@ import {
   type SkillSummary,
 } from "@open-inspect/shared/types/skills";
 import { generateId } from "../auth/crypto";
-import { buildValidatedSkillRevision } from "../skills/content-addressing";
+import {
+  buildValidatedSkillRevision,
+  SkillRevisionValidationError,
+} from "../skills/content-addressing";
 import { isUniqueConstraintError } from "./errors";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+
+/**
+ * Replace content with an omitted `frontmatter` filled from the current
+ * revision, so a client that predates the field cannot silently wipe it.
+ * Re-validated because the kept frontmatter counts toward the revision size.
+ */
+function keepCurrentFrontmatter(
+  content: ReplaceSkillContentAndAssignmentsInput["content"],
+  current: Skill
+): SkillContentInput {
+  if (content.frontmatter !== undefined) {
+    return { ...content, frontmatter: content.frontmatter };
+  }
+  const parsed = skillContentInputSchema.safeParse({
+    ...content,
+    frontmatter: current.frontmatter,
+  });
+  if (!parsed.success) {
+    throw new SkillRevisionValidationError(
+      `Skill content with the current frontmatter is invalid: ${
+        parsed.error.issues[0]?.message ?? "unknown error"
+      }`
+    );
+  }
+  return parsed.data;
+}
 
 const RESERVED_SKILL_NAMES = new Set([
   "agent-browser",
@@ -45,6 +77,7 @@ interface SkillRow {
   license: string | null;
   compatibility: string | null;
   metadata_json: string;
+  frontmatter_json: string;
   total_bytes: number;
   revision_created_by: string;
   creator_display_name: string | null;
@@ -163,6 +196,7 @@ export class SkillStore {
       license: row.license,
       compatibility: row.compatibility,
       metadata: skillMetadataSchema.parse(JSON.parse(row.metadata_json)),
+      frontmatter: storedSkillFrontmatterSchema.parse(JSON.parse(row.frontmatter_json)),
       files,
     };
   }
@@ -256,7 +290,8 @@ export class SkillStore {
       throw new SkillConflictError(`Current revision is ${current.currentRevisionId}`);
     }
     await this.validateAssignments(input.assignments);
-    const revision = await buildValidatedSkillRevision(current.name, input.content);
+    const content = keepCurrentFrontmatter(input.content, current);
+    const revision = await buildValidatedSkillRevision(current.name, content);
     const now = Date.now();
     const statements: SqlStatement[] = [];
     let updateResultIndex: number;
@@ -280,7 +315,7 @@ export class SkillStore {
           revisionId,
           id,
           current.revisionNumber + 1,
-          input.content,
+          content,
           revision,
           actorUserId,
           now,
@@ -563,7 +598,7 @@ export class SkillStore {
 
   private currentSkillSelect(): string {
     return `SELECT s.*, r.revision_number, r.revision_sha256, r.description, r.body,
-       r.license, r.compatibility, r.metadata_json, r.total_bytes,
+       r.license, r.compatibility, r.metadata_json, r.frontmatter_json, r.total_bytes,
        r.created_by AS revision_created_by,
        creator.display_name AS creator_display_name,
        editor.display_name AS last_editor_display_name,
@@ -804,8 +839,8 @@ export class SkillStore {
       .prepare(
         `INSERT INTO skill_revisions
          (id, skill_id, revision_number, revision_sha256, description, body, license,
-          compatibility, metadata_json, total_bytes, created_by, created_at)
-          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          compatibility, metadata_json, frontmatter_json, total_bytes, created_by, created_at)
+          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
           WHERE ? IS NULL OR EXISTS (
             SELECT 1 FROM skills
             WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL
@@ -821,6 +856,7 @@ export class SkillStore {
         content.license ?? null,
         content.compatibility ?? null,
         JSON.stringify(content.metadata),
+        canonicalSkillFrontmatterJson(content.frontmatter ?? {}),
         revision.totalBytes,
         actorUserId,
         now,

@@ -8,7 +8,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from sandbox_runtime.codex_stager import CodexHarnessHandoff, CodexStager
-from sandbox_runtime.entrypoint import build_harness_process, harness_config_dir
+from sandbox_runtime.entrypoint import (
+    build_harness_process,
+    harness_config_dir,
+    managed_skills_destination,
+)
 from sandbox_runtime.harness import BridgeIdentity, build_agent_harness
 from sandbox_runtime.harness.base import HarnessId, PromptLimits, parse_harness_id
 from sandbox_runtime.harness.claude_tools import ToolServerConfig
@@ -60,6 +64,16 @@ def test_the_supervisor_stages_codex_without_a_resident_process():
 
 def test_codex_keeps_its_config_outside_the_subscription_home():
     assert harness_config_dir(HarnessId.CODEX, None) == Path.home() / ".openinspect/codex"
+
+
+def test_codex_managed_skills_go_where_codex_discovers_user_skills():
+    # Codex reads $HOME/.agents/skills (recursively), never its harness dir.
+    assert managed_skills_destination(HarnessId.CODEX, None) == (
+        Path.home() / ".agents" / "skills" / "open-inspect"
+    )
+    assert not managed_skills_destination(HarnessId.CODEX, None).is_relative_to(
+        harness_config_dir(HarnessId.CODEX, None)
+    )
 
 
 def test_codex_waits_out_a_long_command_before_calling_it_silence(monkeypatch):

@@ -1,4 +1,4 @@
-"""Fetch, validate, and install control-plane-managed OpenCode skills."""
+"""Fetch, validate, and install control-plane-managed skills for every harness."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 import httpx
 
+from .codex_skill_policy import CODEX_SKILL_POLICY_PATH, explicit_only_policy
 from .control_plane_fetch import ResponseTooLargeError, fetch_bounded
 from .durable_files import atomic_write_private, fsync_directory
 
@@ -44,6 +45,12 @@ _YAML_NAME_RE = re.compile(
     r"""^\s*(?:name|"name"|'name')\s*:\s*(?:"([^"]+)"|'([^']+)'|([^#\s]+))"""
 )
 _DISCOVERY_PATHS = (".opencode/skills", ".claude/skills", ".agents/skills")
+# The control plane renders preserved frontmatter one plain key per line with a
+# JSON value, so the flag is exactly this line when set.
+_DISABLE_MODEL_INVOCATION_RE = re.compile(r"^disable-model-invocation:[ \t]*true[ \t]*$")
+# Skill-reading bound shared by every frontmatter scan of an installed tree.
+_SKILL_MARKDOWN_SCAN_BYTES = 65536
+_STAGING_PREFIX = ".managed-skills-"
 
 
 class ManagedSkillsError(RuntimeError):
@@ -363,8 +370,74 @@ def _canonical_frontmatter_name(markdown: str) -> str | None:
     return None
 
 
+def disables_model_invocation(markdown: str) -> bool:
+    """Whether a generated SKILL.md carries ``disable-model-invocation: true``.
+
+    The skill stays user-invocable (a slash command) but the model must not
+    pick it on its own. Claude honours the key natively; OpenCode and Codex
+    need it translated into their own controls.
+    """
+    if not markdown.startswith("---\n"):
+        return False
+    for line in markdown.splitlines()[1:]:
+        if line == "---":
+            return False
+        if _DISABLE_MODEL_INVOCATION_RE.fullmatch(line):
+            return True
+    return False
+
+
+def _read_skill_markdown(skill_dir: Path) -> str | None:
+    skill_file = skill_dir / "SKILL.md"
+    if not skill_file.is_file() or skill_file.is_symlink():
+        return None
+    try:
+        with skill_file.open("rb") as file:
+            # The bound may split a character in the body; the frontmatter
+            # comes first, so replacing that tail is harmless.
+            return file.read(_SKILL_MARKDOWN_SCAN_BYTES).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def user_invoked_skill_dirs(skills_dir: Path) -> dict[str, Path]:
+    """Installed skills under ``skills_dir`` that only a user may invoke, by name.
+
+    Reads what the materializer installed, so a harness restart applies the
+    same answer without the control plane.
+    """
+    if not skills_dir.is_dir():
+        return {}
+    found: dict[str, Path] = {}
+    for child in skills_dir.iterdir():
+        if child.name.startswith(".") or not child.is_dir() or child.is_symlink():
+            continue
+        markdown = _read_skill_markdown(child)
+        if markdown is None or not disables_model_invocation(markdown):
+            continue
+        name = _canonical_frontmatter_name(markdown)
+        if name and _SKILL_NAME_RE.fullmatch(name):
+            found[name] = child
+    return dict(sorted(found.items()))
+
+
+def user_invoked_skill_names(skills_dir: Path) -> list[str]:
+    """Names of the installed skills only a user may invoke, sorted."""
+    return list(user_invoked_skill_dirs(skills_dir))
+
+
 class ManagedSkillsMaterializer:
-    """Install a fetched installation DTO into the platform-owned global skills directory."""
+    """Install a fetched installation DTO into the platform-owned global skills directory.
+
+    ``write_codex_invocation_policy`` writes Codex's ``agents/openai.yaml``
+    explicit-only policy into skills that disable model invocation, merged
+    into the author's file when there is one. It is written at install time,
+    never stored, so revision digests are unaffected.
+
+    ``extra_collision_roots`` are further skill directories the harness
+    discovers (Codex's home and system skills), checked like the repository
+    and home discovery paths.
+    """
 
     def __init__(
         self,
@@ -373,11 +446,15 @@ class ManagedSkillsMaterializer:
         log: Any,
         *,
         bundled_skills_path: Path = Path("/app/sandbox_runtime/skills"),
+        write_codex_invocation_policy: bool = False,
+        extra_collision_roots: Sequence[Path] = (),
     ) -> None:
         self.client = client
         self.destination = destination
         self.log = log
         self.bundled_skills_path = bundled_skills_path
+        self.write_codex_invocation_policy = write_codex_invocation_policy
+        self.extra_collision_roots = tuple(extra_collision_roots)
 
     @staticmethod
     def _remove_path(path: Path) -> None:
@@ -407,7 +484,7 @@ class ManagedSkillsMaterializer:
         if skill_file.is_file() and not skill_file.is_symlink():
             try:
                 with skill_file.open("rb") as file:
-                    content = file.read(65536)
+                    content = file.read(_SKILL_MARKDOWN_SCAN_BYTES)
                 if content.startswith(b"---\n"):
                     for raw_line in content.splitlines()[1:]:
                         if raw_line == b"---":
@@ -425,6 +502,7 @@ class ManagedSkillsMaterializer:
 
     def _collision_roots(self, repositories: Sequence[RepoEntry], workdir: Path) -> Iterable[Path]:
         yield self.bundled_skills_path
+        yield from self.extra_collision_roots
         bases = [workdir, *(repository.path for repository in repositories), Path.home()]
         seen: set[Path] = set()
         for base in bases:
@@ -447,7 +525,14 @@ class ManagedSkillsMaterializer:
             if not root.is_dir():
                 continue
             for child in root.iterdir():
-                if not child.is_dir():
+                # The destination may itself sit inside a discovery root
+                # (Codex installs under ~/.agents/skills); neither it nor its
+                # staging siblings are someone else's skill.
+                if (
+                    not child.is_dir()
+                    or child == self.destination
+                    or child.name.startswith(_STAGING_PREFIX)
+                ):
                     continue
                 for name in self._skill_names(child) & selected:
                     found.setdefault(name, set()).add(child)
@@ -478,9 +563,9 @@ class ManagedSkillsMaterializer:
         """Recover any interrupted swap and open an empty staging tree."""
         parent = self.destination.parent
         parent.mkdir(parents=True, exist_ok=True)
-        staging = parent / ".managed-skills-staging"
-        backup = parent / ".managed-skills-backup"
-        journal = parent / ".managed-skills-swap"
+        staging = parent / f"{_STAGING_PREFIX}staging"
+        backup = parent / f"{_STAGING_PREFIX}backup"
+        journal = parent / f"{_STAGING_PREFIX}swap"
         self._repair_interrupted_swap(staging, backup, journal)
         if self.destination.is_symlink() or (
             self.destination.exists() and not self.destination.is_dir()
@@ -491,18 +576,77 @@ class ManagedSkillsMaterializer:
         staging.mkdir(mode=0o700)
         return staging, backup, journal
 
-    def _stage_skills(self, staging: Path, skills: Sequence[ManagedSkill]) -> None:
+    def _stage_skills(self, staging: Path, skills: Sequence[ManagedSkill]) -> set[str]:
         """Write one batch of validated skills into the staging tree.
 
         Called once per fetched page, so peak memory is a page rather than the
         whole installation. Skill directories are created exclusively, which
         makes a duplicate name that slipped past validation fail here too.
+
+        Returns the skills left out because they could not be installed as
+        their frontmatter requires; the rest of the batch still installs.
         """
+        dropped: set[str] = set()
         for skill in sorted(skills, key=lambda item: item.name.encode("utf-8")):
             skill_dir = staging / skill.name
             skill_dir.mkdir(mode=0o700)
             for file in sorted(skill.files, key=lambda item: item.path.encode("utf-8")):
                 self._write_file(skill_dir / PurePosixPath(file.path), file)
+            if self.write_codex_invocation_policy and not self._write_codex_invocation_policy(
+                skill_dir, skill
+            ):
+                self._remove_path(skill_dir)
+                dropped.add(skill.name)
+        return dropped
+
+    def _write_codex_invocation_policy(self, skill_dir: Path, skill: ManagedSkill) -> bool:
+        """Keep a user-invoked-only skill out of Codex's implicit skill list.
+
+        An authored ``agents/openai.yaml`` is kept with the policy merged in.
+        Returns False when the policy file cannot be written (the skill ships a
+        plain file at ``agents``, or a directory at the policy path): such a
+        skill would be implicitly invocable, so it must not be installed.
+        """
+        markdown = next(file.content for file in skill.files if file.path == "SKILL.md")
+        if not disables_model_invocation(markdown):
+            return True
+        target = skill_dir / PurePosixPath(CODEX_SKILL_POLICY_PATH)
+        authored = next(
+            (file for file in skill.files if file.path == CODEX_SKILL_POLICY_PATH), None
+        )
+        parent_blocked = target.parent.is_symlink() or (
+            target.parent.exists() and not target.parent.is_dir()
+        )
+        target_blocked = authored is None and (target.exists() or target.is_symlink())
+        if parent_blocked or target_blocked:
+            self.log.warn(
+                "managed_skills.codex_policy_unwritable",
+                skill=skill.name,
+                path=CODEX_SKILL_POLICY_PATH,
+            )
+            return False
+        policy = explicit_only_policy(authored.content if authored else None)
+        if policy.change == "kept":
+            return True
+        if authored is not None:
+            self.log.info(
+                "managed_skills.codex_policy_" + policy.change,
+                skill=skill.name,
+                path=CODEX_SKILL_POLICY_PATH,
+            )
+            target.unlink()
+        content = policy.content.encode("utf-8")
+        self._write_file(
+            target,
+            ManagedSkillFile(
+                CODEX_SKILL_POLICY_PATH,
+                policy.content,
+                hashlib.sha256(content).hexdigest(),
+                len(content),
+                False,
+            ),
+        )
+        return True
 
     def _commit_staging(self, staging: Path, backup: Path, journal: Path) -> None:
         """Swap the staged tree in, recoverably.
@@ -551,6 +695,7 @@ class ManagedSkillsMaterializer:
         instead — see validate_installation_page.
         """
         names: set[str] = set()
+        dropped: set[str] = set()
         content_bytes = 0
         manifest_sha256: str | None = None
         cursor: str | None = None
@@ -565,9 +710,11 @@ class ManagedSkillsMaterializer:
                 expected_manifest_sha256=manifest_sha256,
             )
             manifest_sha256 = page.manifest_sha256
-            self._stage_skills(staging, page.skills)
+            dropped |= self._stage_skills(staging, page.skills)
             if page.next_cursor is None:
-                return manifest_sha256, names
+                # `names` keeps every fetched name for duplicate detection
+                # across pages; only installed ones are reported.
+                return manifest_sha256, names - dropped
             cursor = page.next_cursor
 
     async def materialize(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:

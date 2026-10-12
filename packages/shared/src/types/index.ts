@@ -469,6 +469,7 @@ export {
   skillFileInputSchema,
   skillMetadataSchema,
   skillContentInputSchema,
+  replaceSkillContentInputSchema,
   skillAssignmentInputSchema,
   createSkillInputSchema,
   setSkillEnabledInputSchema,

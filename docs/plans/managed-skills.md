@@ -279,16 +279,28 @@ skill-name/
 - `compatibility` (optional);
 - `metadata` (optional string-to-string map).
 
-The standard's experimental `allowed-tools` field is rejected in V1. OpenCode does not document it
-as a recognized skill field, and natural-language or skill metadata must not bypass OpenCode
-permissions or sandbox controls. Host-specific Claude or Codex fields are also rejected so a skill
-does not appear portable while silently behaving differently. The editor exposes `metadata` as a
-string-to-string map. Shared validation enforces the standard's 1,024-character description limit
+The standard's experimental `allowed-tools` field is never stored: natural-language or skill
+metadata must not bypass OpenCode permissions or sandbox controls. The editor exposes `metadata` as
+a string-to-string map. Shared validation enforces the standard's 1,024-character description limit
 and 500-character compatibility limit.
+
+> **Revised (preserved frontmatter).** V1 originally rejected host-specific Claude or Codex fields
+> so a skill would not appear portable while silently behaving differently. Most skills worth
+> importing carry such fields — chiefly `disable-model-invocation: true` — so other keys are now
+> kept in a per-revision `frontmatter` JSON map (`skill_revisions.frontmatter_json`, migration 0096)
+> and rendered after `metadata`. Keys that grant power or change cost (`allowed-tools`, `hooks`,
+> `model`, `effort`, `shell`, `context`, `agent(s)`, `mcp-servers`, `lsp-servers`, `settings`,
+> `permission(s)`, `tools`) stay denied, and the sandbox translates `disable-model-invocation` for
+> the harnesses that do not read it (an OpenCode `permission.skill` deny rule, a Codex
+> `agents/openai.yaml` explicit-only policy). Because the bridge sends prompts as text, it appends a
+> user-invoked skill's instructions when the prompt names it with `/name` or `$name` and the harness
+> would not expand that itself. Nested `metadata` is flattened to dotted keys. See
+> [MANAGED_SKILLS.md](../MANAGED_SKILLS.md#preserved-frontmatter).
 
 Parse YAML with a safe schema. Reject custom tags, duplicate keys, and aliases rather than allowing
 parser-dependent expansion or ambiguity. Render canonical frontmatter from the structured fields
-before validation and hashing.
+before validation and hashing; empty preserved frontmatter renders no bytes, so earlier revision
+digests are unchanged.
 
 The standard name constraints become the canonical catalog constraints:
 

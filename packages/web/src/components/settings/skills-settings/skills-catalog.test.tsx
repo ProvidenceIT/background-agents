@@ -127,6 +127,7 @@ describe("SkillsCatalog", () => {
         license: "MIT",
         compatibility: "Open Inspect",
         metadata: { owner: "platform" },
+        frontmatter: { "disable-model-invocation": true },
         assignments: [
           { id: "assignment-1", type: "repository", repoOwner: "acme", repoName: "api" },
         ],
@@ -160,6 +161,8 @@ describe("SkillsCatalog", () => {
     expect(screen.getByText("Repository: acme/api")).toBeInTheDocument();
     expect(screen.getByText("scripts/check.sh (executable)")).toBeInTheDocument();
     expect(screen.getByText(/Revision 1 by User One/)).toBeInTheDocument();
+    expect(screen.getByText("disable-model-invocation")).toBeInTheDocument();
+    expect(screen.getByText("true")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Save new revision/i })).not.toBeInTheDocument();
   });
 
