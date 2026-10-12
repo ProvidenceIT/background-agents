@@ -391,6 +391,7 @@ sessionRuntimeProxyRoutes.post(
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requireSession("lifecycle", {
       actorlessGrants: [{ service: "linear-bot" }, { service: "teams-bot" }],
+      optInServices: ["motion"],
     }),
   }),
   (c) =>

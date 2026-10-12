@@ -12,6 +12,7 @@ it("derives the existing human population from the exhaustive spawn-source mappi
     "linear-bot": "human",
     "github-bot": "human",
     "teams-bot": "human",
+    motion: "human",
     agent: "agent",
     automation: "automation",
   });
@@ -21,6 +22,7 @@ it("derives the existing human population from the exhaustive spawn-source mappi
     "linear-bot",
     "github-bot",
     "teams-bot",
+    "motion",
   ]);
   expect(ANALYTICS_SCOPE_SPAWN_SOURCES.agent).toEqual(["agent"]);
   expect(ANALYTICS_SCOPE_SPAWN_SOURCES.automation).toEqual(["automation"]);

@@ -75,6 +75,7 @@ export const spawnSourceSchema = z.enum([
   "linear-bot",
   "slack-bot",
   "teams-bot",
+  "motion",
 ]);
 export type SpawnSource = z.infer<typeof spawnSourceSchema>;
 

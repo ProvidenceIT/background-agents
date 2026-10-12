@@ -412,7 +412,7 @@ sessionCreateRoutes.post(
   "/sessions",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("sessions.create"),
+    authorization: requirePermission("sessions.create", { optInServices: ["motion"] }),
     serviceActorClaims: extractSessionActorProfileClaims,
   }),
   (c) => dispatch(c, handleCreateSession)

@@ -202,7 +202,7 @@ sessionPromptRoutes.post(
   "/sessions/:id/prompt",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requireSession("collaborate"),
+    authorization: requireSession("collaborate", { optInServices: ["motion"] }),
   }),
   (c) => dispatchSession(c, handleSessionPrompt)
 );

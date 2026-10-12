@@ -27,6 +27,7 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   requirePermission,
   requireSession,
   type RequestContext,
@@ -105,6 +106,15 @@ function parseCreatedByFilters(
   return userIds;
 }
 
+/** The person a list reads for: the signed-in user, or the actor a service acts for. */
+function admittedViewerUserId(ctx: RequestContext): string | undefined {
+  if (ctx.principal?.kind === "user") return ctx.principal.userId;
+  if (ctx.principal?.kind === "service") {
+    return ctx.principal.actor?.canonicalUserId ?? ctx.authorization?.userId;
+  }
+  return undefined;
+}
+
 export async function handleListSessions(
   request: Request,
   env: Env,
@@ -132,12 +142,7 @@ export async function handleListSessions(
     visibility,
     scope,
   } = parsedQuery.data;
-  const viewerUserId =
-    ctx.principal?.kind === "user"
-      ? ctx.principal.userId
-      : ctx.principal?.kind === "service"
-        ? (ctx.principal.actor?.canonicalUserId ?? ctx.authorization?.userId)
-        : undefined;
+  const viewerUserId = admittedViewerUserId(ctx);
   const legacyStarted =
     ownerFilter === undefined &&
     createdBy.length === 1 &&
@@ -236,8 +241,10 @@ export async function handleListSessionInbox(
   request: Request,
   env: Env,
   _params: object,
-  ctx: UserRouteContext
+  ctx: RequestContext
 ): Promise<Response> {
+  const userId = admittedViewerUserId(ctx);
+  if (!userId) return error("Authorization unavailable", 503);
   const query = parseQuery(request, sessionInboxQuerySchema);
   if (query instanceof Response) return query;
   const { category, mine, ownerFilter, visibility, scope } = query;
@@ -252,9 +259,7 @@ export async function handleListSessionInbox(
   }
   const viewer = viewerFromContext(
     ctx,
-    (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
-      ctx.principal.userId
-    ))
+    (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(userId))
   );
   if (scope === "all" && (viewer.kind !== "user" || !isWorkspaceAdmin(viewer.roleKey))) {
     return error("Invalid scope", 403);
@@ -265,9 +270,9 @@ export async function handleListSessionInbox(
   const mode = teamsEnforcementMode(ctx, env);
   const commonOptions = {
     limit: SESSION_INBOX_LIMIT,
-    createdByUserIds: mine === "true" ? [ctx.principal.userId] : [],
+    createdByUserIds: mine === "true" ? [userId] : [],
     excludeAutomatedSessions: mine === "true",
-    viewerUserId: ctx.principal.userId,
+    viewerUserId: userId,
     readScope: viewer,
     mode,
     teamIds,
@@ -422,14 +427,20 @@ export const sessionIndexRoutes = new Hono<ControlPlaneHonoEnv>();
 
 sessionIndexRoutes.get(
   "/sessions",
-  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("sessions.read") }),
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requirePermission("sessions.read", { optInServices: ["motion"] }),
+  }),
   (c) => dispatch(c, handleListSessions)
 );
 sessionIndexRoutes.get(
   "/sessions/inbox",
   admit({
-    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
-    authorization: requirePermission("sessions.read", { service: "deny" }),
+    ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+    authorization: requirePermission("sessions.read", {
+      service: "deny",
+      optInServices: ["motion"],
+    }),
   }),
   (c) => dispatch(c, handleListSessionInbox)
 );

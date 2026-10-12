@@ -175,3 +175,75 @@ describe("route-owned principal restrictions", () => {
     );
   });
 });
+
+describe("opt-in service admission", () => {
+  async function motionCall(method: string, path: string, actor?: string) {
+    const { env } = createEnv(401);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const body = method === "GET" ? undefined : "{}";
+    const request = await signedServiceRequest(`https://test.local${path}`, {
+      method,
+      body,
+      service: "motion",
+      actor,
+    });
+    return handleRequest(
+      request,
+      { ...env, SCM_PROVIDER: "github" } as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+  }
+
+  it.each([
+    ["GET", "/sessions/session-1/events"],
+    ["POST", "/sessions/session-1/archive"],
+    ["GET", "/repos"],
+    ["GET", "/model-preferences"],
+    ["GET", "/environments"],
+  ])("refuses motion on %s %s, which does not opt it in", async (method, path) => {
+    const response = await motionCall(
+      method,
+      path,
+      "microsoft:4f1c2d3e-5a6b-4c7d-8e9f-0a1b2c3d4e5f"
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Forbidden",
+      code: "service_capability_required",
+    });
+  });
+
+  it.each([
+    ["POST", "/sessions"],
+    ["GET", "/sessions"],
+    ["GET", "/sessions/inbox"],
+    ["POST", "/sessions/session-1/stop"],
+    ["POST", "/sessions/session-1/prompt"],
+  ])("requires an actor from motion on its opt-in route %s %s", async (method, path) => {
+    const response = await motionCall(method, path);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Forbidden",
+      code: "service_actor_required",
+    });
+  });
+
+  it("still refuses other bots on the inbox", async () => {
+    const { env } = createEnv(401);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const request = await signedServiceRequest("https://test.local/sessions/inbox", {
+      service: "slack-bot",
+      actor: "slack:U1",
+    });
+
+    const response = await handleRequest(request, env as never, TEST_BACKGROUND_TASK_CONTEXT);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Forbidden",
+      code: "service_capability_required",
+    });
+  });
+});

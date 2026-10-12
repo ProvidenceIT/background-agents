@@ -661,7 +661,13 @@ describe("service channel binding lookup", () => {
       expect(response.headers.get("Cache-Control")).toBe("private, no-store");
       const binding = vi.spyOn(TeamChannelBindingStore.prototype, "get");
       const settings = vi.spyOn(IntegrationSettingsStore.prototype, "getGlobal");
-      for (const service of ["slack-bot", "github-bot", "linear-bot", "teams-bot"] as const) {
+      for (const service of [
+        "slack-bot",
+        "github-bot",
+        "linear-bot",
+        "teams-bot",
+        "motion",
+      ] as const) {
         if (service === matchingService) continue;
         const endpoint = `${BASE}/channel-bindings/${provider}/C123`;
         const denied = await routeRequest(

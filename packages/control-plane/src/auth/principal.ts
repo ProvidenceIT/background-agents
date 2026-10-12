@@ -70,4 +70,5 @@ export const ASSERTION_RIGHTS: Record<ServiceName, ActorNamespace | null> = {
   "github-bot": "github",
   "linear-bot": "linear",
   "teams-bot": "microsoft",
+  motion: "microsoft",
 };

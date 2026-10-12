@@ -24,6 +24,7 @@ export const ANALYTICS_SPAWN_SOURCE_SCOPE: Record<SpawnSource, Exclude<Analytics
   "linear-bot": "human",
   "github-bot": "human",
   "teams-bot": "human",
+  motion: "human",
   agent: "agent",
   automation: "automation",
 };

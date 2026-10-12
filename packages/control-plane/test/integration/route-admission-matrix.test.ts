@@ -21,6 +21,7 @@ import { EnvironmentStore } from "../../src/db/environments";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
+import { UserStore } from "../../src/db/user-store";
 import { catalog } from "../../src/routes/catalog";
 import { Hono } from "hono";
 import { admit } from "../../src/routing/admit";
@@ -37,7 +38,7 @@ import {
 const BASE = "https://test.local";
 const BROWSER_USER_ID = "11111111111111111111111111111111";
 const SANDBOX_TOKEN = "matrix-sandbox-token";
-const BOT_SERVICES = ["slack-bot", "github-bot", "linear-bot", "teams-bot"] as const;
+const BOT_SERVICES = ["slack-bot", "github-bot", "linear-bot", "teams-bot", "motion"] as const;
 const PROTECTED_STATUSES = new Set([401, 403]);
 const ROUTE_MISS_BODY = JSON.stringify({ error: "Not found" });
 // Each pass issues one request per catalog route, and a fresh session per
@@ -611,6 +612,77 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
           await expectReach({}, "anonymous", false);
           break;
       }
+    }
+  });
+
+  it("admits motion with an enrolled actor on exactly its opt-in routes", async () => {
+    const objectId = "4f1c2d3e-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+    await new UserStore(env.DB).createIdentity({
+      userId: BROWSER_USER_ID,
+      provider: "microsoft",
+      providerUserId: objectId,
+    });
+    // Motion reaches only sessions it created for its actor.
+    const motionSessionId = await createReadySession();
+    await env.DB.prepare("UPDATE sessions SET spawn_source = 'motion' WHERE id = ?")
+      .bind(motionSessionId)
+      .run();
+
+    const withActor: string[] = [];
+    const withoutActor: string[] = [];
+    // Public and handler-authenticated routes leave credentials to their handlers.
+    for (const route of routes.filter(
+      (candidate) =>
+        candidate.authentication.kind !== "public" &&
+        candidate.authentication.kind !== "handler-authenticated"
+    )) {
+      const identity = `${route.method} ${route.path}`;
+      const url = `${BASE}${materialize(route, {
+        ...(environmentRequirementFor(route)?.kind === "environment"
+          ? { [environmentRequirementFor(route)!.idParam]: fixtures.environmentId }
+          : {}),
+        id: isTeamRoute(route)
+          ? fixtures.teamId
+          : isAutomationRoute(route)
+            ? fixtures.automationId
+            : environmentRequirementFor(route)?.idParam === "id"
+              ? fixtures.environmentId
+              : motionSessionId,
+        childId: fixtures.sandboxSessionId,
+      })}`;
+      const enrolled = await send(
+        url,
+        route.method,
+        await botHeaders(url, route.method, "motion", `microsoft:${objectId}`)
+      );
+      if (await reachedSentinel(enrolled, identity)) withActor.push(identity);
+      const actorless = await send(
+        url,
+        route.method,
+        await botHeaders(url, route.method, "motion")
+      );
+      if (await reachedSentinel(actorless, identity)) withoutActor.push(identity);
+    }
+
+    expect(withActor.sort()).toEqual(
+      [
+        "GET /sessions",
+        "GET /sessions/inbox",
+        "POST /sessions",
+        "POST /sessions/:id/prompt",
+        "POST /sessions/:id/stop",
+      ].sort()
+    );
+    expect(withoutActor).toEqual([]);
+
+    // Every other bot keeps the inbox closed, with or without an actor.
+    const inbox = `${BASE}/sessions/inbox`;
+    for (const [service, actor] of [
+      ["slack-bot", "slack:U-SENTINEL"],
+      ["teams-bot", `microsoft:${objectId}`],
+    ] as const) {
+      const response = await send(inbox, "GET", await botHeaders(inbox, "GET", service, actor));
+      expect(response.status, service).toBe(403);
     }
   });
 

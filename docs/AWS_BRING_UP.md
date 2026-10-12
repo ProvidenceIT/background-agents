@@ -85,7 +85,7 @@ never reads the value back — the value is write-only, so Terraform owns the in
 file never contains a secret. Setting one is entirely out of band.
 
 A parameter still holding its placeholder is **left out of `.env` rather than written through**.
-That matters most for the four `SERVICE_AUTH_SECRET_*` keys: they are HMAC signing keys used exactly
+That matters most for the six `SERVICE_AUTH_SECRET_*` keys: they are HMAC signing keys used exactly
 as given, with no length or format check, so a placeholder — a value published in this repository —
 would be a working credential for anyone who read it. Unset, they are a `500` instead. The instance
 logs every key it skipped for this reason.
@@ -142,6 +142,7 @@ openssl rand -base64 32 | put SERVICE_AUTH_SECRET_SLACK_BOT
 openssl rand -base64 32 | put SERVICE_AUTH_SECRET_GITHUB_BOT
 openssl rand -base64 32 | put SERVICE_AUTH_SECRET_LINEAR_BOT
 openssl rand -base64 32 | put SERVICE_AUTH_SECRET_TEAMS_BOT
+openssl rand -base64 32 | put SERVICE_AUTH_SECRET_MOTION
 
 # The sandbox provider. Both environments select Modal, and this is the shared
 # HMAC secret between the control plane and the Modal deployment; without it the

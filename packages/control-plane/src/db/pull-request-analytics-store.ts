@@ -70,6 +70,7 @@ const sourceRowSchema = z.object({
     "linear-bot",
     "slack-bot",
     "teams-bot",
+    "motion",
   ]),
   created: z.number(),
   merged: z.number(),

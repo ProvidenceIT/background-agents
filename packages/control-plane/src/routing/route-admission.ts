@@ -8,7 +8,7 @@ import {
 } from "../authorization/owned-resource-admission";
 import type { RouteAuthorizationDecision } from "../authorization/request-audit";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
-import { serviceAllowsPermission } from "../authorization/service-permissions";
+import { isOptInService, serviceAllowsPermission } from "../authorization/service-permissions";
 import { CHANNEL_SCOPE_BOTS, parseChannelScope } from "../authorization/channel-scope";
 import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { legacyPermissionForAction } from "../authorization/teams-enforcement";
@@ -506,6 +506,17 @@ function enforceServiceRouteAuthorization(
   }
   if (principal?.kind !== "service") return null;
   if (policy.authentication.kind === "web-service" && principal.service === "web") return null;
+  // An opt-in service is admitted only where a route names it, and only with an actor;
+  // its ceiling is not enough on its own.
+  if (isOptInService(principal.service)) {
+    const optedIn =
+      (authorization.kind === "active-user" || authorization.kind === "active-global") &&
+      authorization.service.optInServices?.includes(principal.service) === true;
+    if (!optedIn) return serviceCapabilityRequired();
+    if (!principal.actor) return serviceActorRequired();
+    evidence.requirements.push(requirement);
+    return null;
+  }
   if (
     (authorization.kind !== "active-user" && authorization.kind !== "active-global") ||
     authorization.service.kind === "deny"
@@ -611,6 +622,26 @@ async function enforceSessionRequirement(
   const sessionId = params[requirement.sessionIdParam];
   if (!sessionId) return { response: json({ error: "Invalid session route" }, 400) };
   try {
+    // An opt-in service reaches only a session it created for the acting user;
+    // any other session answers exactly like a missing one, so it cannot probe.
+    if (ctx.principal?.kind === "service" && isOptInService(ctx.principal.service)) {
+      const row = await new SessionIndexStore(ctx.db).get(sessionId);
+      const actorUserId = authorizationUserId(ctx);
+      if (
+        !row ||
+        !actorUserId ||
+        row.spawnSource !== ctx.principal.service ||
+        row.userId !== actorUserId
+      ) {
+        return authorizationDenial(
+          error("Session not found", 404),
+          evidence,
+          requirement,
+          "session_not_visible",
+          "Session not found"
+        );
+      }
+    }
     if (ctx.principal?.kind === "service" && !ctx.principal.actor) {
       const query = new URL(request.url).searchParams;
       const channels = query.getAll("channel");
