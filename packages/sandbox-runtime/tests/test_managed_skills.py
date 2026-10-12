@@ -8,9 +8,13 @@ import pytest
 
 from sandbox_runtime.entrypoint import build_supervisor
 from sandbox_runtime.managed_skills import (
+    CODEX_EXPLICIT_ONLY_POLICY,
+    CODEX_SKILL_POLICY_PATH,
     ManagedSkillsClient,
     ManagedSkillsError,
     ManagedSkillsMaterializer,
+    disables_model_invocation,
+    user_invoked_skill_names,
     validate_installation,
 )
 
@@ -449,3 +453,149 @@ def test_supervisor_derives_managed_skill_paths_from_global_config(config_variab
     materializer = supervisor.managed_skills
     assert materializer is not None
     assert materializer.destination == config_dir / "skills"
+
+
+# --- preserved frontmatter: disable-model-invocation in every harness ---------
+
+_USER_INVOKED_SKILL = (
+    "---\n"
+    "name: open-pr\n"
+    'description: "Opens a pull request"\n'
+    "metadata:\n"
+    '  "credits.author": "Matt"\n'
+    'argument-hint: "[branch]"\n'
+    "disable-model-invocation: true\n"
+    "---\n"
+    "# Open a pull request\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        (_USER_INVOKED_SKILL, True),
+        (_USER_INVOKED_SKILL.replace(": true\n", ": false\n"), False),
+        (_USER_INVOKED_SKILL.replace(": true\n", ': "true"\n'), False),
+        ("---\nname: a\ndescription: d\n---\ndisable-model-invocation: true\n", False),
+        ("---\nname: a\nmetadata:\n  disable-model-invocation: true\n---\n", False),
+        ("disable-model-invocation: true\n", False),
+    ],
+)
+def test_disables_model_invocation_reads_only_the_generated_frontmatter(markdown, expected):
+    assert disables_model_invocation(markdown) is expected
+
+
+def test_user_invoked_skill_names_lists_installed_skills_with_the_flag(tmp_path):
+    for name, markdown in {
+        "open-pr": _USER_INVOKED_SKILL,
+        "review": "---\nname: review\ndescription: d\n---\n",
+        "42": _USER_INVOKED_SKILL.replace("name: open-pr", "name: 42"),
+    }.items():
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "SKILL.md").write_text(markdown)
+    (tmp_path / ".managed-skills-staging").mkdir()
+
+    assert user_invoked_skill_names(tmp_path) == ["42", "open-pr"]
+    assert user_invoked_skill_names(tmp_path / "missing") == []
+
+
+def _skill_document(*skills):
+    document = _installation()
+    document["skills"] = []
+    for name, files in skills:
+        entries = []
+        for path, content in files.items():
+            content_bytes = content.encode()
+            entries.append(
+                {
+                    "path": path,
+                    "content": content,
+                    "sha256": hashlib.sha256(content_bytes).hexdigest(),
+                    "sizeBytes": len(content_bytes),
+                    "executable": False,
+                }
+            )
+        document["skills"].append({"name": name, "files": entries})
+    return document
+
+
+@pytest.mark.parametrize("write_policy", [True, False])
+async def test_materializer_writes_codex_policy_only_for_user_invoked_skills(
+    tmp_path, write_policy
+):
+    authored_policy = "policy:\n  allow_implicit_invocation: true\n"
+    document = _skill_document(
+        ("open-pr", {"SKILL.md": _USER_INVOKED_SKILL}),
+        (
+            "authored",
+            {
+                "SKILL.md": _USER_INVOKED_SKILL.replace("name: open-pr", "name: authored"),
+                CODEX_SKILL_POLICY_PATH: authored_policy,
+            },
+        ),
+        ("review", {"SKILL.md": "---\nname: review\ndescription: d\n---\n"}),
+    )
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(return_value=json.dumps(document).encode())
+    destination = tmp_path / "skills"
+    materializer = ManagedSkillsMaterializer(
+        client,
+        destination,
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+        write_codex_invocation_policy=write_policy,
+    )
+
+    await materializer.materialize((), tmp_path / "workspace")
+
+    policy = destination / "open-pr" / CODEX_SKILL_POLICY_PATH
+    if write_policy:
+        assert policy.read_text() == CODEX_EXPLICIT_ONLY_POLICY
+        assert policy.stat().st_mode & 0o777 == 0o400
+    else:
+        # Claude and OpenCode read the frontmatter flag itself; nothing is added.
+        assert not policy.exists()
+    assert (
+        "\ndisable-model-invocation: true\n" in (destination / "open-pr" / "SKILL.md").read_text()
+    )
+    assert (destination / "authored" / CODEX_SKILL_POLICY_PATH).read_text() == authored_policy
+    assert not (destination / "review" / "agents").exists()
+
+
+async def test_materializer_inside_a_discovery_root_does_not_collide_with_itself(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    destination = home / ".agents" / "skills" / "open-inspect"
+    document = _skill_document(
+        ("open-inspect", {"SKILL.md": "---\nname: open-inspect\ndescription: d\n---\n"})
+    )
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(return_value=json.dumps(document).encode())
+    log = MagicMock()
+    materializer = ManagedSkillsMaterializer(
+        client, destination, log, bundled_skills_path=tmp_path / "missing-bundled"
+    )
+
+    await materializer.materialize((), tmp_path / "workspace")
+    await materializer.materialize((), tmp_path / "workspace")
+
+    assert (destination / "open-inspect" / "SKILL.md").is_file()
+    log.warn.assert_not_called()
+
+
+def test_supervisor_installs_codex_skills_where_codex_discovers_them(tmp_path):
+    environment = {
+        "CONTROL_PLANE_URL": "https://control.example",
+        "HOME": str(tmp_path / "home"),
+        "SESSION_CONFIG": '{"session_id":"session-1","harness":"codex"}',
+    }
+
+    with patch.dict("os.environ", environment, clear=True):
+        supervisor = build_supervisor(asyncio.Event())
+
+    materializer = supervisor.managed_skills
+    assert materializer is not None
+    assert materializer.destination == tmp_path / "home" / ".agents" / "skills" / "open-inspect"
+    assert materializer.write_codex_invocation_policy is True

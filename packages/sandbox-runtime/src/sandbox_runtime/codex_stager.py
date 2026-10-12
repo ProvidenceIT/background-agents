@@ -6,8 +6,10 @@ while the vendor process (``codex exec``) is spawned per turn by the bridge.
 
 - a per-sandbox config directory outside every repository and outside the
   subscription home (``CODEX_HOME`` is the home, shared by every session it
-  serves, so nothing session-specific is written there): managed skills,
-  session memory and the tool server's config live here;
+  serves, so nothing session-specific is written there): session memory and
+  the tool server's config live here;
+- managed skills, which the materializer installs under
+  :func:`resolve_codex_managed_skills_dir` before this stager runs;
 - the standalone bin scripts the agent calls from its shell;
 - a small JSON handoff (``CODEX_HARNESS_FILE_PATH``) naming the workdir and
   config directory for the bridge. It carries decisions only, never a secret.
@@ -30,11 +32,23 @@ if TYPE_CHECKING:
 
 
 DEFAULT_CODEX_CONFIG_DIR_NAME = ".openinspect/codex"
+# Codex 0.162 discovers skills (recursively) in $CODEX_HOME/skills, the
+# repository's .agents/skills, $HOME/.agents/skills and /etc/codex/skills;
+# never in the harness directory above. CODEX_HOME is the shared subscription
+# home, so managed skills go to a directory of their own inside the sandbox
+# user's ~/.agents/skills, outside every checkout and beside anything else
+# installed there.
+CODEX_MANAGED_SKILLS_DIR_NAME = ".agents/skills/open-inspect"
 
 
 def resolve_codex_config_dir() -> Path:
     """Per-sandbox harness directory; never the subscription home's ``CODEX_HOME``."""
     return Path.home() / DEFAULT_CODEX_CONFIG_DIR_NAME
+
+
+def resolve_codex_managed_skills_dir() -> Path:
+    """Where managed skills are installed for Codex to discover them."""
+    return Path.home() / CODEX_MANAGED_SKILLS_DIR_NAME
 
 
 @dataclass(frozen=True)

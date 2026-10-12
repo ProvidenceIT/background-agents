@@ -1,4 +1,4 @@
-"""Fetch, validate, and install control-plane-managed OpenCode skills."""
+"""Fetch, validate, and install control-plane-managed skills for every harness."""
 
 from __future__ import annotations
 
@@ -44,6 +44,16 @@ _YAML_NAME_RE = re.compile(
     r"""^\s*(?:name|"name"|'name')\s*:\s*(?:"([^"]+)"|'([^']+)'|([^#\s]+))"""
 )
 _DISCOVERY_PATHS = (".opencode/skills", ".claude/skills", ".agents/skills")
+# The control plane renders preserved frontmatter one plain key per line with a
+# JSON value, so the flag is exactly this line when set.
+_DISABLE_MODEL_INVOCATION_RE = re.compile(r"^disable-model-invocation:[ \t]*true[ \t]*$")
+# Skill-reading bound shared by every frontmatter scan of an installed tree.
+_SKILL_MARKDOWN_SCAN_BYTES = 65536
+_STAGING_PREFIX = ".managed-skills-"
+# Codex's per-skill policy file. ``allow_implicit_invocation: false`` keeps a
+# skill out of the model's skill list while ``$name`` still invokes it.
+CODEX_SKILL_POLICY_PATH = "agents/openai.yaml"
+CODEX_EXPLICIT_ONLY_POLICY = "policy:\n  allow_implicit_invocation: false\n"
 
 
 class ManagedSkillsError(RuntimeError):
@@ -363,8 +373,65 @@ def _canonical_frontmatter_name(markdown: str) -> str | None:
     return None
 
 
+def disables_model_invocation(markdown: str) -> bool:
+    """Whether a generated SKILL.md carries ``disable-model-invocation: true``.
+
+    The skill stays user-invocable (a slash command) but the model must not
+    pick it on its own. Claude honours the key natively; OpenCode and Codex
+    need it translated into their own controls.
+    """
+    if not markdown.startswith("---\n"):
+        return False
+    for line in markdown.splitlines()[1:]:
+        if line == "---":
+            return False
+        if _DISABLE_MODEL_INVOCATION_RE.fullmatch(line):
+            return True
+    return False
+
+
+def _read_skill_markdown(skill_dir: Path) -> str | None:
+    skill_file = skill_dir / "SKILL.md"
+    if not skill_file.is_file() or skill_file.is_symlink():
+        return None
+    try:
+        with skill_file.open("rb") as file:
+            # The bound may split a character in the body; the frontmatter
+            # comes first, so replacing that tail is harmless.
+            return file.read(_SKILL_MARKDOWN_SCAN_BYTES).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def user_invoked_skill_names(skills_dir: Path) -> list[str]:
+    """Installed skills under ``skills_dir`` that only a user may invoke, sorted.
+
+    Reads what the materializer installed, so a harness restart applies the
+    same answer without the control plane.
+    """
+    if not skills_dir.is_dir():
+        return []
+    names: set[str] = set()
+    for child in skills_dir.iterdir():
+        if child.name.startswith(".") or not child.is_dir() or child.is_symlink():
+            continue
+        markdown = _read_skill_markdown(child)
+        if markdown is None or not disables_model_invocation(markdown):
+            continue
+        name = _canonical_frontmatter_name(markdown)
+        if name and _SKILL_NAME_RE.fullmatch(name):
+            names.add(name)
+    return sorted(names)
+
+
 class ManagedSkillsMaterializer:
-    """Install a fetched installation DTO into the platform-owned global skills directory."""
+    """Install a fetched installation DTO into the platform-owned global skills directory.
+
+    ``write_codex_invocation_policy`` adds Codex's ``agents/openai.yaml``
+    explicit-only policy to skills that disable model invocation and ship no
+    policy file of their own. It is written at install time, never stored, so
+    revision digests are unaffected.
+    """
 
     def __init__(
         self,
@@ -373,11 +440,13 @@ class ManagedSkillsMaterializer:
         log: Any,
         *,
         bundled_skills_path: Path = Path("/app/sandbox_runtime/skills"),
+        write_codex_invocation_policy: bool = False,
     ) -> None:
         self.client = client
         self.destination = destination
         self.log = log
         self.bundled_skills_path = bundled_skills_path
+        self.write_codex_invocation_policy = write_codex_invocation_policy
 
     @staticmethod
     def _remove_path(path: Path) -> None:
@@ -407,7 +476,7 @@ class ManagedSkillsMaterializer:
         if skill_file.is_file() and not skill_file.is_symlink():
             try:
                 with skill_file.open("rb") as file:
-                    content = file.read(65536)
+                    content = file.read(_SKILL_MARKDOWN_SCAN_BYTES)
                 if content.startswith(b"---\n"):
                     for raw_line in content.splitlines()[1:]:
                         if raw_line == b"---":
@@ -447,7 +516,14 @@ class ManagedSkillsMaterializer:
             if not root.is_dir():
                 continue
             for child in root.iterdir():
-                if not child.is_dir():
+                # The destination may itself sit inside a discovery root
+                # (Codex installs under ~/.agents/skills); neither it nor its
+                # staging siblings are someone else's skill.
+                if (
+                    not child.is_dir()
+                    or child == self.destination
+                    or child.name.startswith(_STAGING_PREFIX)
+                ):
                     continue
                 for name in self._skill_names(child) & selected:
                     found.setdefault(name, set()).add(child)
@@ -478,9 +554,9 @@ class ManagedSkillsMaterializer:
         """Recover any interrupted swap and open an empty staging tree."""
         parent = self.destination.parent
         parent.mkdir(parents=True, exist_ok=True)
-        staging = parent / ".managed-skills-staging"
-        backup = parent / ".managed-skills-backup"
-        journal = parent / ".managed-skills-swap"
+        staging = parent / f"{_STAGING_PREFIX}staging"
+        backup = parent / f"{_STAGING_PREFIX}backup"
+        journal = parent / f"{_STAGING_PREFIX}swap"
         self._repair_interrupted_swap(staging, backup, journal)
         if self.destination.is_symlink() or (
             self.destination.exists() and not self.destination.is_dir()
@@ -503,6 +579,28 @@ class ManagedSkillsMaterializer:
             skill_dir.mkdir(mode=0o700)
             for file in sorted(skill.files, key=lambda item: item.path.encode("utf-8")):
                 self._write_file(skill_dir / PurePosixPath(file.path), file)
+            if self.write_codex_invocation_policy:
+                self._write_codex_invocation_policy(skill_dir, skill)
+
+    def _write_codex_invocation_policy(self, skill_dir: Path, skill: ManagedSkill) -> None:
+        """Keep a user-invoked-only skill out of Codex's implicit skill list."""
+        markdown = next(file.content for file in skill.files if file.path == "SKILL.md")
+        if not disables_model_invocation(markdown):
+            return
+        if any(file.path == CODEX_SKILL_POLICY_PATH for file in skill.files):
+            self.log.info("managed_skills.codex_policy_kept", skill=skill.name)
+            return
+        content = CODEX_EXPLICIT_ONLY_POLICY.encode("utf-8")
+        self._write_file(
+            skill_dir / PurePosixPath(CODEX_SKILL_POLICY_PATH),
+            ManagedSkillFile(
+                CODEX_SKILL_POLICY_PATH,
+                CODEX_EXPLICIT_ONLY_POLICY,
+                hashlib.sha256(content).hexdigest(),
+                len(content),
+                False,
+            ),
+        )
 
     def _commit_staging(self, staging: Path, backup: Path, journal: Path) -> None:
         """Swap the staged tree in, recoverably.

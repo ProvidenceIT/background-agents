@@ -1,5 +1,6 @@
 """OpenCode's process env: what a mounted subscription home contributes."""
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,6 +9,7 @@ import pytest
 from sandbox_runtime.opencode_server import (
     AUTH_HOME_ENV_ALLOWLIST,
     OpenCodeServer,
+    opencode_permission,
     parse_auth_home_env,
 )
 from tests.runtime_helpers import make_opencode_server
@@ -115,3 +117,39 @@ def test_sourcing_logs_names_never_values(tmp_path: Path) -> None:
         assert sup._source_auth_home_env() == {"ZHIPU_API_KEY": "glm-placeholder"}
     sup.log.info.assert_called_once_with("auth_home.env_sourced", keys=["ZHIPU_API_KEY"])
     assert "glm-placeholder" not in repr(sup.log.mock_calls)
+
+
+def _install_managed_skill(config_dir: Path, name: str, *, user_invoked: bool) -> None:
+    skill_dir = config_dir / "skills" / name
+    skill_dir.mkdir(parents=True)
+    flag = "disable-model-invocation: true\n" if user_invoked else ""
+    (skill_dir / "SKILL.md").write_text(f'---\nname: {name}\ndescription: "d"\n{flag}---\nbody\n')
+
+
+@pytest.mark.asyncio
+async def test_user_invoked_managed_skills_are_hidden_from_the_model(tmp_path: Path) -> None:
+    config_dir = tmp_path / "opencode-config"
+    _install_managed_skill(config_dir, "open-pr", user_invoked=True)
+    _install_managed_skill(config_dir, "42", user_invoked=True)
+    _install_managed_skill(config_dir, "review", user_invoked=False)
+
+    env = await _process_env(tmp_path, {"PATH": "/usr/bin", "OPENCODE_CONFIG_DIR": str(config_dir)})
+
+    permission = json.loads(env["OPENCODE_CONFIG_CONTENT"])["permission"]
+    assert permission == {"*": {"*": "allow"}, "skill": {"42": "deny", "open-pr": "deny"}}
+    assert list(permission) == ["*", "skill"]
+
+
+@pytest.mark.asyncio
+async def test_permission_is_unchanged_without_user_invoked_skills(tmp_path: Path) -> None:
+    config_dir = tmp_path / "opencode-config"
+    _install_managed_skill(config_dir, "review", user_invoked=False)
+
+    env = await _process_env(tmp_path, {"PATH": "/usr/bin", "OPENCODE_CONFIG_DIR": str(config_dir)})
+
+    assert json.loads(env["OPENCODE_CONFIG_CONTENT"])["permission"] == {"*": {"*": "allow"}}
+
+
+def test_opencode_permission_keeps_the_allow_rule_first() -> None:
+    assert opencode_permission([]) == {"*": {"*": "allow"}}
+    assert list(opencode_permission(["b", "a"])["skill"]) == ["a", "b"]

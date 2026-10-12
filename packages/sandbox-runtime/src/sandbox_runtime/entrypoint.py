@@ -14,7 +14,7 @@ from .boot_events import BootEventLog
 from .browser_desktop import BrowserDesktop
 from .claude_stager import ClaudeStager, isolated_claude_config_dir, resolve_claude_config_dir
 from .code_server import CodeServer
-from .codex_stager import CodexStager, resolve_codex_config_dir
+from .codex_stager import CodexStager, resolve_codex_config_dir, resolve_codex_managed_skills_dir
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
 from .docker_service import DockerService
 from .harness.base import HarnessId, HarnessProcessOwner
@@ -101,7 +101,14 @@ def harness_config_dir(harness: HarnessId, claude_config_dir: Path | None) -> Pa
 
 
 def managed_skills_destination(harness: HarnessId, claude_config_dir: Path | None) -> Path:
-    """Where managed skills land: each harness discovers skills from its own tree."""
+    """Where managed skills land: wherever the harness discovers user skills.
+
+    OpenCode and Claude read ``skills/`` in their own config tree. Codex never
+    reads its harness directory for skills, so its managed skills go where it
+    does look.
+    """
+    if harness is HarnessId.CODEX:
+        return resolve_codex_managed_skills_dir()
     return harness_config_dir(harness, claude_config_dir) / "skills"
 
 
@@ -157,6 +164,7 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
             ),
             managed_skills_destination(config.harness, claude_config_dir),
             log,
+            write_codex_invocation_policy=config.harness is HarnessId.CODEX,
         )
     harness_process = build_harness_process(
         config, shutdown_event, log, warnings, claude_config_dir
