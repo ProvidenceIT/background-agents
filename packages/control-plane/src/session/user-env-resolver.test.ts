@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { AuthHomeUnavailableError, type SandboxAuthHome } from "../sandbox/provider";
 import { UserEnvResolver } from "./user-env-resolver";
 import { resolveSessionRepoId } from "./repo-id-resolution";
 import {
@@ -263,8 +264,11 @@ function makeHarness(
     subscriptionSecretOwners?: string;
     /** The sharing state owner-tagged secrets follow; household with no homes by default. */
     sharing?: SubscriptionSecretSharing;
+    /** The session's bound subscription home; none by default. */
+    authHome?: () => Promise<SandboxAuthHome | undefined>;
   } = {}
 ) {
+  const authHomeLookup = { getForSession: vi.fn(options.authHome ?? (async () => undefined)) };
   const sharingPort = {
     load: vi.fn(async () => options.sharing ?? { policy: "household" as const, homes: [] }),
     recordShared: vi.fn(async () => undefined),
@@ -320,11 +324,13 @@ function makeHarness(
     secretsCapEnforcement: options.capEnforcement,
     subscriptionSecretOwners: options.subscriptionSecretOwners,
     subscriptionSecretSharing: sharingPort,
+    authHomeLookup,
     log,
   });
 
   return {
     resolver,
+    authHomeLookup,
     db,
     sharingPort,
     logs,
@@ -694,6 +700,56 @@ describe("UserEnvResolver", () => {
         ).resolves.toContain(fragment);
       }
     );
+
+    const home = (providers: string[]): SandboxAuthHome => ({
+      pvcName: "sf-home-owner-codex",
+      ownerUserId: "u1",
+      providers,
+      writable: true,
+    });
+
+    it("returns null when the bound home serves the provider (Codex auth.json)", async () => {
+      const h = makeHarness({ authHome: async () => home(["openai"]) });
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+
+      await expect(h.resolver.getProviderAuthenticationError("openai/gpt-5.4")).resolves.toBeNull();
+      expect(h.authHomeLookup.getForSession).toHaveBeenCalledWith("sess-public-1");
+    });
+
+    it("still refuses when the bound home does not serve the provider", async () => {
+      const h = makeHarness({ authHome: async () => home(["anthropic"]) });
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+
+      await expect(h.resolver.getProviderAuthenticationError("openai/gpt-5.4")).resolves.toMatch(
+        /No OpenAI authentication is configured/
+      );
+    });
+
+    it("fails the prompt when the bound home is gone or disabled", async () => {
+      const h = makeHarness({
+        authHome: async () => {
+          throw new AuthHomeUnavailableError("Subscription home ah_1 is disabled");
+        },
+      });
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+
+      await expect(h.resolver.getProviderAuthenticationError("openai/gpt-5.4")).resolves.toBe(
+        "Subscription home ah_1 is disabled"
+      );
+    });
+
+    it("propagates an unexpected lookup failure", async () => {
+      const h = makeHarness({
+        authHome: async () => {
+          throw new Error("D1 down");
+        },
+      });
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+
+      await expect(h.resolver.getProviderAuthenticationError("openai/gpt-5.4")).rejects.toThrow(
+        "D1 down"
+      );
+    });
 
     it("returns null for non-subscription providers", async () => {
       const h = makeHarness();

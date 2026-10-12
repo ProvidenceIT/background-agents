@@ -28,6 +28,11 @@ import {
 } from "@open-inspect/shared/types/provider-accounts";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import type { SqlDatabase } from "../db/sql-database";
+import {
+  createSessionAuthHomeLookup,
+  type SessionAuthHomeLookup,
+} from "../auth-homes/sandbox-mount";
+import { AuthHomeUnavailableError } from "../sandbox/provider";
 import type { Logger } from "../logger";
 import { resolvePublicSessionId } from "./public-session-id";
 import { buildSessionTargetSecretSources } from "./session-target-secrets";
@@ -64,6 +69,8 @@ export interface UserEnvResolverDeps {
   subscriptionSecretOwners?: string;
   /** The sharing state owner-tagged secrets follow; read from `db` when omitted. */
   subscriptionSecretSharing?: SubscriptionSecretSharingPort;
+  /** The session's bound subscription home; read from `db` when omitted. */
+  authHomeLookup?: SessionAuthHomeLookup;
   /** The session-scoped logger; the composition root creates it before this class. */
   log: Logger;
 }
@@ -88,6 +95,7 @@ export class UserEnvResolver {
   private readonly secretsCapEnforcement: string | undefined;
   private readonly subscriptionSecretOwners: string | undefined;
   private readonly subscriptionSecretSharing: SubscriptionSecretSharingPort;
+  private readonly authHomeLookup: SessionAuthHomeLookup;
   private readonly log: Logger;
 
   constructor(deps: UserEnvResolverDeps) {
@@ -100,6 +108,7 @@ export class UserEnvResolver {
     this.subscriptionSecretOwners = deps.subscriptionSecretOwners;
     this.subscriptionSecretSharing =
       deps.subscriptionSecretSharing ?? createSubscriptionSecretSharing(deps.db);
+    this.authHomeLookup = deps.authHomeLookup ?? createSessionAuthHomeLookup(deps.db);
     this.log = deps.log;
   }
 
@@ -134,6 +143,8 @@ export class UserEnvResolver {
   async getProviderAuthenticationError(model: string): Promise<string | null> {
     const context = await this.loadUserEnvContext();
     if (!context) return null;
+    const homeIssue = await this.checkAuthHome(model, context.sessionId);
+    if (homeIssue !== undefined) return homeIssue;
     const accountIssue = await this.checkBoundAccount(model, context);
     if (accountIssue) return accountIssue;
     const issue = resolveProviderAuthenticationError(
@@ -148,6 +159,28 @@ export class UserEnvResolver {
       auth_mode: context.providerAuthModes[issue.provider],
     });
     return issue.message;
+  }
+
+  /**
+   * A session bound to a subscription home that serves the model's provider
+   * authenticates from the mounted home, which the sandbox env never shows
+   * (the Codex `auth.json`, the Claude setup token): null, so the env check
+   * below does not refuse it. A binding to a home that is gone or disabled
+   * fails the prompt here, as the launch would. undefined: no home serves
+   * this provider, so the env decides.
+   */
+  private async checkAuthHome(
+    model: string,
+    sessionId: string
+  ): Promise<string | null | undefined> {
+    const provider = model.split("/", 1)[0];
+    try {
+      const home = await this.authHomeLookup.getForSession(sessionId);
+      return home?.providers.includes(provider) ? null : undefined;
+    } catch (error) {
+      if (error instanceof AuthHomeUnavailableError) return error.message;
+      throw error;
+    }
   }
 
   /**
