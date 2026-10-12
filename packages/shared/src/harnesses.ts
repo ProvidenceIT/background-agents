@@ -30,6 +30,11 @@ export interface HarnessCapabilities {
   readonly label: string;
   /** Model providers (catalog id prefixes) the harness can run, or any. */
   readonly modelFamilies: "any" | readonly string[];
+  /**
+   * The model a new session on this harness starts on when the user's
+   * preference cannot run here; absent means the catalog default.
+   */
+  readonly defaultModel?: string;
   /** Provider id → auth modes the harness can *select* for that provider. */
   readonly providerAuth: Readonly<Partial<Record<string, readonly ProviderAuthMode[]>>>;
   /** How a sandbox restore resumes the conversation. */
@@ -61,6 +66,10 @@ export const HARNESS_CATALOG = {
   codex: {
     label: "Codex",
     modelFamilies: ["openai"],
+    // A ChatGPT login refuses older catalog models (gpt-5.4: "not supported
+    // when using Codex with a ChatGPT account"), so the first enabled OpenAI
+    // model is not a safe fallback.
+    defaultModel: "openai/gpt-6.1-sol",
     providerAuth: {
       openai: ["auth_home"],
     },

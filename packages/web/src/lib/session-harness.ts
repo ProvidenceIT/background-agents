@@ -1,6 +1,7 @@
 import {
   DEFAULT_HARNESS,
   filterModelsForHarness,
+  getHarnessCapabilities,
   getHarnessLabel,
   harnessSupportsModel,
   type HarnessId,
@@ -93,6 +94,6 @@ export function resolveHarnessModelSelection({
   return {
     availability: { status: "available" },
     options,
-    ...resolveModelPreference(preference, models),
+    ...resolveModelPreference(preference, models, getHarnessCapabilities(harness).defaultModel),
   };
 }

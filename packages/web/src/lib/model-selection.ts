@@ -19,13 +19,14 @@ export interface ResolvedModelPreference {
 
 export function resolveModelPreference(
   preference: ModelPreference,
-  enabledModels?: readonly string[]
+  enabledModels?: readonly string[],
+  fallbackModel: string = DEFAULT_MODEL
 ): ResolvedModelPreference {
   const model = enabledModels
     ? resolveEnabledModel({
         model: preference.model,
         enabledModels,
-        fallbackModel: DEFAULT_MODEL,
+        fallbackModel,
       })
     : getValidModelOrDefault(preference.model);
   const reasoningConfig = getReasoningConfig(model);
