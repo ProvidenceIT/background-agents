@@ -152,9 +152,9 @@ To import one skill from a repository that holds several, name its subdirectory.
 
 Host-specific fields such as `disable-model-invocation: true` are stored in the skill's `frontmatter` map and written into the generated `SKILL.md` after `metadata`, sorted, with values as JSON so booleans stay booleans. Keys start with a letter and use only letters, digits, `-`, and `_`; `name`, `description`, `license`, `compatibility`, and `metadata` cannot appear; values nest at most 4 levels and the map is at most 8 KiB as JSON.
 
-Fields that grant permissions or change cost are never stored: `allowed-tools`, `hooks`, `model`, `effort`, `reasoning-effort`, `model-reasoning-effort`, `shell`, `agent`, `agents`, `mcp-servers`, `lsp-servers`, `settings`, `permission`, `permissions`, and `tools` (matched ignoring case, `-`, and `_`).
+Fields that grant permissions or change cost are never stored: `allowed-tools`, `hooks`, `model`, `effort`, `reasoning-effort`, `model-reasoning-effort`, `shell`, `context`, `agent`, `agents`, `mcp-servers`, `lsp-servers`, `settings`, `permission`, `permissions`, and `tools` (matched ignoring case, `-`, and `_`).
 
-`disable-model-invocation: true` keeps a skill available to people but out of the agent's own choices in every harness. Claude honours it natively. For OpenCode the sandbox adds a `permission.skill` deny rule, so the skill leaves the agent's available skills and remains a `/name` command. For Codex the sandbox writes an `agents/openai.yaml` explicit-only policy into the installed skill (unless the skill ships one), so it remains available as `$name`.
+`disable-model-invocation: true` keeps a skill available to people but out of the agent's own choices in every harness. Claude honours it natively and expands a `/name` that opens the prompt. For OpenCode the sandbox adds a `permission.skill` deny rule, so the skill leaves the agent's available skills. When a Claude or OpenCode prompt names such a skill with `/name` or `$name` that the harness would not expand itself, the sandbox appends the skill's instructions to the prompt. For Codex the sandbox sets an explicit-only policy in the installed skill's `agents/openai.yaml` (merged into the skill's own file when it ships one), so it remains available as `$name`.
 
 ### Preview and review
 

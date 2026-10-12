@@ -289,10 +289,12 @@ and 500-character compatibility limit.
 > importing carry such fields — chiefly `disable-model-invocation: true` — so other keys are now
 > kept in a per-revision `frontmatter` JSON map (`skill_revisions.frontmatter_json`, migration 0096)
 > and rendered after `metadata`. Keys that grant power or change cost (`allowed-tools`, `hooks`,
-> `model`, `effort`, `shell`, `agent(s)`, `mcp-servers`, `lsp-servers`, `settings`, `permission(s)`,
-> `tools`) stay denied, and the sandbox translates `disable-model-invocation` for the harnesses that
-> do not read it (an OpenCode `permission.skill` deny rule, a Codex `agents/openai.yaml`
-> explicit-only policy). Nested `metadata` is flattened to dotted keys. See
+> `model`, `effort`, `shell`, `context`, `agent(s)`, `mcp-servers`, `lsp-servers`, `settings`,
+> `permission(s)`, `tools`) stay denied, and the sandbox translates `disable-model-invocation` for
+> the harnesses that do not read it (an OpenCode `permission.skill` deny rule, a Codex
+> `agents/openai.yaml` explicit-only policy). Because the bridge sends prompts as text, it appends a
+> user-invoked skill's instructions when the prompt names it with `/name` or `$name` and the harness
+> would not expand that itself. Nested `metadata` is flattened to dotted keys. See
 > [MANAGED_SKILLS.md](../MANAGED_SKILLS.md#preserved-frontmatter).
 
 Parse YAML with a safe schema. Reject custom tags, duplicate keys, and aliases rather than allowing

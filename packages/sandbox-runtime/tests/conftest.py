@@ -93,6 +93,7 @@ def wire_opencode_transport(bridge: "AgentBridge", http_client: Any) -> Any:
         attachment_processor=bridge.attachment_processor,
         log=bridge.log,
         limits=previous.limits,
+        managed_skills_dir=previous.managed_skills_dir,
     )
     harness.session_id = previous.session_id
     bridge.boot_attach.harness = harness

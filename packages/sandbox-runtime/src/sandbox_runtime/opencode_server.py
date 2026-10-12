@@ -46,9 +46,11 @@ def opencode_permission(user_invoked_skills: Sequence[str]) -> dict[str, Any]:
 
     OpenCode ignores ``disable-model-invocation``. Its equivalent is a
     ``skill`` deny rule: ``Skill.available`` drops a denied skill from the
-    model's ``available_skills`` and the skill tool refuses to load it, while
-    the ``/name`` slash command (built from every discovered skill, not the
-    filtered list) still works. Rules are evaluated last-match-wins with these
+    model's ``available_skills`` and the skill tool refuses to load it. Only
+    OpenCode's own clients turn ``/name`` into its command; the bridge sends
+    prompts to ``prompt_async`` as text, so it appends the instructions of a
+    user-invoked skill the prompt names itself (see ``skill_invocation``).
+    Rules are evaluated last-match-wins with these
     config rules after the agent defaults, so the ``"*"`` allow stays first.
     The ``skill`` map holds only deny rules: JavaScript orders integer-like keys
     (a skill named ``42``) first, which would put them ahead of an allow there.
