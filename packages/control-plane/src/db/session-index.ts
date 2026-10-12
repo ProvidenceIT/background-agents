@@ -130,6 +130,11 @@ export interface SessionEntry {
    */
   pullRequestSummary?: PullRequestSummary;
   readState?: SessionReadState;
+  /**
+   * The idempotency key the listing service gave this session at create.
+   * Attached by list() only for that service (`externalRefsFor`).
+   */
+  ownExternalRef?: string;
 }
 
 /** Declarative fields used only when creating a session index row. */
@@ -170,7 +175,14 @@ export interface ListSessionsOptions extends SessionListFilters {
   limit?: number;
   offset?: number;
   viewerUserId?: string;
+  /** Attach `ownExternalRef` to the sessions this service created under a ref. */
+  externalRefsFor?: ServiceName;
 }
+
+type ListedSessionRow = SessionRow & {
+  external_ref_service?: string | null;
+  external_ref?: string | null;
+};
 
 /** Paginated session index entries. */
 export interface ListSessionsResult {
@@ -598,6 +610,7 @@ export class SessionIndexStore {
       limit = DEFAULT_SESSION_LIST_LIMIT,
       offset = DEFAULT_SESSION_LIST_OFFSET,
       viewerUserId,
+      externalRefsFor,
     } = options;
     const { where, params } = buildSessionListPredicates(options);
 
@@ -619,17 +632,20 @@ export class SessionIndexStore {
              ORDER BY paged_sessions.updated_at DESC, paged_sessions.id DESC`
           )
           .bind(...pageParams, viewerUserId)
-          .all<ViewerSessionRow>()
+          .all<ViewerSessionRow & ListedSessionRow>()
       : await this.db
           .prepare(pageSql)
           .bind(...pageParams)
-          .all<SessionRow>();
+          .all<ListedSessionRow>();
 
-    const rows = result.results || [];
+    const rows: ListedSessionRow[] = result.results || [];
     const sessions = await this.attachListMetadata(
       rows.slice(0, limit).map((row) => ({
         ...toEntry(row),
         ...(viewerUserId ? { readState: readStateFromRow(row as ViewerSessionRow) } : {}),
+        ...(externalRefsFor && row.external_ref && row.external_ref_service === externalRefsFor
+          ? { ownExternalRef: row.external_ref }
+          : {}),
       }))
     );
 

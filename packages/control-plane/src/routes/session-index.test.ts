@@ -884,6 +884,46 @@ describe("motion session lookups", () => {
     expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
   });
 
+  it("asks the store for the calling service's refs and renames them externalRef", async () => {
+    mockSessionIndexStore.list.mockResolvedValue({
+      sessions: [
+        { ...listSession, id: "session-1", ownExternalRef: "wi-123:1" },
+        { ...listSession, id: "session-2" },
+      ],
+      hasMore: false,
+    });
+
+    const response = await handleListSessions(
+      new Request("https://test.local/sessions"),
+      createEnv(),
+      {},
+      motionCtx()
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({ externalRefsFor: "motion" })
+    );
+    const { sessions } = await response.json<{ sessions: Array<Record<string, unknown>> }>();
+    expect(sessions[0]).toMatchObject({ id: "session-1", externalRef: "wi-123:1" });
+    expect(sessions[0]).not.toHaveProperty("ownExternalRef");
+    expect(sessions[1]).not.toHaveProperty("externalRef");
+  });
+
+  it("never asks for refs on behalf of a person", async () => {
+    const response = await handleListSessions(
+      new Request("https://test.local/sessions"),
+      createEnv(),
+      {},
+      createCtx(USER_PRINCIPAL)
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.not.objectContaining({ externalRefsFor: expect.anything() })
+    );
+  });
+
   it("reads the inbox for the actor a service acts for", async () => {
     const response = await handleListSessionInbox(
       new Request("https://test.local/sessions/inbox?mine=true"),
