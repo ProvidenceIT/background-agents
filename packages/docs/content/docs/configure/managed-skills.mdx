@@ -109,6 +109,7 @@ Use this skill when deploying the API service to staging.
 - License records licensing information for the skill.
 - Compatibility describes environment or tool requirements.
 - Metadata accepts a JSON object whose keys and values are strings, for example `{"team":"platform"}`.
+- Frontmatter (JSON) holds any other `SKILL.md` frontmatter as a JSON object whose values keep their types, for example `{"disable-model-invocation": true}`. See [Preserved frontmatter](#preserved-frontmatter).
 
 OpenInspect generates the skill's `SKILL.md` from these fields. Do not add it as a supporting file.
 
@@ -145,7 +146,15 @@ To import one skill from a repository that holds several, name its subdirectory.
 
 ### How SKILL.md maps onto a managed skill
 
-`name`, `description`, `license`, `compatibility`, and `metadata` become the matching fields, and everything after the frontmatter becomes the instructions. Any other frontmatter key (for example `allowed-tools` or `version`) has no managed-skill field; it is reported in the preview and then left behind. All other files in the directory become supporting files. OpenInspect regenerates `SKILL.md` from the mapped fields, so the stored file is not byte-identical to the upstream one.
+`name`, `description`, `license`, `compatibility`, and `metadata` become the matching fields, and everything after the frontmatter becomes the instructions. Any other frontmatter key (for example `disable-model-invocation`, `argument-hint`, or `version`) is kept as [preserved frontmatter](#preserved-frontmatter) unless it is denied or cannot be stored; the preview lists each key as `preserved-frontmatter`, `denied-frontmatter`, or `unsupported-frontmatter`. Nested `metadata` is flattened to dotted string keys (`credits.author`) and lists inside it become JSON strings, reported as `flattened-metadata`. All other files in the directory become supporting files. OpenInspect regenerates `SKILL.md` from these fields, so the stored file is not byte-identical to the upstream one.
+
+### Preserved frontmatter
+
+Host-specific fields such as `disable-model-invocation: true` are stored in the skill's `frontmatter` map and written into the generated `SKILL.md` after `metadata`, sorted, with values as JSON so booleans stay booleans. Keys start with a letter and use only letters, digits, `-`, and `_`; `name`, `description`, `license`, `compatibility`, and `metadata` cannot appear; values nest at most 4 levels and the map is at most 8 KiB as JSON.
+
+Fields that grant permissions or change cost are never stored: `allowed-tools`, `hooks`, `model`, `effort`, `reasoning-effort`, `model-reasoning-effort`, `shell`, `agent`, `agents`, `mcp-servers`, `lsp-servers`, `settings`, `permission`, `permissions`, and `tools` (matched ignoring case, `-`, and `_`).
+
+`disable-model-invocation: true` keeps a skill available to people but out of the agent's own choices in every harness. Claude honours it natively. For OpenCode the sandbox adds a `permission.skill` deny rule, so the skill leaves the agent's available skills and remains a `/name` command. For Codex the sandbox writes an `agents/openai.yaml` explicit-only policy into the installed skill (unless the skill ships one), so it remains available as `$name`.
 
 ### Preview and review
 
@@ -245,6 +254,7 @@ See [agent harnesses](/models/agent-harnesses) for the differences between the t
 | Compatibility                      | 500 characters        |
 | Metadata key                       | 100 characters        |
 | Metadata value                     | 500 characters        |
+| Preserved frontmatter              | 8 KiB as JSON         |
 | Supporting files                   | 99 per skill revision |
 | Individual file                    | 256 KiB               |
 | Complete skill revision            | 1 MiB                 |
