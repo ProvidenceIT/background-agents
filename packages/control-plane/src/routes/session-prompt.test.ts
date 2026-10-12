@@ -36,10 +36,12 @@ vi.mock("../session/identity", async (importOriginal) => ({
 describe("POST /sessions/:id/prompt on an auth-home session", () => {
   let fixture: Awaited<ReturnType<typeof createHouseholdFixture>>;
   let forwarded: number;
+  let forwardedBodies: Record<string, unknown>[];
 
   beforeEach(async () => {
     fixture = await createHouseholdFixture();
     forwarded = 0;
+    forwardedBodies = [];
   });
   afterEach(() => fixture.close());
 
@@ -56,8 +58,9 @@ describe("POST /sessions/:id/prompt on an auth-home session", () => {
       executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
       principal,
       sessionRuntime: {
-        fetch: async () => {
+        fetch: async (_sessionId, _path, init) => {
           forwarded += 1;
+          forwardedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
           return Response.json({ messageId: "message-1", status: "queued" });
         },
       },
@@ -148,5 +151,31 @@ describe("POST /sessions/:id/prompt on an auth-home session", () => {
       message: expect.stringContaining("no eligible subscription home for openai"),
     });
     expect(forwarded).toBe(0);
+  });
+
+  it("namespaces a service's clientRequestId and refuses one from a person", async () => {
+    const motion: SessionRouteContext["principal"] = {
+      kind: "service",
+      service: "motion",
+      actor: {
+        provider: "microsoft",
+        providerUserId: "oid-owner",
+        canonicalUserId: HOUSEHOLD.owner,
+        participantUserId: "microsoft:oid-owner",
+      },
+    };
+
+    expect((await prompt(HOUSEHOLD.owner, { clientRequestId: "wi-1:p1" }, motion)).status).toBe(
+      200
+    );
+    expect(forwardedBodies[0]).toMatchObject({ clientRequestId: "svc:motion:wi-1:p1" });
+
+    const person = await prompt(HOUSEHOLD.owner, { clientRequestId: "wi-1:p1" });
+    expect(person.status).toBe(400);
+    await expect(person.json()).resolves.toMatchObject({ code: "client_request_id_not_allowed" });
+    expect((await prompt(HOUSEHOLD.owner, { clientRequestId: "bad key" }, motion)).status).toBe(
+      400
+    );
+    expect(forwarded).toBe(1);
   });
 });

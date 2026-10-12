@@ -22,6 +22,15 @@ import { TeamMembershipStore } from "../db/team-memberships";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
+import {
+  EXTERNAL_REF_PENDING_LEASE_MS,
+  EXTERNAL_REF_RETRY_AFTER_SECONDS,
+  externalRefFingerprint,
+  probeSessionRuntime,
+  SessionExternalRefTakenError,
+  type SessionExternalRef,
+} from "../session/external-ref";
+import { SessionIndexStore } from "../db/session-index";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
@@ -62,6 +71,82 @@ const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
 // Defense in depth on top of schema validation — matches git ref charsets.
 const BRANCH_NAME_PATTERN = /^[\w.\-/]+$/;
 
+function withRetryAfter(response: Response): Response {
+  response.headers.set("Retry-After", String(EXTERNAL_REF_RETRY_AFTER_SECONDS));
+  return response;
+}
+
+function externalRefInProgress(): Response {
+  return withRetryAfter(json({ error: "Conflict", code: "external_ref_in_progress" }, 409));
+}
+
+/** The most rounds a retry spends releasing a dead first attempt before giving up. */
+const EXTERNAL_REF_REPLAY_ROUNDS = 2;
+
+/**
+ * Answer a create whose external ref a session already holds: the original
+ * session, a retryable or fatal conflict, or `null` to create afresh (no
+ * holder, or a dead first attempt was released). `afterConflict` is set when
+ * this request just lost the ref's unique index to another attempt.
+ */
+async function replayExternalRef(
+  env: Env,
+  ctx: RequestContext,
+  ref: SessionExternalRef,
+  ownerUserId: string,
+  afterConflict: boolean
+): Promise<Response | null> {
+  const store = new SessionIndexStore(ctx.db);
+  for (let round = 0; round < EXTERNAL_REF_REPLAY_ROUNDS; round++) {
+    const holder = await store.findByExternalRef(ref.service, ref.ref);
+    if (!holder) return afterConflict ? externalRefInProgress() : null;
+    // Never reveal anything about another person's session.
+    if (holder.userId !== ownerUserId) {
+      return json({ error: "Conflict", code: "external_ref_conflict" }, 409);
+    }
+    if (holder.fingerprint !== ref.fingerprint) {
+      return json({ error: "Conflict", code: "external_ref_payload_mismatch" }, 409);
+    }
+    const replayed = (): Response => {
+      const result: CreateSessionResponse = {
+        sessionId: holder.id,
+        status: holder.status,
+        replayed: true,
+      };
+      return json(result, 200);
+    };
+    if (holder.statusRevision > 0 || (holder.status !== "created" && holder.status !== "failed")) {
+      return replayed();
+    }
+
+    let release = holder.status === "failed";
+    if (holder.status === "created") {
+      const runtime = await probeSessionRuntime(env, ctx, holder.id);
+      if (runtime === "exists") return replayed();
+      if (runtime === "unknown") {
+        return withRetryAfter(
+          json({ error: "Service Unavailable", code: "external_ref_indeterminate" }, 503)
+        );
+      }
+      if (Date.now() - holder.createdAt < EXTERNAL_REF_PENDING_LEASE_MS) {
+        return externalRefInProgress();
+      }
+      release = true;
+    }
+    if (release && (await store.releaseExternalRef(holder.id))) {
+      logger.info("External ref released from a dead first attempt", {
+        event: "external_ref.released",
+        session_id: holder.id,
+        service: ref.service,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return null;
+    }
+  }
+  return externalRefInProgress();
+}
+
 async function extractSessionActorProfileClaims(
   request: Request,
   ctx: RequestContext
@@ -100,6 +185,31 @@ export async function handleCreateSession(
   const enforcement = applyIdentityEnforcement(ctx, "session-create", parsed.raw);
   if (enforcement.rejection) return enforcement.rejection;
   const enforced = enforcement.enforced;
+
+  // Admission finalized the canonical subject before RBAC. The handler may
+  // consume only that exact subject; it must never perform late identity
+  // selection from body profile fields.
+  const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
+  if (resolution instanceof Response) return resolution;
+  const resolvedUserId = resolution;
+
+  let ref: SessionExternalRef | null = null;
+  if (body.externalRef !== undefined) {
+    if (ctx.principal?.kind !== "service" || ctx.principal.service === "web") {
+      return json(
+        { error: "externalRef is only accepted from a service", code: "external_ref_not_allowed" },
+        400
+      );
+    }
+    ref = {
+      service: ctx.principal.service,
+      ref: body.externalRef,
+      fingerprint: await externalRefFingerprint(body),
+    };
+    // A retry answers from the first attempt before any target or SCM work.
+    const replay = await replayExternalRef(env, ctx, ref, resolvedUserId, false);
+    if (replay) return replay;
+  }
 
   let repositoryContext: RepositoryPair | null;
   try {
@@ -179,13 +289,7 @@ export async function handleCreateSession(
   const participantUserId = enforced.participantUserId;
   const spawnSource = enforced.spawnSource ?? undefined;
 
-  // Admission finalized the canonical subject before RBAC. The handler may
-  // consume only that exact subject; it must never perform late identity
-  // selection from body profile fields.
   const userStore = new UserStore(ctx.db);
-  const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
-  if (resolution instanceof Response) return resolution;
-  const resolvedUserId = resolution;
   // The trigger actor is the admitted user (web login, Teams sender, GitHub
   // sender); only bots name a trigger kind or a work-item author.
   const trigger = await resolveSessionTrigger(ctx, userStore, body);
@@ -371,11 +475,18 @@ export async function handleCreateSession(
     workItemAuthorUserId: trigger.workItemAuthorUserId,
     authHomeId: authHome.kind === "served" ? authHome.home.id : null,
     authHomeSelection: authHome.kind === "served" ? authHome.resolution.kind : null,
+    externalRef: ref,
   };
 
   try {
     await initializeSession(env, input, ctx);
   } catch (e) {
+    if (e instanceof SessionExternalRefTakenError && ref) {
+      // A concurrent attempt with the same ref won the unique index.
+      return (
+        (await replayExternalRef(env, ctx, ref, resolvedUserId, true)) ?? externalRefInProgress()
+      );
+    }
     logger.error("Failed to initialize session", {
       error: e instanceof Error ? e.message : String(e),
       session_id: sessionId,
@@ -401,6 +512,7 @@ export async function handleCreateSession(
   const result: CreateSessionResponse = {
     sessionId,
     status: "created",
+    ...(ref ? { replayed: false } : {}),
   };
 
   return json(result, 201);

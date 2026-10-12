@@ -17,6 +17,11 @@ export const enqueuePromptRequestSchema = z
     reasoningEffort: z.string().optional(),
     attachments: sessionAttachmentReferencesSchema.optional(),
     callbackContext: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * Idempotency key, already namespaced by the router to the calling
+     * service; shares the session's `client_request_id` index with web prompts.
+     */
+    clientRequestId: z.string().min(1).optional(),
     // Authoritative SCM snapshot resolved by the router at prompt time.
     // Explicit null fields clear stored attribution; absence leaves it unchanged.
     scmEnrichment: z

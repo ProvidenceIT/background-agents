@@ -761,7 +761,23 @@ export class SessionMessageQueue {
 
   async enqueuePromptFromApi(
     data: EnqueuePromptRequest
-  ): Promise<{ messageId: string; status: "queued" }> {
+  ): Promise<{ messageId: string; status: "queued"; replayed?: boolean }> {
+    // A retry returns the first attempt's message before any check that the
+    // first attempt itself may have changed (queue depth, budget, quota).
+    if (data.clientRequestId) {
+      const author = this.participantService.getByUserId(data.authorId);
+      if (author) {
+        const fingerprint = await fingerprintWebPrompt(author.id, data);
+        const replayed = this.replayedPrompt(
+          data.clientRequestId,
+          author.id,
+          fingerprint,
+          data.source,
+          this.messageRepository.getPendingOrProcessingCount()
+        );
+        if (replayed) return { messageId: replayed.messageId, status: "queued", replayed: true };
+      }
+    }
     this.assertPromptableSession();
     this.assertSandboxAcceptingPrompts();
     this.assertBudgetAvailable();
@@ -806,11 +822,57 @@ export class SessionMessageQueue {
       reasoningEffort: data.reasoningEffort,
       attachments: data.attachments,
       callbackContext: data.callbackContext,
+      clientRequestId: data.clientRequestId,
     });
 
     await this.processMessageQueue();
 
-    return { messageId: enqueued.messageId, status: "queued" };
+    return {
+      messageId: enqueued.messageId,
+      status: "queued",
+      ...(data.clientRequestId ? { replayed: enqueued.replayed === true } : {}),
+    };
+  }
+
+  /**
+   * The message an earlier request with this `clientRequestId` enqueued, or
+   * null when there is none. A different author or body is a conflict.
+   * Synchronous, so callers keep it in the same turn as their insert.
+   */
+  private replayedPrompt(
+    clientRequestId: string,
+    participantId: string,
+    requestFingerprint: string,
+    source: string,
+    queueDepth: number
+  ): EnqueuedPrompt | null {
+    const existing = this.messageRepository.getMessageByClientRequestId(clientRequestId);
+    if (!existing) return null;
+    if (
+      existing.author_id !== participantId ||
+      existing.request_fingerprint !== requestFingerprint
+    ) {
+      this.log.warn("prompt.enqueue", {
+        event: "prompt.enqueue",
+        outcome: "conflict",
+        source,
+        queue_depth_before: queueDepth,
+        queue_depth_after: queueDepth,
+      });
+      throw new PromptRequestConflictError();
+    }
+    this.log.info("prompt.enqueue", {
+      event: "prompt.enqueue",
+      outcome: "deduplicated",
+      source,
+      queue_depth_before: queueDepth,
+      queue_depth_after: queueDepth,
+    });
+    return {
+      messageId: existing.id,
+      position: this.messageRepository.getUnfinishedMessagePosition(existing.id),
+      replayed: true,
+    };
   }
 
   private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
@@ -827,34 +889,15 @@ export class SessionMessageQueue {
     this.assertPromptableSession();
     this.assertSandboxAcceptingPrompts();
     const queueDepthBefore = this.messageRepository.getPendingOrProcessingCount();
-    if (data.clientRequestId) {
-      const existing = this.messageRepository.getMessageByClientRequestId(data.clientRequestId);
-      if (existing) {
-        if (
-          existing.author_id !== data.participant.id ||
-          existing.request_fingerprint !== requestFingerprint
-        ) {
-          this.log.warn("prompt.enqueue", {
-            event: "prompt.enqueue",
-            outcome: "conflict",
-            source: data.source,
-            queue_depth_before: queueDepthBefore,
-            queue_depth_after: queueDepthBefore,
-          });
-          throw new PromptRequestConflictError();
-        }
-        this.log.info("prompt.enqueue", {
-          event: "prompt.enqueue",
-          outcome: "deduplicated",
-          source: data.source,
-          queue_depth_before: queueDepthBefore,
-          queue_depth_after: queueDepthBefore,
-        });
-        return {
-          messageId: existing.id,
-          position: this.messageRepository.getUnfinishedMessagePosition(existing.id),
-        };
-      }
+    if (data.clientRequestId && requestFingerprint) {
+      const replayed = this.replayedPrompt(
+        data.clientRequestId,
+        data.participant.id,
+        requestFingerprint,
+        data.source,
+        queueDepthBefore
+      );
+      if (replayed) return replayed;
     }
     this.assertBudgetAvailable();
     this.assertQueueCapacity(queueDepthBefore);

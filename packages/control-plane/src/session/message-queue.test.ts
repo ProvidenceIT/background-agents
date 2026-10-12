@@ -2584,6 +2584,70 @@ describe("SessionMessageQueue", () => {
       });
     });
 
+    it("stores a service's clientRequestId and reports a first enqueue as not replayed", async () => {
+      const h = buildQueue();
+
+      const result = await h.queue.enqueuePromptFromApi({
+        content: "Fix bug",
+        authorId: "microsoft:oid-1",
+        source: "web",
+        clientRequestId: "svc:motion:wi-1:p1",
+      });
+
+      expect(result).toMatchObject({ status: "queued", replayed: false });
+      expect(h.repository.createMessageWithAttachments).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clientRequestId: "svc:motion:wi-1:p1",
+          requestFingerprint: expect.any(String),
+        }),
+        []
+      );
+    });
+
+    it("replays a retried clientRequestId before queue, budget or quota checks", async () => {
+      const h = buildQueue();
+      h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
+      h.repository.getPendingOrProcessingCount.mockReturnValue(MAX_UNFINISHED_PROMPTS);
+      h.repository.getMessageByClientRequestId.mockReturnValue(
+        createMessage({
+          id: "msg-existing",
+          client_request_id: "svc:motion:wi-1:p1",
+          request_fingerprint: await fingerprintWebPrompt("part-1", { content: "Fix bug" }),
+        })
+      );
+
+      const result = await h.queue.enqueuePromptFromApi({
+        content: "Fix bug",
+        authorId: "microsoft:oid-1",
+        source: "web",
+        clientRequestId: "svc:motion:wi-1:p1",
+      });
+
+      expect(result).toEqual({ messageId: "msg-existing", status: "queued", replayed: true });
+      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    });
+
+    it("refuses a clientRequestId reused with a different prompt", async () => {
+      const h = buildQueue();
+      h.repository.getMessageByClientRequestId.mockReturnValue(
+        createMessage({
+          id: "msg-existing",
+          client_request_id: "svc:motion:wi-1:p1",
+          request_fingerprint: await fingerprintWebPrompt("part-1", { content: "Fix bug" }),
+        })
+      );
+
+      await expect(
+        h.queue.enqueuePromptFromApi({
+          content: "Something else",
+          authorId: "microsoft:oid-1",
+          source: "web",
+          clientRequestId: "svc:motion:wi-1:p1",
+        })
+      ).rejects.toMatchObject({ name: "PromptRequestConflictError" });
+      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    });
+
     it("leaves stored enrichment unchanged when no snapshot is provided", async () => {
       const h = buildQueue();
 

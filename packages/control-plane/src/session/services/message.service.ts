@@ -115,7 +115,9 @@ export class MessageService {
     this.eventStream = new SessionEventStream(deps.eventRepository);
   }
 
-  enqueuePrompt(request: EnqueuePromptRequest): Promise<{ messageId: string; status: "queued" }> {
+  enqueuePrompt(
+    request: EnqueuePromptRequest
+  ): Promise<{ messageId: string; status: "queued"; replayed?: boolean }> {
     return this.deps.messageQueue.enqueuePromptFromApi(request);
   }
 

@@ -22,6 +22,8 @@ import {
 } from "@open-inspect/shared/types/sessions";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
+import type { SessionListFilters } from "../db/session-list-predicates";
+import { sessionExternalRefSchema } from "@open-inspect/shared/types/session-api";
 import {
   error,
   GITHUB_USER_OR_SERVICE_ROUTE,
@@ -143,6 +145,25 @@ export async function handleListSessions(
     scope,
   } = parsedQuery.data;
   const viewerUserId = admittedViewerUserId(ctx);
+  // A service looks up the session it created under its own idempotency key;
+  // the codec does not know the parameter, so the web proxy never forwards it.
+  const rawExternalRef = url.searchParams.get("externalRef");
+  let externalRef: SessionListFilters["externalRef"];
+  if (rawExternalRef !== null) {
+    if (
+      ctx.principal?.kind !== "service" ||
+      ctx.principal.service === "web" ||
+      !viewerUserId ||
+      !sessionExternalRefSchema.safeParse(rawExternalRef).success
+    ) {
+      return error("Invalid externalRef", 400);
+    }
+    externalRef = {
+      service: ctx.principal.service,
+      ref: rawExternalRef,
+      ownerUserId: viewerUserId,
+    };
+  }
   const legacyStarted =
     ownerFilter === undefined &&
     createdBy.length === 1 &&
@@ -190,6 +211,7 @@ export async function handleListSessions(
       ...(repoOwner && repoName ? { repository: { repoOwner, repoName } } : {}),
       ...(environmentId ? { environmentId } : {}),
       ...(origin ? { spawnSource: origin } : {}),
+      ...(externalRef ? { externalRef } : {}),
       limit,
       offset,
       ...(viewerUserId ? { viewerUserId } : {}),

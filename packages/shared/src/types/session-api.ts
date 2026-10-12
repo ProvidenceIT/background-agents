@@ -28,6 +28,14 @@ export type UserPreferences = z.infer<typeof userPreferencesSchema>;
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 
+/**
+ * A service's idempotency key: `externalRef` on POST /sessions and
+ * `clientRequestId` on POST /sessions/:id/prompt. 1-200 characters, starting
+ * with a letter or digit, then letters, digits and `._:/@-`.
+ */
+export const SESSION_EXTERNAL_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/;
+export const sessionExternalRefSchema = z.string().regex(SESSION_EXTERNAL_REF_PATTERN);
+
 export const MAX_CHILD_FOLLOW_UP_PROMPT_CHARS = MAX_WEB_PROMPT_CHARS;
 
 export const slackCallbackContextSchema = z.object({
@@ -178,6 +186,12 @@ export const sendPromptRequestSchema = z
      * the subscription-home kind gates read it. Refused from a person.
      */
     triggerKind: triggerKindSchema.optional(),
+    /**
+     * A service's retry key for this prompt, unique per session and service:
+     * a retry with the same key and body returns the original message. Refused
+     * from a person and from the web service.
+     */
+    clientRequestId: sessionExternalRefSchema.optional(),
   })
   .refine(
     (prompt) =>
@@ -324,6 +338,12 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
      * resolved to a workspace user. Never the actor: that is `sender.id`.
      */
     workItemAuthorScmUserId: z.string().trim().min(1).max(64).optional(),
+    /**
+     * A service's idempotency key for this create, unique per calling service:
+     * a retry with the same key and body returns the original session. The
+     * public request schema strips it, and the route rejects it from a person.
+     */
+    externalRef: sessionExternalRefSchema.optional(),
   })
   .refine(hasMatchingRepositoryIdentifiers, {
     message: "repoOwner and repoName must be provided together",
@@ -352,6 +372,8 @@ export type CreateMediaArtifactRequest = z.infer<typeof createMediaArtifactReque
 export const createSessionResponseSchema = z.object({
   sessionId: z.string().min(1),
   status: sessionStatusSchema,
+  /** Present when the request carried an `externalRef`: true when it returned an earlier session. */
+  replayed: z.boolean().optional(),
 });
 
 export type CreateSessionResponse = z.infer<typeof createSessionResponseSchema>;
@@ -359,6 +381,8 @@ export type CreateSessionResponse = z.infer<typeof createSessionResponseSchema>;
 export const sendPromptResponseSchema = z.object({
   messageId: z.string().min(1),
   status: z.literal("queued").optional(),
+  /** Present when the request carried a `clientRequestId`: true when it returned an earlier message. */
+  replayed: z.boolean().optional(),
 });
 
 export type SendPromptResponse = z.infer<typeof sendPromptResponseSchema>;

@@ -20,6 +20,7 @@ import type { SessionSkillManifestInput } from "./skill-resolution";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
+import type { SessionExternalRef } from "./external-ref";
 
 const logger = createLogger("session-init");
 
@@ -102,6 +103,8 @@ export interface SessionInitInput {
   /** The auth home the resolver bound the session to. */
   authHomeId?: string | null;
   authHomeSelection?: AuthHomeSelection | null;
+  /** The calling service's idempotency key for this create, stored on the session row. */
+  externalRef?: SessionExternalRef | null;
 }
 
 /**
@@ -224,6 +227,7 @@ export async function initializeSession(
     workItemAuthorUserId: input.workItemAuthorUserId ?? null,
     authHomeId: input.authHomeId ?? null,
     authHomeSelection: input.authHomeSelection ?? null,
+    externalRef: input.externalRef ?? null,
   });
 
   // Step 2: runtime init
