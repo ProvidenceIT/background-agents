@@ -45,6 +45,9 @@ import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-
 import { parseSessionRow, toSessionFields as toEntry, type SessionRow } from "./session-row";
 import { SessionAuditStore } from "./session-audit";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { isUniqueConstraintError } from "./errors";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
+import { SessionExternalRefTakenError, type SessionExternalRef } from "../session/external-ref";
 
 const CHILD_ADMISSION_LEASE_TTL_MS = 5 * 60 * 1000;
 
@@ -140,6 +143,18 @@ export interface CreateSessionCommand extends SessionEntry {
   /** Copy access grants with the parent row in the creation batch. */
   collaboratorSourceSessionId?: string;
   privateCreationActor?: { requestId: string; actorUserId: string };
+  /** The calling service's idempotency key; the row's unique index arbitrates retries. */
+  externalRef?: SessionExternalRef | null;
+}
+
+/** The session row holding one service's external ref, as a retry needs it. */
+export interface SessionExternalRefHolder {
+  id: string;
+  userId: string | null;
+  status: SessionStatus;
+  statusRevision: number;
+  createdAt: number;
+  fingerprint: string | null;
 }
 
 interface SessionModelProviderAuthRow {
@@ -245,8 +260,8 @@ export class SessionIndexStore {
 
     const sessionStmt = this.db
       .prepare(
-        `INSERT INTO sessions (id, title, repo_owner, repo_name, harness, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at, owner_team_id, visibility, trigger_actor_user_id, trigger_kind, work_item_author_user_id, auth_home_id, auth_home_selection)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sessions (id, title, repo_owner, repo_name, harness, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at, owner_team_id, visibility, trigger_actor_user_id, trigger_kind, work_item_author_user_id, auth_home_id, auth_home_selection, external_ref_service, external_ref, external_ref_fingerprint)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -277,7 +292,10 @@ export class SessionIndexStore {
         session.triggerKind ?? null,
         session.workItemAuthorUserId ?? null,
         session.authHomeId ?? null,
-        session.authHomeSelection ?? null
+        session.authHomeSelection ?? null,
+        session.externalRef?.service ?? null,
+        session.externalRef?.ref ?? null,
+        session.externalRef?.fingerprint ?? null
       );
 
     const repositoryStmts = (session.repositories ?? []).map((repo, position) =>
@@ -325,7 +343,7 @@ export class SessionIndexStore {
           session.createdAt
         )
     );
-    const results = await this.db.batch([
+    const statements = [
       sessionStmt,
       ...repositoryStmts,
       ...manifestStmts,
@@ -377,7 +395,24 @@ export class SessionIndexStore {
             }),
           ]
         : []),
-    ]);
+    ];
+    let results;
+    try {
+      results = await this.db.batch(statements);
+    } catch (cause) {
+      // The batch is atomic, so a losing request wrote nothing. Re-reading the
+      // holder tells the ref's index apart from the batch's other constraints.
+      if (session.externalRef && isUniqueConstraintError(cause)) {
+        const holder = await this.findByExternalRef(
+          session.externalRef.service,
+          session.externalRef.ref
+        );
+        if (holder && holder.id !== session.id) {
+          throw new SessionExternalRefTakenError(holder.id);
+        }
+      }
+      throw cause;
+    }
 
     // Session ids are always freshly generated, so a skipped insert is a bug;
     // initialize.ts relies on D1 failures being caught before sandbox spawn.
@@ -751,6 +786,72 @@ export class SessionIndexStore {
       .bind(title, updatedAt, id)
       .run();
 
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /** The session holding `service`'s external `ref`, if any. */
+  async findByExternalRef(
+    service: ServiceName,
+    ref: string
+  ): Promise<SessionExternalRefHolder | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT id, user_id, status, status_revision, created_at, external_ref_fingerprint
+         FROM sessions WHERE external_ref_service = ? AND external_ref = ?`
+      )
+      .bind(service, ref)
+      .first<{
+        id: string;
+        user_id: string | null;
+        status: SessionStatus;
+        status_revision: number;
+        created_at: number;
+        external_ref_fingerprint: string | null;
+      }>();
+    return row
+      ? {
+          id: row.id,
+          userId: row.user_id,
+          status: row.status,
+          statusRevision: row.status_revision,
+          createdAt: row.created_at,
+          fingerprint: row.external_ref_fingerprint,
+        }
+      : null;
+  }
+
+  /**
+   * Free the external ref of a first attempt that never reached its runtime
+   * (`created`, `failed` or sweep-`archived` at status revision 0). A
+   * `created` row becomes `failed`; the others keep their status. Never
+   * touches a session the runtime has claimed. Returns whether it did.
+   */
+  async releaseExternalRef(id: string, updatedAt = Date.now()): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE sessions
+         SET status = CASE status WHEN 'created' THEN 'failed' ELSE status END, updated_at = ?,
+           external_ref_service = NULL, external_ref = NULL, external_ref_fingerprint = NULL
+         WHERE id = ? AND external_ref IS NOT NULL AND status_revision = 0
+           AND status IN ('created', 'failed', 'archived')`
+      )
+      .bind(updatedAt, id)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /**
+   * Put back to `created` a row marked `failed` whose runtime init did commit
+   * (its response was lost). Only an unclaimed row moves. Returns whether it did.
+   */
+  async restoreInitializedSession(id: string, updatedAt = Date.now()): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE sessions SET status = 'created', updated_at = ?
+         WHERE id = ? AND status = 'failed' AND status_revision = 0`
+      )
+      .bind(updatedAt, id)
+      .run();
     return (result.meta?.changes ?? 0) > 0;
   }
 

@@ -6,6 +6,8 @@ import {
   linearCompletionCallbackSchema,
   linearStartCallbackSchema,
   linearToolCallCallbackSchema,
+  sendPromptRequestSchema,
+  sessionExternalRefSchema,
 } from "./session-api";
 
 const legacyContext = {
@@ -102,5 +104,39 @@ describe("session creation trigger fields", () => {
     const publicBody = createSessionRequestSchema.parse(body);
     expect(publicBody).not.toHaveProperty("triggerKind");
     expect(publicBody).not.toHaveProperty("workItemAuthorScmUserId");
+  });
+});
+
+describe("service idempotency keys", () => {
+  it.each(["wi-123:1", "a", "Providence/work-item@42.retry_1", "x".repeat(200)])(
+    "accepts %s",
+    (ref) => {
+      expect(sessionExternalRefSchema.safeParse(ref).success).toBe(true);
+    }
+  );
+
+  it.each(["", "x".repeat(201), "has space", "-leading", ".leading", "wi\u00e9", "a\nb", "a#b"])(
+    "rejects %j",
+    (ref) => {
+      expect(sessionExternalRefSchema.safeParse(ref).success).toBe(false);
+    }
+  );
+
+  it("carries externalRef on the service create input and strips it from the public request", () => {
+    const body = { repoOwner: "acme", repoName: "widgets", externalRef: "wi-123:1" };
+    expect(createSessionInputSchema.parse(body)).toMatchObject({ externalRef: "wi-123:1" });
+    expect(createSessionInputSchema.safeParse({ ...body, externalRef: "bad ref" }).success).toBe(
+      false
+    );
+    expect(createSessionRequestSchema.parse(body)).not.toHaveProperty("externalRef");
+  });
+
+  it("validates a prompt's clientRequestId with the same rule", () => {
+    expect(
+      sendPromptRequestSchema.parse({ content: "go", clientRequestId: "wi-123:prompt-1" })
+    ).toMatchObject({ clientRequestId: "wi-123:prompt-1" });
+    expect(
+      sendPromptRequestSchema.safeParse({ content: "go", clientRequestId: "bad key" }).success
+    ).toBe(false);
   });
 });

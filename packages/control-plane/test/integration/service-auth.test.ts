@@ -20,6 +20,7 @@ const SERVICE_SECRET: Record<ServiceName, string> = {
   "github-bot": "test-service-secret-github-bot",
   "linear-bot": "test-service-secret-linear-bot",
   "teams-bot": "test-service-secret-teams-bot",
+  motion: "test-service-secret-motion",
 };
 
 /** Entra object ids: the subject a Microsoft web sign-in stores and a Teams bot asserts. */

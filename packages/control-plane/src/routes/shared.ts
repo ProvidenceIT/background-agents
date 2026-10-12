@@ -9,6 +9,7 @@ import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
+import type { OptInServiceName } from "../authorization/service-permissions";
 import type { TeamAdmissionNeed, TeamAdmissionRequirement } from "../routing/team-admission";
 import type { SessionAction } from "@open-inspect/shared";
 import {
@@ -58,12 +59,25 @@ export interface ActorlessServiceGrant {
   pathParams?: Readonly<Record<string, string>>;
 }
 
+/**
+ * How a route admits trusted services. `optInServices` names the opt-in services
+ * (`OPT_IN_SERVICES`) the route admits; it is the only way such a service is
+ * admitted, and it admits them even on an otherwise `deny` route.
+ */
 type ServiceAuthorization =
-  | { kind: "deny" }
+  | { kind: "deny"; optInServices?: readonly OptInServiceName[] }
   | {
       kind: "actor";
       actorlessGrants?: readonly ActorlessServiceGrant[];
+      optInServices?: readonly OptInServiceName[];
     };
+
+/** Spread only a set opt-in list, so routes without one keep their exact policy shape. */
+function optIn(optInServices: readonly OptInServiceName[] | undefined): {
+  optInServices?: readonly OptInServiceName[];
+} {
+  return optInServices ? { optInServices } : {};
+}
 
 /** Declarative authorization policy enforced by the router. */
 export type RouteAuthorization =
@@ -168,7 +182,11 @@ export function permissionRequirement(permission: PermissionId): RouteAuthorizat
 /** Require an active user with a global permission, optionally allowing service actors. */
 export function requirePermission(
   permission: PermissionId,
-  options?: { service?: "actor" | "deny"; actorlessGrants?: readonly ActorlessServiceGrant[] }
+  options?: {
+    service?: "actor" | "deny";
+    actorlessGrants?: readonly ActorlessServiceGrant[];
+    optInServices?: readonly OptInServiceName[];
+  }
 ): RouteAuthorization {
   return {
     kind: "active-user",
@@ -176,8 +194,12 @@ export function requirePermission(
     auditAllowed: AUDITED_ALLOWED_PERMISSIONS.has(permission),
     service:
       options?.service === "deny"
-        ? { kind: "deny" }
-        : { kind: "actor", actorlessGrants: options?.actorlessGrants },
+        ? { kind: "deny", ...optIn(options.optInServices) }
+        : {
+            kind: "actor",
+            actorlessGrants: options?.actorlessGrants,
+            ...optIn(options?.optInServices),
+          },
   };
 }
 
@@ -247,6 +269,7 @@ export function requireSession(
     sessionIdParam?: string;
     actorlessGrants?: readonly ActorlessServiceGrant[];
     enforceAlways?: boolean;
+    optInServices?: readonly OptInServiceName[];
   }
 ): Extract<RouteAuthorization, { kind: "active-user" }> {
   return {
@@ -258,8 +281,12 @@ export function requireSession(
       },
     ],
     service: options?.enforceAlways
-      ? { kind: "deny" }
-      : { kind: "actor", actorlessGrants: options?.actorlessGrants },
+      ? { kind: "deny", ...optIn(options.optInServices) }
+      : {
+          kind: "actor",
+          actorlessGrants: options?.actorlessGrants,
+          ...optIn(options?.optInServices),
+        },
     auditAllowed: action !== "read",
   };
 }

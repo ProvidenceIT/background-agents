@@ -1,6 +1,7 @@
 import { normalizeOptionalRepositoryPair } from "@open-inspect/shared/types/repositories";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { SessionListQuery } from "@open-inspect/shared/session-list-query";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import { LIKE_ESCAPE_CLAUSE, likeContains, likePrefix } from "./like-pattern";
 import { visibleSessionsPredicate, type SessionReadScope } from "./session-visibility";
@@ -22,6 +23,8 @@ export interface SessionListFilters {
   environmentId?: string;
   /** Exact persisted `spawn_source`; see `SessionListQuery.origin`. */
   spawnSource?: SpawnSource;
+  /** The one session a service created for `ownerUserId` under its external ref. */
+  externalRef?: { service: ServiceName; ref: string; ownerUserId: string };
   teamIds?: readonly string[];
   ownerFilter?: SessionListQuery["ownerFilter"];
   visibility?: SessionListQuery["visibility"];
@@ -64,6 +67,7 @@ export function buildSessionListPredicates(filters: SessionListFilters): Session
     repository,
     environmentId,
     spawnSource,
+    externalRef,
     teamIds,
     ownerFilter,
     visibility,
@@ -128,6 +132,11 @@ export function buildSessionListPredicates(filters: SessionListFilters): Session
   if (spawnSource) {
     conditions.push("spawn_source = ?");
     params.push(spawnSource);
+  }
+
+  if (externalRef) {
+    conditions.push("external_ref_service = ? AND external_ref = ? AND user_id = ?");
+    params.push(externalRef.service, externalRef.ref, externalRef.ownerUserId);
   }
 
   const normalizedRepository = repository ? normalizeOptionalRepositoryPair(repository) : null;

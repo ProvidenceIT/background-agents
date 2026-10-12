@@ -25,4 +25,6 @@ export interface EnqueuePromptCoreData {
 export interface EnqueuedPrompt {
   messageId: string;
   position: number | null;
+  /** Set when an earlier request with the same `clientRequestId` enqueued this message. */
+  replayed?: true;
 }

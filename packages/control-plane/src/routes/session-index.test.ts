@@ -807,3 +807,98 @@ describe("session discovery filters", () => {
     expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
   });
 });
+
+describe("motion session lookups", () => {
+  const MOTION_PRINCIPAL: Principal = {
+    kind: "service",
+    service: "motion",
+    actor: {
+      provider: "microsoft",
+      providerUserId: "4f1c2d3e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+      canonicalUserId: "user-1",
+      participantUserId: "microsoft:4f1c2d3e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+    },
+  };
+
+  function motionCtx(): RequestContext {
+    const ctx = createCtx(MOTION_PRINCIPAL);
+    ctx.authorization = {
+      userId: "user-1",
+      suspendedAt: null,
+      role: { id: "role_builtin_owner", key: "owner", name: "Owner" },
+      permissions: ["sessions.read"],
+    };
+    return ctx;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSessionIndexStore.list.mockResolvedValue({ sessions: [], hasMore: false });
+    mockSessionIndexStore.listInboxSnapshot.mockResolvedValue({
+      needs_attention: emptyInboxResult,
+      in_progress: emptyInboxResult,
+      finished: emptyInboxResult,
+    });
+  });
+
+  it("scopes an externalRef lookup to the calling service and its actor", async () => {
+    const response = await handleListSessions(
+      new Request("https://test.local/sessions?externalRef=wi-123%3A1"),
+      createEnv(),
+      {},
+      motionCtx()
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        externalRef: { service: "motion", ref: "wi-123:1", ownerUserId: "user-1" },
+      })
+    );
+  });
+
+  it.each([
+    ["a person", USER_PRINCIPAL, "?externalRef=wi-1"],
+    [
+      "the web service",
+      { kind: "service", service: "web", actor: null } as Principal,
+      "?externalRef=wi-1",
+    ],
+    [
+      "an actorless bot",
+      { kind: "service", service: "teams-bot", actor: null } as Principal,
+      "?externalRef=wi-1",
+    ],
+    ["an invalid ref", MOTION_PRINCIPAL, "?externalRef=bad%20ref"],
+  ])("rejects an externalRef lookup from %s", async (_name, principal, query) => {
+    const ctx = principal === MOTION_PRINCIPAL ? motionCtx() : createCtx(principal);
+    const response = await handleListSessions(
+      new Request(`https://test.local/sessions${query}`),
+      createEnv(),
+      {},
+      ctx
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid externalRef" });
+    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
+  });
+
+  it("reads the inbox for the actor a service acts for", async () => {
+    const response = await handleListSessionInbox(
+      new Request("https://test.local/sessions/inbox?mine=true"),
+      createEnv(),
+      {},
+      motionCtx()
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.listInboxSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        createdByUserIds: ["user-1"],
+        viewerUserId: "user-1",
+        readScope: expect.objectContaining({ kind: "user", userId: "user-1" }),
+      })
+    );
+  });
+});

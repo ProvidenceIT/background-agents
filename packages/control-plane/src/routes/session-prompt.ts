@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
@@ -6,7 +7,10 @@ import {
   sendPromptRequestSchema,
   type CallbackContext,
 } from "@open-inspect/shared/types/session-api";
-import { promptValidationError } from "@open-inspect/shared/types/prompts";
+import {
+  promptValidationError,
+  SERVICE_CLIENT_REQUEST_ID_PREFIX,
+} from "@open-inspect/shared/types/prompts";
 import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   sessionAttachmentReferencesSchema,
@@ -54,6 +58,15 @@ function validateAttachments(raw: unknown): SessionAttachmentReference[] | Respo
   return result.data;
 }
 
+/**
+ * The session-runtime idempotency key for a service's `clientRequestId`. The
+ * prefix keeps each service's keys apart from each other's and from the web
+ * client's own prompt keys, which may not use it.
+ */
+export function serviceClientRequestId(service: ServiceName, key: string): string {
+  return `${SERVICE_CLIENT_REQUEST_ID_PREFIX}${service}:${key}`;
+}
+
 export async function handleSessionPrompt(
   request: Request,
   env: Env,
@@ -83,6 +96,21 @@ export async function handleSessionPrompt(
     if (!BOT_TURN_TRIGGER_KINDS.includes(body.triggerKind)) {
       return error(`Trigger kind '${body.triggerKind}' is assigned by the control plane`, 400);
     }
+  }
+
+  // A service's retry key, namespaced so it is unique per session and service.
+  let clientRequestId: string | undefined;
+  if (body.clientRequestId !== undefined) {
+    if (ctx.principal?.kind !== "service" || ctx.principal.service === "web") {
+      return json(
+        {
+          error: "clientRequestId is only accepted from a service",
+          code: "client_request_id_not_allowed",
+        },
+        400
+      );
+    }
+    clientRequestId = serviceClientRequestId(ctx.principal.service, body.clientRequestId);
   }
 
   let callbackContext: CallbackContext | undefined;
@@ -160,6 +188,7 @@ export async function handleSessionPrompt(
     reasoningEffort: body.reasoningEffort,
     attachments,
     callbackContext,
+    clientRequestId,
     scmEnrichment: enrichment
       ? {
           userId: enrichment.scmUserId,
@@ -202,7 +231,7 @@ sessionPromptRoutes.post(
   "/sessions/:id/prompt",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requireSession("collaborate"),
+    authorization: requireSession("collaborate", { optInServices: ["motion"] }),
   }),
   (c) => dispatchSession(c, handleSessionPrompt)
 );

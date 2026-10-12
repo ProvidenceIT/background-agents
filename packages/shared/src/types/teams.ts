@@ -168,6 +168,7 @@ const teamInboxSessionSchema = z.object({
     "linear-bot",
     "slack-bot",
     "teams-bot",
+    "motion",
   ]),
   environmentId: z.string().nullable(),
   createdAt: z.number(),

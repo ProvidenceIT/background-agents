@@ -500,6 +500,76 @@ The control plane carries what a Microsoft Teams bot needs; the bot itself is a 
   tombstones the thread. On the Node host the bot is reached by `TEAMS_BOT_URL` (`SLACK_BOT_URL` and
   `LINEAR_BOT_URL` serve the other bots the same way); on Cloudflare the bots are service bindings.
 
+### Providence (`motion`)
+
+Providence starts and steers sessions for one signed-in person at a time. It is an opt-in service:
+its permission ceiling alone admits it nowhere.
+
+- **Service `motion`.** Its sig1 verification key is `SERVICE_AUTH_SECRET_MOTION`. It asserts the
+  `microsoft` actor namespace with the same existing-only rule as the Teams bot: only an object id a
+  web sign-in stored resolves, and an unknown one gets 403 `service_actor_not_enrolled` with no
+  user, identity or assignment written. Its ceiling is sessions (create, read, collaborate,
+  lifecycle) and repositories and environments (use). Sessions it starts carry
+  `spawnSource: "motion"`. It has no actorless grants and receives no callbacks.
+- **Five opt-in routes.** A route admits an opt-in service only when its policy names it in
+  `optInServices`; every other route answers 403 `service_capability_required` before the actor is
+  resolved, whatever the ceiling says. Motion is named on exactly `POST /sessions`, `GET /sessions`,
+  `GET /sessions/inbox`, `POST /sessions/:id/stop` and `POST /sessions/:id/prompt`, and each of them
+  requires an actor (403 `service_actor_required` without one). The inbox stays closed to every
+  other bot. Lists and the inbox read as the acting person, under the same visibility rules as the
+  web.
+- **Only sessions it created.** On `stop` and `prompt` motion reaches a session only when it created
+  that session (`spawn_source = 'motion'`) for the acting person (the session's owner). Any other
+  session, including one the person can see or one motion created for someone else, answers 404
+  `Session not found`, exactly like a missing one. Other services keep their behaviour: the Teams
+  bot may still stop any session its actor can see.
+- **Idempotent create (`externalRef`).** `POST /sessions` takes an optional `externalRef` from a
+  service (400 `external_ref_not_allowed` from a person or the web): 1-200 characters, a letter or
+  digit first, then letters, digits and `._:/@-`. It is unique per calling service. A retry with the
+  same ref, actor and body returns the original session with 200 and `replayed: true`; a first
+  create returns 201 with `replayed: false`. The same ref with another actor is 409
+  `external_ref_conflict` (nothing about the other session is revealed), with another body 409
+  `external_ref_payload_mismatch`. A first attempt the runtime never claimed (still `created`,
+  marked `failed`, or archived by the abandoned-draft sweep) is checked against the runtime first:
+  if its runtime exists the retry replays it (a `failed` row whose init did commit is put back to
+  `created`); if the runtime cannot be asked the answer is 503 `external_ref_indeterminate`; a
+  `created` attempt without a runtime is 409 `external_ref_in_progress` until
+  `EXTERNAL_REF_PENDING_LEASE_MS` has passed, both with `Retry-After`. Otherwise the dead attempt
+  releases its ref and the retry creates afresh, whatever body it sends, so a corrected create can
+  reuse the ref. Deleting the session frees its ref; a session the runtime archived still replays
+  (`status: "archived"`). `GET /sessions?externalRef=<ref>` returns only the session the calling
+  service created for the acting person under that ref (zero or one).
+- **Idempotent prompt (`clientRequestId`).** `POST /sessions/:id/prompt` takes an optional
+  `clientRequestId` from a service (400 `client_request_id_not_allowed` from a person or the web),
+  with the `externalRef` character rules. It is unique per session and service, and shares the
+  session's prompt-dedup index with the web client's own prompt ids under a `svc:<service>:` prefix.
+  The prefix is reserved: a WebSocket prompt whose id starts with `svc:` is refused, so no web
+  client can take a service's key. A retry with the same key, author and prompt returns the original
+  `messageId` with 200 and `replayed: true`, even when the queue has since filled; a different
+  prompt under the same key is 409 `PROMPT_REQUEST_CONFLICT`.
+- **Stop.** `POST /sessions/:id/stop` cancels only the running turn (queued prompts still run) and
+  answers 200 `{status: "stopping"}` even when nothing runs, so it is safe to retry.
+
+#### Providence client contract
+
+- Send `X-OpenInspect-Actor: microsoft:<objectId>` on every call, and sign every attempt afresh with
+  sig1 (`X-OpenInspect-Service: motion`): the timestamp must be within `TOKEN_VALIDITY_MS` of the
+  control plane's clock, and the signature covers the method, path, query string, body and actor.
+  Use a fresh nonce per attempt. Nonce reuse is only logged today, not refused, so a re-sent signed
+  request inside that window is accepted again; the idempotency keys below, not the signature, are
+  what make a resend safe. A retry must send the same create or prompt payload, because the key is
+  bound to its fingerprint. The golden vectors are in
+  `packages/shared/test-fixtures/service-auth-vectors.json`.
+- Give every create an `externalRef` and every prompt a `clientRequestId` derived from the work
+  item, so a retry after a timeout cannot start a second session or a second turn.
+- Retry, honouring `Retry-After`, on 409 `external_ref_in_progress`, 503
+  `external_ref_indeterminate`, other 5xx and network errors. Treat 409 `external_ref_conflict`, 409
+  `external_ref_payload_mismatch` and 409 `PROMPT_REQUEST_CONFLICT` as client bugs, never retry
+  them. Treat 403 `service_actor_not_enrolled` as "sign in to Open-Inspect once on the web".
+- A create response without a `replayed` field comes from a control plane too old to honour the ref.
+  Create, list, stop and prompt need `SCM_PROVIDER=github`; other providers answer 501 on them.
+  `GET /sessions/inbox` works under every provider.
+
 ### GitHub Routing
 
 GitHub routes by numeric repository ID rather than channel bindings. Event automations run as their

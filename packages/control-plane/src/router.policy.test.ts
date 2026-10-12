@@ -418,6 +418,52 @@ describe("route policy table", () => {
     expect(new Set(granted)).toEqual(expected);
   });
 
+  it("opts motion into exactly its five routes", () => {
+    const expected = new Set([
+      routeFor("POST", "/sessions"),
+      routeFor("GET", "/sessions"),
+      routeFor("GET", "/sessions/inbox"),
+      routeFor("POST", "/sessions/session-1/stop"),
+      routeFor("POST", "/sessions/session-1/prompt"),
+    ]);
+    const optedIn = routes.filter(
+      (route) =>
+        (route.authorization.kind === "active-user" ||
+          route.authorization.kind === "active-global") &&
+        (route.authorization.service.optInServices ?? []).length > 0
+    );
+
+    expect(new Set(optedIn)).toEqual(expected);
+    for (const route of optedIn) {
+      if (route.authorization.kind !== "active-user") continue;
+      expect(route.authorization.service.optInServices).toEqual(["motion"]);
+    }
+  });
+
+  it("keeps every opt-in route within motion's permission ceiling", () => {
+    const sessionActionPermission = {
+      lifecycle: "sessions.lifecycle",
+      collaborate: "sessions.collaborate",
+    } as const;
+    for (const route of routes) {
+      if (route.authorization.kind !== "active-user") continue;
+      if (!route.authorization.service.optInServices?.includes("motion")) continue;
+      for (const requirement of route.authorization.allOf) {
+        const permission =
+          requirement.kind === "permission"
+            ? requirement.permission
+            : requirement.kind === "session" && requirement.action in sessionActionPermission
+              ? sessionActionPermission[requirement.action as keyof typeof sessionActionPermission]
+              : null;
+        expect(permission, `${route.method} ${route.path}`).not.toBeNull();
+        expect(
+          serviceAllowsPermission("motion", permission!),
+          `motion must allow ${permission} for ${route.method} ${route.path}`
+        ).toBe(true);
+      }
+    }
+  });
+
   it("keeps every actorless route grant within its service permission ceiling", () => {
     for (const route of routes) {
       if (route.authorization.kind !== "active-user") continue;
@@ -456,10 +502,13 @@ describe("route policy table", () => {
       allOf: [{ kind: "permission", permission: "sessions.read" }],
       service: { kind: "actor" },
     });
-    expect(routeFor("GET", "/sessions/inbox")?.authorization).toMatchObject({
-      kind: "active-user",
-      allOf: [{ kind: "permission", permission: "sessions.read" }],
-      service: { kind: "deny" },
+    expect(routeFor("GET", "/sessions/inbox")).toMatchObject({
+      authentication: { kind: "user-or-service" },
+      authorization: {
+        kind: "active-user",
+        allOf: [{ kind: "permission", permission: "sessions.read" }],
+        service: { kind: "deny", optInServices: ["motion"] },
+      },
     });
     expect(routeFor("GET", "/audit-events")).toMatchObject({
       authentication: { kind: "user" },
@@ -638,7 +687,6 @@ describe("route policy table", () => {
 
   it.each([
     ["GET", "/sessions/session-1"],
-    ["GET", "/sessions/inbox"],
     ["POST", "/sessions/batch-archive"],
     ["GET", "/sessions/session-1/sandbox-access"],
     ["PATCH", "/sessions/session-1/read-state"],

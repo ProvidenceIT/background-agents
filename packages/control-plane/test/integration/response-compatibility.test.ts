@@ -24,6 +24,7 @@ const SERVICE_SECRETS: Record<ServiceName, string> = {
   "slack-bot": "test-service-secret-slack-bot",
   "linear-bot": "test-service-secret-linear-bot",
   "teams-bot": "test-service-secret-teams-bot",
+  motion: "test-service-secret-motion",
 };
 
 function fetchWorker(request: Request, requestEnv: WorkerBindings = env): Promise<Response> {
