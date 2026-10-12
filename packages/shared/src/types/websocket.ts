@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { clientRequestIdSchema, webPromptPayloadSchema } from "./prompts";
+import { clientRequestIdSchema, webClientRequestIdSchema, webPromptPayloadSchema } from "./prompts";
 import { shutdownRecoveryActionSchema } from "./sandbox-shutdown";
 
 export { clientRequestIdSchema, MAX_UNFINISHED_PROMPTS, MAX_WEB_PROMPT_CHARS } from "./prompts";
@@ -30,7 +30,7 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
   }),
   webPromptPayloadSchema.extend({
     type: z.literal("prompt"),
-    clientRequestId: clientRequestIdSchema,
+    clientRequestId: webClientRequestIdSchema,
   }),
   z.object({
     type: z.literal("cancel_prompt"),

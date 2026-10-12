@@ -932,6 +932,17 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
+    it("refuses a prompt id in the service key namespace", () => {
+      const prompt = { type: "prompt", content: "Continue" };
+      expect(
+        clientMessageSchema.safeParse({ ...prompt, clientRequestId: "svc:motion:wi-123:p1" })
+          .success
+      ).toBe(false);
+      expect(
+        clientMessageSchema.safeParse({ ...prompt, clientRequestId: "my-svc:1" }).success
+      ).toBe(true);
+    });
+
     it("requires clientRequestId for prompt correlation", () => {
       expect(clientMessageSchema.safeParse({ type: "prompt", content: "Continue" }).success).toBe(
         false

@@ -7,6 +7,19 @@ export const BLANK_PROMPT_MESSAGE = "Prompt content must not be blank without at
 
 export const clientRequestIdSchema = z.string().min(1).max(128);
 
+/**
+ * Prefix the control plane puts on a service's prompt `clientRequestId`
+ * (`svc:<service>:<key>`). Both share one per-session dedup index, so a web
+ * client may not send an id with this prefix and take a service's key.
+ */
+export const SERVICE_CLIENT_REQUEST_ID_PREFIX = "svc:";
+
+/** A prompt id a web client chooses: any client request id outside the service prefix. */
+export const webClientRequestIdSchema = clientRequestIdSchema.refine(
+  (id) => !id.startsWith(SERVICE_CLIENT_REQUEST_ID_PREFIX),
+  { message: `clientRequestId must not start with "${SERVICE_CLIENT_REQUEST_ID_PREFIX}"` }
+);
+
 export function isBlankPrompt(prompt: {
   content: string;
   attachments?: readonly unknown[];

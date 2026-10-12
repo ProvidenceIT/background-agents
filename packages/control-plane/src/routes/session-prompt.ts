@@ -7,7 +7,10 @@ import {
   sendPromptRequestSchema,
   type CallbackContext,
 } from "@open-inspect/shared/types/session-api";
-import { promptValidationError } from "@open-inspect/shared/types/prompts";
+import {
+  promptValidationError,
+  SERVICE_CLIENT_REQUEST_ID_PREFIX,
+} from "@open-inspect/shared/types/prompts";
 import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   sessionAttachmentReferencesSchema,
@@ -58,10 +61,10 @@ function validateAttachments(raw: unknown): SessionAttachmentReference[] | Respo
 /**
  * The session-runtime idempotency key for a service's `clientRequestId`. The
  * prefix keeps each service's keys apart from each other's and from the web
- * client's own prompt keys.
+ * client's own prompt keys, which may not use it.
  */
 export function serviceClientRequestId(service: ServiceName, key: string): string {
-  return `svc:${service}:${key}`;
+  return `${SERVICE_CLIENT_REQUEST_ID_PREFIX}${service}:${key}`;
 }
 
 export async function handleSessionPrompt(
