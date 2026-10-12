@@ -106,7 +106,13 @@ describe("loadConfig", () => {
         'TEAMS_BOT_DEFAULT_REASONING_EFFORT "high" is not valid for "zai-coding-plan/glm-5.3" (this model does not support reasoning controls)',
       ])
     );
-    expect(() => loadConfig({ ...complete, TEAMS_BOT_DEFAULT_REASONING_EFFORT: "xhigh" })).toThrow(
+    expect(() =>
+      loadConfig({
+        ...complete,
+        TEAMS_BOT_DEFAULT_MODEL: "anthropic/claude-sonnet-4-6",
+        TEAMS_BOT_DEFAULT_REASONING_EFFORT: "xhigh",
+      })
+    ).toThrow(
       new ConfigError([
         'TEAMS_BOT_DEFAULT_REASONING_EFFORT "xhigh" is not valid for "anthropic/claude-sonnet-4-6" (supported values: low, medium, high, max)',
       ])

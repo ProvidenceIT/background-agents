@@ -28,6 +28,7 @@ describe("harness catalog", () => {
   it("runs Codex on OpenAI models from a subscription home only", () => {
     expect(HARNESS_CATALOG.codex).toEqual({
       label: "Codex",
+      defaultModel: "openai/gpt-6.1-sol",
       modelFamilies: ["openai"],
       providerAuth: { openai: ["auth_home"] },
       resume: "session_id",

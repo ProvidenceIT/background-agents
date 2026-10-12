@@ -295,7 +295,7 @@ describe("NewAutomationPage template pre-fill", () => {
 
     expect(screen.getByDisplayValue("Scan codebase for vulnerabilities")).toBeInTheDocument();
     // Falls back to the enabled default model rather than the unenabled suggestion.
-    expect(screen.getByText("claude sonnet 4.6")).toBeInTheDocument();
+    expect(screen.getByText("claude opus 5.5")).toBeInTheDocument();
     expect(screen.queryByText("claude opus 4.8")).not.toBeInTheDocument();
   });
 });
