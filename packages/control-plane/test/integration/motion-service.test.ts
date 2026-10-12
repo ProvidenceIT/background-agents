@@ -116,9 +116,9 @@ describe("motion service identity", () => {
   });
 
   it.each([
-    ["GET", "/sessions/SESSION"],
-    ["GET", "/sessions/SESSION/events"],
-    ["GET", "/sessions/SESSION/messages"],
+    ["GET", "/sessions/SESSION/participants"],
+    ["GET", "/sessions/SESSION/diff"],
+    ["GET", "/sessions/SESSION/sandbox-access"],
     ["POST", "/sessions/SESSION/archive"],
     ["POST", "/sessions/SESSION/ws-token"],
     ["DELETE", "/sessions/SESSION"],
@@ -309,6 +309,100 @@ describe("motion session operations", () => {
         await expect(response.json()).resolves.toEqual({ error: "Session not found" });
       }
     }
+  });
+
+  it("reads any session its actor may read, with no sandbox locations", async () => {
+    const otherId = await enrollMember(OTHER_OBJECT_ID, "Other Member");
+    // Created in the web for the person, then a workspace session of someone else.
+    const { sessionName: usersOwn } = await initSession({ userId: memberId });
+    const { sessionName: someoneElses } = await initSession({ userId: otherId });
+
+    for (const sessionId of [ownSessionId, usersOwn, someoneElses]) {
+      const snapshot = await signedFetch({ method: "GET", path: `/sessions/${sessionId}` });
+      expect(snapshot.status, sessionId).toBe(200);
+      const body = await snapshot.json<{
+        session: Record<string, unknown>;
+        artifacts: unknown[];
+      }>();
+      expect(body.session).toMatchObject({ id: sessionId });
+      expect(body.session).toHaveProperty("branchName");
+      expect(body.session).toHaveProperty("sandboxStatus");
+      for (const field of [
+        "codeServerUrl",
+        "vncUrl",
+        "ttydUrl",
+        "tunnelUrls",
+        "sandboxDashboardUrl",
+      ]) {
+        expect(body.session, field).not.toHaveProperty(field);
+      }
+
+      for (const path of ["events", "messages", "artifacts"]) {
+        const response = await signedFetch({
+          method: "GET",
+          path: `/sessions/${sessionId}/${path}`,
+        });
+        expect(response.status, `${sessionId}/${path}`).toBe(200);
+        expect(await response.json(), path).toHaveProperty(path);
+      }
+    }
+
+    // Reading never widens what it may change.
+    const stop = await signedFetch({ method: "POST", path: `/sessions/${usersOwn}/stop` });
+    expect(stop.status).toBe(404);
+  });
+
+  it("answers 404 for a session its actor may not read, and 403 for an unknown actor", async () => {
+    const otherId = await enrollMember(OTHER_OBJECT_ID, "Other Member");
+    const { sessionName } = await initSession({ userId: otherId });
+    await env.DB.prepare("UPDATE sessions SET visibility = 'private' WHERE id = ?")
+      .bind(sessionName)
+      .run();
+
+    for (const path of ["", "/events", "/messages", "/artifacts"]) {
+      const hidden = await signedFetch({ method: "GET", path: `/sessions/${sessionName}${path}` });
+      expect(hidden.status, path).toBe(404);
+      const missing = await signedFetch({ method: "GET", path: `/sessions/missing${path}` });
+      expect(missing.status, path).toBe(404);
+    }
+
+    const before = await identityTableCounts();
+    const unknown = await signedFetch({
+      method: "GET",
+      path: `/sessions/${ownSessionId}`,
+      objectId: UNKNOWN_OBJECT_ID,
+    });
+    expect(unknown.status).toBe(403);
+    await expect(unknown.json()).resolves.toEqual({
+      error: "Forbidden",
+      code: "service_actor_not_enrolled",
+    });
+    await expect(identityTableCounts()).resolves.toEqual(before);
+  });
+
+  it("shows its own externalRef on list rows and nobody else", async () => {
+    const created = await signedFetch({
+      method: "POST",
+      path: "/sessions",
+      body: createBody({ externalRef: "wi-300:1" }),
+    });
+    const { sessionId } = await created.json<{ sessionId: string }>();
+
+    const list = await signedFetch({ method: "GET", path: "/sessions" });
+    const { sessions } = await list.json<{ sessions: Array<Record<string, unknown>> }>();
+    expect(sessions.find((session) => session.id === sessionId)).toMatchObject({
+      externalRef: "wi-300:1",
+    });
+    expect(sessions.find((session) => session.id === ownSessionId)).not.toHaveProperty(
+      "externalRef"
+    );
+
+    const teamsBot = await signedFetch({ service: "teams-bot", method: "GET", path: "/sessions" });
+    const seenByTeams = await teamsBot.json<{ sessions: Array<Record<string, unknown>> }>();
+    expect(seenByTeams.sessions.find((session) => session.id === sessionId)).toBeDefined();
+    expect(seenByTeams.sessions.find((session) => session.id === sessionId)).not.toHaveProperty(
+      "externalRef"
+    );
   });
 
   it("keeps teams-bot stopping any session its actor can see", async () => {

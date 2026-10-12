@@ -147,6 +147,10 @@ export async function handleListSessions(
   const viewerUserId = admittedViewerUserId(ctx);
   // A service looks up the session it created under its own idempotency key;
   // the codec does not know the parameter, so the web proxy never forwards it.
+  const refService =
+    ctx.principal?.kind === "service" && ctx.principal.service !== "web"
+      ? ctx.principal.service
+      : undefined;
   const rawExternalRef = url.searchParams.get("externalRef");
   let externalRef: SessionListFilters["externalRef"];
   if (rawExternalRef !== null) {
@@ -212,6 +216,7 @@ export async function handleListSessions(
       ...(environmentId ? { environmentId } : {}),
       ...(origin ? { spawnSource: origin } : {}),
       ...(externalRef ? { externalRef } : {}),
+      ...(refService ? { externalRefsFor: refService } : {}),
       limit,
       offset,
       ...(viewerUserId ? { viewerUserId } : {}),
@@ -222,8 +227,10 @@ export async function handleListSessions(
     result.sessions.map((row) => row.id),
     { privateOnly: true }
   );
-  const sessions = result.sessions.map((row) => ({
+  // A service sees the ref it gave a session as `externalRef`; nobody sees another's.
+  const sessions = result.sessions.map(({ ownExternalRef, ...row }) => ({
     ...row,
+    ...(ownExternalRef ? { externalRef: ownExternalRef } : {}),
     capabilities: effectiveSessionCapabilities(
       viewer,
       {

@@ -190,6 +190,11 @@ export const sessionCapabilitiesSchema = z.object({
 export const sessionListSummarySchema = childSessionSummarySchema.extend({
   capabilities: sessionCapabilitiesSchema.optional(),
   readState: sessionReadStateSchema.optional(),
+  /**
+   * The `externalRef` the listing service gave this session at create. Present
+   * only on a service's own sessions; people and other services never see it.
+   */
+  externalRef: z.string().optional(),
 });
 export type SessionListSummary = z.infer<typeof sessionListSummarySchema>;
 

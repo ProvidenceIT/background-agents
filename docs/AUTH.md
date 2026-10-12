@@ -511,18 +511,25 @@ its permission ceiling alone admits it nowhere.
   user, identity or assignment written. Its ceiling is sessions (create, read, collaborate,
   lifecycle) and repositories and environments (use). Sessions it starts carry
   `spawnSource: "motion"`. It has no actorless grants and receives no callbacks.
-- **Five opt-in routes.** A route admits an opt-in service only when its policy names it in
+- **Nine opt-in routes.** A route admits an opt-in service only when its policy names it in
   `optInServices`; every other route answers 403 `service_capability_required` before the actor is
   resolved, whatever the ceiling says. Motion is named on exactly `POST /sessions`, `GET /sessions`,
-  `GET /sessions/inbox`, `POST /sessions/:id/stop` and `POST /sessions/:id/prompt`, and each of them
-  requires an actor (403 `service_actor_required` without one). The inbox stays closed to every
-  other bot. Lists and the inbox read as the acting person, under the same visibility rules as the
-  web.
-- **Only sessions it created.** On `stop` and `prompt` motion reaches a session only when it created
-  that session (`spawn_source = 'motion'`) for the acting person (the session's owner). Any other
-  session, including one the person can see or one motion created for someone else, answers 404
-  `Session not found`, exactly like a missing one. Other services keep their behaviour: the Teams
-  bot may still stop any session its actor can see.
+  `GET /sessions/inbox`, `POST /sessions/:id/stop`, `POST /sessions/:id/prompt` and the four reads
+  `GET /sessions/:id`, `GET /sessions/:id/events`, `GET /sessions/:id/messages` and
+  `GET /sessions/:id/artifacts`. Each requires an actor (403 `service_actor_required` without one).
+  The inbox and the snapshot stay closed to every other bot. Lists and the inbox read as the acting
+  person, under the same visibility rules as the web.
+- **Reads reach what the person can read.** The four session reads admit any session the acting
+  person may read in the web, whoever started it (the web, Teams, GitHub, an automation, another
+  session or motion). A session the person may not read, a private session of someone else included,
+  answers 404 `Session not found`, exactly like a missing one. The snapshot never carries sandbox
+  locations for motion (its ceiling has no `sessions.sandbox_access`), even when the person could
+  open the sandbox.
+- **Changes reach only sessions it created.** On `stop` and `prompt` motion reaches a session only
+  when it created that session (`spawn_source = 'motion'`) for the acting person (the session's
+  owner). Any other session, including one the person can see or one motion created for someone
+  else, answers 404 `Session not found`, exactly like a missing one. Other services keep their
+  behaviour: the Teams bot may still stop any session its actor can see.
 - **Idempotent create (`externalRef`).** `POST /sessions` takes an optional `externalRef` from a
   service (400 `external_ref_not_allowed` from a person or the web): 1-200 characters, a letter or
   digit first, then letters, digits and `._:/@-`. It is unique per calling service. A retry with the
@@ -538,7 +545,9 @@ its permission ceiling alone admits it nowhere.
   releases its ref and the retry creates afresh, whatever body it sends, so a corrected create can
   reuse the ref. Deleting the session frees its ref; a session the runtime archived still replays
   (`status: "archived"`). `GET /sessions?externalRef=<ref>` returns only the session the calling
-  service created for the acting person under that ref (zero or one).
+  service created for the acting person under that ref (zero or one). Every `GET /sessions` row of a
+  session the calling service created under a ref carries that ref as `externalRef`; nobody else's
+  rows do, and people never see it.
 - **Idempotent prompt (`clientRequestId`).** `POST /sessions/:id/prompt` takes an optional
   `clientRequestId` from a service (400 `client_request_id_not_allowed` from a person or the web),
   with the `externalRef` character rules. It is unique per session and service, and shares the
@@ -569,6 +578,49 @@ its permission ceiling alone admits it nowhere.
 - A create response without a `replayed` field comes from a control plane too old to honour the ref.
   Create, list, stop and prompt need `SCM_PROVIDER=github`; other providers answer 501 on them.
   `GET /sessions/inbox` works under every provider.
+- A read answering 403 `service_capability_required` comes from a control plane that predates the
+  read routes; treat the value as not observed.
+
+#### Providence read contract
+
+Field names are exact; times are epoch milliseconds from the control plane's clock. Fields not
+listed here may change without notice, and new fields may appear.
+
+- **`GET /sessions`** (also `?externalRef=`, `?status=`, `?origin=`, `?limit=` up to 100,
+  `?offset=`): `{sessions: [...], hasMore}`, newest `updatedAt` first. Each row has `id`, `title`,
+  `status` (`created`, `active`, `completed`, `failed`, `archived`, `cancelled`), `spawnSource`
+  (`user`, `agent`, `automation`, `github-bot`, `linear-bot`, `slack-bot`, `teams-bot`, `motion`),
+  `userId` (the owner's Open-Inspect user id), `repoOwner`, `repoName`, `baseBranch`, `model`,
+  `reasoningEffort`, `harness`, `parentSessionId`, `createdAt`, `updatedAt`, `messageCount`,
+  `prCount`, optional `pullRequestSummary` (`{open, draft, merged, closed, total}`), optional
+  `externalRef` (see above) and `capabilities`. `capabilities` describes what the acting person may
+  do; motion itself may only read, and stop or prompt its own sessions. The list has no `branchName`
+  or sandbox state: read the snapshot for those.
+- **`GET /sessions/:id`**: `{session, artifacts, timeline, promptQueue, spawnError?, bootPhase?}`.
+  `session` has `id`, `title`, `status`, `sandboxStatus` (`pending`, `spawning`, `connecting`,
+  `warming`, `ready`, `stale`, `snapshotting`, `stopped`, `failed`; the current sandbox, never the
+  session's own state), `branchName` (null until the agent has a working branch), `baseBranch`,
+  `repoOwner`, `repoName`, `messageCount`, `createdAt`, `isProcessing?`, `model?`,
+  `reasoningEffort?`, `totalCost?`, `ownerUserId`, `visibility` and `capabilities`. `artifacts` is
+  as below; `timeline.events` is the latest page of the event timeline; `promptQueue` lists
+  `{messageId, content, status}` for prompts not yet finished. No `codeServerUrl`, `vncUrl`,
+  `ttydUrl`, `tunnelUrls` or `sandboxDashboardUrl` reaches motion.
+- **`GET /sessions/:id/events`** (`?cursor=`, `?limit=` up to 200, `?type=`, `?message_id=`):
+  `{events: [{id, type, data, messageId, createdAt}], cursor?, hasMore}`, newest first. Follow
+  `cursor` while `hasMore`; a page with `hasMore: true` always has one. `type` includes
+  `execution_complete`, `error`, `artifact`, `push_complete` and `push_error`.
+- **`GET /sessions/:id/messages`** (`?cursor=`, `?limit=` up to 100, `?status=`):
+  `{messages: [{id, authorId, content, source, attachments, status, createdAt, startedAt, completedAt}], cursor?, hasMore}`,
+  newest first; `status` is `pending`, `processing`, `completed` or `failed`.
+- **`GET /sessions/:id/artifacts`**:
+  `{artifacts: [{id, type, url, metadata, createdAt, updatedAt?}]}`, `type` one of `pr`,
+  `screenshot`, `video`, `preview`, `branch`. A `pr` artifact's `url` is the pull request and its
+  `metadata` has `number`, `lifecycleState` (`open`, `closed`, `merged`), `isDraft`, `head`, `base`,
+  `repoOwner` and `repoName`; a `branch` artifact with `metadata.mode: "manual_pr"` carries `head`,
+  `base` and `createPrUrl`.
+- Events, messages and artifacts, like create, list, stop and prompt, need `SCM_PROVIDER=github` and
+  answer 501 under other providers; the snapshot and the inbox work under every provider. A session
+  whose runtime cannot be reached answers 5xx: treat it as "not observed", not as a state.
 
 ### GitHub Routing
 
