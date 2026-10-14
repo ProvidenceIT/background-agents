@@ -314,13 +314,14 @@ describe("Teams settings", () => {
           })
         : Response.json({})
     );
-    const { unmount } = render(<TeamDetail team={{ ...team, capabilities }} />);
+    const { unmount } = render(<TeamDetail team={{ ...team, capabilities }} showRepositories />);
     expect(screen.queryByRole("heading", { name: "Repositories" })).toBeNull();
     unmount();
     render(
       <SWRConfig value={{ provider: () => new Map() }}>
         <TeamDetail
           team={{ ...team, capabilities: { ...capabilities, canReadTeamRepositories: true } }}
+          showRepositories
         />
       </SWRConfig>
     );
