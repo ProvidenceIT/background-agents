@@ -746,6 +746,12 @@ describe("route policy table", () => {
     ).toBe("no-store");
   });
 
+  it("never caches the viewer-relative session subscription", () => {
+    expect(routeFor("GET", "/sessions/session-1/subscription")?.cacheControl).toBe(
+      "private, no-store"
+    );
+  });
+
   it.each([
     ["GET", "/scm-settings"],
     ["GET", "/analytics/summary"],

@@ -467,7 +467,12 @@ sessionRuntimeProxyRoutes.get(
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id/subscription",
-  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requireSession("read") }),
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    authorization: requireSession("read"),
+    // Disclosure depends on the viewer, so no shared or reused cache entry.
+    cacheControl: "private, no-store",
+  }),
   (c) => dispatchSession(c, handleSessionSubscription)
 );
 sessionRuntimeProxyRoutes.get(
