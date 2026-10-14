@@ -534,7 +534,7 @@ export class SessionIndexStore {
     return result;
   }
 
-  private async getProviderAuth(sessionId: string): Promise<SessionModelProviderAuthInput[]> {
+  async getProviderAuth(sessionId: string): Promise<SessionModelProviderAuthInput[]> {
     const result = await this.db
       .prepare(
         `SELECT provider, auth_mode, provider_account_id, selection_source,
