@@ -44,7 +44,11 @@ export class SandboxExecutionEventHandler {
     private readonly transaction: <T>(closure: () => T) => T,
     private readonly offerFallbackTitle: (title: string) => void,
     /** Project the settled turn into the global usage ledger; replays rewrite the same row. */
-    private readonly recordSettledTurn: (messageId: string, settledAt: number) => void = () => {}
+    private readonly recordSettledTurn: (
+      messageId: string,
+      settledAt: number,
+      subscriptionSlot: string | null
+    ) => void = () => {}
   ) {}
 
   /**
@@ -78,7 +82,7 @@ export class SandboxExecutionEventHandler {
       };
     });
     await this.budget.deliverTransition(budgetTransition);
-    this.recordSettledTurn(event.messageId, context.now);
+    this.recordSettledTurn(event.messageId, context.now, event.subscriptionSlot ?? null);
     if (completion) {
       await this.projectTerminalMessage(
         completion.messageId,

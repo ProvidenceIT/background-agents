@@ -70,6 +70,7 @@ describe("usage quotas", () => {
       costUsd: 0.25,
       inputTokens: 1000,
       outputTokens: 500,
+      subscriptionSlot: null,
       settledAt: now,
       ...overrides,
     };
@@ -102,6 +103,20 @@ describe("usage quotas", () => {
     period: "day" as const,
     startAt: NOW - 22 * 3_600_000,
     endAt: NOW + 2 * 3_600_000,
+  });
+
+  it("keeps a turn's subscription slot when a replay arrives without one", async () => {
+    await ledger.recordTurn(turn("msg-1", { subscriptionSlot: "claude-3" }));
+    await ledger.recordTurn(turn("msg-1"));
+    await ledger.recordTurn(turn("msg-2", { subscriptionSlot: "claude-5", settledAt: now + 1 }));
+    await ledger.recordTurn(turn("msg-3", { subscriptionSlot: "claude-3", settledAt: now + 2 }));
+    await ledger.recordTurn(turn("msg-4"));
+    await ledger.recordTurn(turn("msg-5", { sessionId: "session-bob", subscriptionSlot: "x" }));
+
+    expect(await ledger.slotsForSession("session-alice")).toEqual([
+      { slot: "claude-3", turns: 2, inputTokens: 2000, outputTokens: 1000, lastUsedAt: now + 2 },
+      { slot: "claude-5", turns: 1, inputTokens: 1000, outputTokens: 500, lastUsedAt: now + 1 },
+    ]);
   });
 
   it("writes one ledger row per settled turn and leaves totals unchanged on replay", async () => {

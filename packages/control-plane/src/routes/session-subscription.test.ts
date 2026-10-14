@@ -6,6 +6,7 @@ import type { PermissionId } from "@open-inspect/shared/rbac";
 import { sessionSubscriptionResponseSchema } from "@open-inspect/shared/types/session-subscription";
 import { HOUSEHOLD, seedHousehold } from "../auth-homes/auth-homes.test-support";
 import type { SqlDatabase } from "../db/sql-database";
+import { UsageLedgerStore } from "../db/usage-ledger";
 import { applyMigrations } from "../node/migrate";
 import { createNodeSqlDatabase } from "../node/sqlite-database";
 import type { Env } from "../types";
@@ -76,6 +77,7 @@ describe("handleSessionSubscription", () => {
       holderUserId: HOUSEHOLD.owner,
       holderDisplayName: HOUSEHOLD.owner,
       accountDisplayName: null,
+      slots: [],
     });
     expect(subscriptions.openai).toMatchObject({
       holder: "you",
@@ -91,7 +93,38 @@ describe("handleSessionSubscription", () => {
       holderUserId: HOUSEHOLD.owner,
       holderDisplayName: HOUSEHOLD.owner,
       accountDisplayName: null,
+      slots: [],
     });
+  });
+
+  it("lists the Claude home slots the session's turns spent, to every viewer", async () => {
+    const ledger = new UsageLedgerStore(db);
+    const turn = (messageId: string, slot: string | null, settledAt: number) =>
+      ledger.recordTurn({
+        messageId,
+        sessionId: HOUSEHOLD.sessionId,
+        userId: HOUSEHOLD.owner,
+        repoExternalId: null,
+        harness: "claude",
+        model: "anthropic/claude-sonnet-4-5",
+        costUsd: 0,
+        inputTokens: 10,
+        outputTokens: 5,
+        subscriptionSlot: slot,
+        settledAt,
+      });
+    await turn("msg-1", "claude-2", 100);
+    await turn("msg-2", "claude-7", 200);
+    await turn("msg-3", "claude-2", 300);
+    await turn("msg-4", null, 400);
+
+    const subscriptions = await subscriptionsFor(HOUSEHOLD.colleague);
+    expect(subscriptions.anthropic.slots).toEqual([
+      { slot: "claude-2", turns: 2, inputTokens: 20, outputTokens: 10, lastUsedAt: 300 },
+      { slot: "claude-7", turns: 1, inputTokens: 10, outputTokens: 5, lastUsedAt: 200 },
+    ]);
+    expect(subscriptions.openai.slots).toEqual([]);
+    expect(subscriptions["zai-coding-plan"].slots).toEqual([]);
   });
 
   it("reports workspace credentials for Z.AI when no home serves the session", async () => {
@@ -119,6 +152,7 @@ describe("handleSessionSubscription", () => {
       holder: "colleague",
       holderUserId: null,
       accountDisplayName: null,
+      slots: [],
     });
     expect(subscriptions["zai-coding-plan"]).toMatchObject({
       holder: "colleague",

@@ -78,7 +78,7 @@ not pass through Hono.
 | `/sessions/:id/events`          | GET       | Paginated events                     |
 | `/sessions/:id/artifacts`       | GET       | List artifacts                       |
 | `/sessions/:id/participants`    | GET       | List runtime participants            |
-| `/sessions/:id/subscription`    | GET       | Subscription spent, per provider     |
+| `/sessions/:id/subscription`    | GET       | Subscription and home slots spent    |
 | `/sessions/:id/messages`        | GET       | List messages                        |
 | `/sessions/:id/pr`              | POST      | Create pull request                  |
 | `/sessions/:id/scm-credentials` | POST      | Broker sandbox git credentials       |
@@ -396,8 +396,9 @@ Automations:
   period (`day`/`month`) with turn, token, notional-cost and running-sandbox limits and a
   `warn`/`block` action. Managed by the Owner-only `/usage-quotas` routes.
 - `usage_ledger`: one row per settled turn (keyed by message id, so a replayed completion rewrites
-  rather than adds), carrying the metered user, team, repo, harness, model, cost and tokens; period
-  quotas are sums over it.
+  rather than adds), carrying the metered user, team, repo, harness, model, cost and tokens, and the
+  subscription-home slot the turn spent (`claude-3`) when the sandbox reported one; period quotas
+  are sums over it.
 - `running_sandboxes`: the live-sandbox register behind `max_running_sandboxes` — one row per
   session, taken when a launch is admitted, re-asserted while the sandbox reports a live status,
   released when it reports a dead one, and bounded by the sandbox's own lifetime.

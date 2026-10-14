@@ -40,11 +40,14 @@ from .base import (
 from .claude_env import (
     AUTH_HOME_TOKEN_MISSING,
     CLAUDE_POLICY_SETTINGS,
+    ClaudeAuthMode,
     ClaudeCredential,
     auth_home_claude_token_file,
     auth_home_has_claude_token,
     bundled_claude_binary,
+    clear_pool_pick,
     harness_env,
+    read_pool_pick_slot,
     resolve_api_key_credential,
     write_clean_env_wrapper,
 )
@@ -225,6 +228,7 @@ class ClaudeHarness:
         self._interrupted = False
         self._tool_client: ControlPlaneToolClient | None = None
         self._tool_server: Any = None
+        self._subscription_slot: str | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -233,6 +237,22 @@ class ClaudeHarness:
     @session_id.setter
     def session_id(self, value: str | None) -> None:
         self._translator.session_id = value
+
+    @property
+    def subscription_slot(self) -> str | None:
+        """The subscription-home slot the running child spends (``claude-3``), if any.
+
+        The wrapper records its pick when it execs the child, so this is read
+        once per connection; a single-token home reports ``default``.
+        """
+        if (
+            self._subscription_slot is None
+            and self._client is not None
+            and self.credential is not None
+            and self.credential.mode is ClaudeAuthMode.AUTH_HOME
+        ):
+            self._subscription_slot = read_pool_pick_slot(self.config.config_dir)
+        return self._subscription_slot
 
     @property
     def init_info(self) -> dict[str, Any] | None:
@@ -395,6 +415,8 @@ class ClaudeHarness:
         # Held before connect so a connect the deadline cuts short is still
         # closed by the next reconnect rather than leaked.
         self._client = client
+        self._subscription_slot = None
+        clear_pool_pick(self.config.config_dir)
         await client.connect()
         self._connected_model = model
         self._connected_effort = reasoning_effort

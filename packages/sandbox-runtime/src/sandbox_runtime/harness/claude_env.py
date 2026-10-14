@@ -24,9 +24,11 @@ next child, and the wrapper names only the file's path.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
+import re
 import stat
 import sys
 from dataclasses import dataclass
@@ -70,6 +72,9 @@ WRAPPER_NAME: Final = "claude-clean-env"
 # in the child's config dir (slot name and headroom, never a token).
 POOL_MODULE_NAME: Final = "sf_claude_pool"
 POOL_PICK_FILE: Final = "sf-claude-pool-pick.json"
+# A slot is a directory name under claude/pool/ (or ``default``); anything else
+# in the pick file is not reported.
+_POOL_SLOT_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
 
 CLAUDE_POLICY_SETTINGS: Final = json.dumps(
     {
@@ -341,3 +346,19 @@ def harness_env(config_dir: Path, credential: ClaudeCredential) -> dict[str, str
 
 def resolve_api_key_credential(environ: Mapping[str, str] = os.environ) -> ClaudeCredential | None:
     return ClaudeCredential.api_key(environ)
+
+
+def clear_pool_pick(config_dir: Path) -> None:
+    """Forget the last pick so a reconnect cannot report a previous child's slot."""
+    with contextlib.suppress(OSError):
+        (config_dir / POOL_PICK_FILE).unlink(missing_ok=True)
+
+
+def read_pool_pick_slot(config_dir: Path) -> str | None:
+    """The slot the wrapper picked for the running child: its name, nothing else."""
+    try:
+        record = json.loads((config_dir / POOL_PICK_FILE).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    slot = record.get("slot") if isinstance(record, dict) else None
+    return slot if isinstance(slot, str) and _POOL_SLOT_NAME.fullmatch(slot) else None

@@ -4,6 +4,7 @@ import {
   authHomeProviderIdSchema,
   type AuthHomeProviderId,
 } from "./auth-homes";
+import { subscriptionSlotSchema } from "./sandbox-events";
 
 /** The product a person subscribes to, per provider a session can spend. */
 export const SESSION_SUBSCRIPTION_PRODUCT_NAMES = {
@@ -20,6 +21,21 @@ export const SESSION_SUBSCRIPTION_PRODUCT_NAMES = {
  */
 export const SESSION_SUBSCRIPTION_HOLDERS = ["you", "colleague", "workspace"] as const;
 
+/** Bounds the per-session slot list; a pool has a handful of slots. */
+export const MAX_SESSION_SUBSCRIPTION_SLOTS = 32;
+
+/** One subscription-home slot the session's settled turns spent, from the usage ledger. */
+export const sessionSubscriptionSlotSchema = z.strictObject({
+  /** The slot's name in the home's pool (`claude-3`), or `default` for a single token. */
+  slot: subscriptionSlotSchema,
+  turns: z.number().int().nonnegative(),
+  inputTokens: z.number().int().nonnegative().nullable(),
+  outputTokens: z.number().int().nonnegative().nullable(),
+  /** When the slot's latest turn settled (epoch ms). */
+  lastUsedAt: z.number(),
+});
+export type SessionSubscriptionSlot = z.infer<typeof sessionSubscriptionSlotSchema>;
+
 export const sessionSubscriptionSchema = z.strictObject({
   provider: authHomeProviderIdSchema,
   authMode: z.enum(["provider_account", "api_key", "legacy_scoped_oauth", "auth_home"]),
@@ -34,6 +50,12 @@ export const sessionSubscriptionSchema = z.strictObject({
   holderDisplayName: z.string().nullable(),
   /** The provider account's label; null for homes, API keys and undisclosed holders. */
   accountDisplayName: z.string().nullable(),
+  /**
+   * The home slots the session's turns spent, most recently used first. Only a
+   * Claude home reports them; empty for every other entry and for turns that
+   * settled before the sandbox reported slots.
+   */
+  slots: z.array(sessionSubscriptionSlotSchema).max(MAX_SESSION_SUBSCRIPTION_SLOTS),
 });
 export type SessionSubscription = z.infer<typeof sessionSubscriptionSchema>;
 

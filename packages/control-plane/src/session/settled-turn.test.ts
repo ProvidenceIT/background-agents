@@ -37,7 +37,11 @@ describe("resolveSettledTurn", () => {
       costUsd: 0.3,
       inputTokens: 900,
       outputTokens: 100,
+      subscriptionSlot: null,
       settledAt: 1_700_000_000_000,
+    });
+    expect(resolveSettledTurn(sources(), "msg-1", 1, "claude-2")).toMatchObject({
+      subscriptionSlot: "claude-2",
     });
   });
 

@@ -413,7 +413,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // same task keeps the session's running-sandbox slot current, since a turn
   // settling proves the sandbox is live.
   const usageLedger = new UsageLedgerStore(db);
-  const recordSettledTurn = (messageId: string, settledAt: number): void => {
+  const recordSettledTurn = (
+    messageId: string,
+    settledAt: number,
+    subscriptionSlot: string | null
+  ): void => {
     const turn = resolveSettledTurn(
       {
         getSessionId: getPublicSessionId,
@@ -423,7 +427,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         usage: usageRepository,
       },
       messageId,
-      settledAt
+      settledAt,
+      subscriptionSlot
     );
     if (!turn) return;
     backgroundTasks.submit(

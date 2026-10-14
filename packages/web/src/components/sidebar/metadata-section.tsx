@@ -19,7 +19,10 @@ import { prBadgeVariant } from "@/components/ui/badge-variants";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { useTeam } from "@/hooks/use-teams";
 import { useSessionSubscription } from "@/hooks/use-session-subscription";
-import { describeSessionSubscription } from "./session-subscription-label";
+import {
+  describeSessionSubscription,
+  describeSubscriptionSlots,
+} from "./session-subscription-label";
 import { PullRequestStateIcon } from "@/components/pr-state-icon";
 import { DetailsSection, PropertyList, PropertyRow } from "./details-section";
 
@@ -57,8 +60,16 @@ interface MetadataSectionProps {
 function SessionSubscriptionRow({ sessionId, model }: { sessionId?: string; model?: string }) {
   const subscription = useSessionSubscription(sessionId, model);
   if (!subscription) return null;
+  const slots = describeSubscriptionSlots(subscription.slots);
   return (
-    <PropertyRow label="Subscription">{describeSessionSubscription(subscription)}</PropertyRow>
+    <PropertyRow label="Subscription">
+      {describeSessionSubscription(subscription)}
+      {slots && (
+        <span className="block text-xs text-muted-foreground">
+          {subscription.slots.length === 1 ? "Account" : "Accounts"}: {slots}
+        </span>
+      )}
+    </PropertyRow>
   );
 }
 

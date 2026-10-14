@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import pytest
 from claude_agent_sdk import (
@@ -41,10 +42,11 @@ from sandbox_runtime.harness.claude import (
     mcp_server_options,
     reasoning_options,
 )
-from sandbox_runtime.harness.claude_env import ClaudeAuthMode
+from sandbox_runtime.harness.claude_env import POOL_PICK_FILE, ClaudeAuthMode
 from sandbox_runtime.harness.claude_translate import AUTHENTICATION_FAILED_MESSAGE
 from tests.claude_fakes import (
     FakeCredentialClient,
+    FakeSdkClient,
     Harness,
     Issued,
     _result,
@@ -52,9 +54,6 @@ from tests.claude_fakes import (
     _stream,
     _text_delta,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 class TestOpen:
@@ -155,6 +154,43 @@ class TestAuthHome:
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in options["env"]
         assert "ANTHROPIC_API_KEY" not in options["env"]
         assert "--bare" not in json.dumps(options, default=str)
+
+    @pytest.mark.asyncio
+    async def test_reports_the_pool_slot_each_child_was_started_with(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        home = self._home(tmp_path)
+        picks = iter(["claude-3", "claude-5"])
+
+        async def connect(client: FakeSdkClient) -> None:
+            # The wrapper records its pick when it execs the child.
+            config_dir = Path(client.options["env"]["CLAUDE_CONFIG_DIR"])
+            (config_dir / POOL_PICK_FILE).write_text(json.dumps({"slot": next(picks)}))
+            client.connected = True
+
+        monkeypatch.setattr(FakeSdkClient, "connect", connect)
+        h = Harness(
+            tmp_path,
+            turns=[[_result(0.1)], [_result(0.1)]],
+            environ={"SF_AUTH_HOME": str(home), "SF_AUTH_HOME_PROVIDERS": "anthropic"},
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        assert h.harness.subscription_slot is None
+        await _run(h.harness, HarnessPrompt(message_id="m1", text="a", model="claude-sonnet-4-6"))
+        assert h.harness.subscription_slot == "claude-3"
+        await _run(h.harness, HarnessPrompt(message_id="m2", text="b", model="claude-opus-4-6"))
+        assert h.harness.subscription_slot == "claude-5"
+
+    @pytest.mark.asyncio
+    async def test_api_key_children_report_no_slot(self, tmp_path: Path):
+        h = Harness(tmp_path, turns=[[_result(0.1)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        h.config.config_dir.mkdir(parents=True, exist_ok=True)
+        (h.config.config_dir / POOL_PICK_FILE).write_text(json.dumps({"slot": "claude-1"}))
+        await _run(h.harness)
+        assert h.harness.subscription_slot is None
 
     @pytest.mark.asyncio
     async def test_a_home_without_the_token_refuses_and_says_only_that(self, tmp_path: Path):
