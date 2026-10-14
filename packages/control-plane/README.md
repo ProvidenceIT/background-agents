@@ -78,6 +78,7 @@ not pass through Hono.
 | `/sessions/:id/events`          | GET       | Paginated events                     |
 | `/sessions/:id/artifacts`       | GET       | List artifacts                       |
 | `/sessions/:id/participants`    | GET       | List runtime participants            |
+| `/sessions/:id/subscription`    | GET       | Subscription spent, per provider     |
 | `/sessions/:id/messages`        | GET       | List messages                        |
 | `/sessions/:id/pr`              | POST      | Create pull request                  |
 | `/sessions/:id/scm-credentials` | POST      | Broker sandbox git credentials       |

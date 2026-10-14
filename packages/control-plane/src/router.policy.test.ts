@@ -39,11 +39,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(251);
+    expect(routes).toHaveLength(252);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(189);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(251);
+    expect(new Set(paths).size).toBe(190);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(252);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
@@ -759,6 +759,7 @@ describe("route policy table", () => {
     ["GET", "/sessions/session-1/tunnel-urls"],
     ["GET", "/sessions/session-1/commit-signing"],
     ["GET", "/sessions/session-1/participant-profiles"],
+    ["GET", "/sessions/session-1/subscription"],
     ["POST", "/sessions/session-1/openai-token-refresh"],
     ["GET", "/sessions/session-1/skills"],
     ["GET", "/sessions/session-1/diff"],

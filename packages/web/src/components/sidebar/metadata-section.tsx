@@ -18,6 +18,8 @@ import { Badge } from "@/components/ui/badge";
 import { prBadgeVariant } from "@/components/ui/badge-variants";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { useTeam } from "@/hooks/use-teams";
+import { useSessionSubscription } from "@/hooks/use-session-subscription";
+import { describeSessionSubscription } from "./session-subscription-label";
 import { PullRequestStateIcon } from "@/components/pr-state-icon";
 import { DetailsSection, PropertyList, PropertyRow } from "./details-section";
 
@@ -49,6 +51,15 @@ interface MetadataSectionProps {
   visibility?: SessionVisibility;
   /** Extra rows for the run property list, such as the session cost. */
   children?: ReactNode;
+}
+
+/** Which Claude/Codex subscription the session's current model spends. */
+function SessionSubscriptionRow({ sessionId, model }: { sessionId?: string; model?: string }) {
+  const subscription = useSessionSubscription(sessionId, model);
+  if (!subscription) return null;
+  return (
+    <PropertyRow label="Subscription">{describeSessionSubscription(subscription)}</PropertyRow>
+  );
 }
 
 /**
@@ -221,6 +232,7 @@ export function MetadataSection({
               )}
             </PropertyRow>
           )}
+          <SessionSubscriptionRow sessionId={sessionId} model={model} />
           {/* Environment provenance */}
           {environmentId && (
             <PropertyRow label="Environment">

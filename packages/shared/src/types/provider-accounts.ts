@@ -222,6 +222,35 @@ export type SessionModelProviderAuthResponse = z.infer<
   typeof sessionModelProviderAuthResponseSchema
 >;
 
+/**
+ * Whose subscription a session spends for one provider, relative to the viewer.
+ * `you`: the viewer's own home or account. `colleague`: another person's home or
+ * account. `workspace`: an installation API key or legacy credential, held by no one.
+ */
+export const SESSION_SUBSCRIPTION_HOLDERS = ["you", "colleague", "workspace"] as const;
+
+export const sessionSubscriptionSchema = z.strictObject({
+  provider: subscriptionProviderIdSchema,
+  authMode: z.enum(["provider_account", "api_key", "legacy_scoped_oauth", "auth_home"]),
+  holder: z.enum(SESSION_SUBSCRIPTION_HOLDERS),
+  /** True when a colleague's subscription was lent through household sharing. */
+  shared: z.boolean(),
+  /**
+   * The holder, disclosed only to the holder, the session's starter and workspace
+   * administrators; other viewers learn that a colleague's subscription is used, not whose.
+   */
+  holderUserId: z.string().nullable(),
+  holderDisplayName: z.string().nullable(),
+  /** The provider account's label; null for homes, API keys and undisclosed holders. */
+  accountDisplayName: z.string().nullable(),
+});
+export type SessionSubscription = z.infer<typeof sessionSubscriptionSchema>;
+
+export const sessionSubscriptionResponseSchema = z.strictObject({
+  subscriptions: z.array(sessionSubscriptionSchema).max(SUBSCRIPTION_PROVIDER_IDS.length),
+});
+export type SessionSubscriptionResponse = z.infer<typeof sessionSubscriptionResponseSchema>;
+
 export const legacyProviderKeyLocationSchema = z.discriminatedUnion("scope", [
   z.strictObject({ scope: z.literal("global"), key: z.string() }),
   z.strictObject({

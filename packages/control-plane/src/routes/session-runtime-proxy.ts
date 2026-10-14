@@ -45,6 +45,7 @@ import { parseBody, parseJsonBody } from "./body";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { canManageSessionBudget } from "../session/budget-authorization";
 import { enforceAuthHomeTurn, turnTriggerKind } from "../auth-homes/session-binding";
+import { handleSessionSubscription } from "./session-subscription";
 
 const participantsResponseSchema = z.object({
   participants: z.array(
@@ -463,6 +464,11 @@ sessionRuntimeProxyRoutes.get(
     authorization: requireSession("read"),
   }),
   (c) => dispatchSession(c, handleParticipantProfiles)
+);
+sessionRuntimeProxyRoutes.get(
+  "/sessions/:id/subscription",
+  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requireSession("read") }),
+  (c) => dispatchSession(c, handleSessionSubscription)
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id/messages",
