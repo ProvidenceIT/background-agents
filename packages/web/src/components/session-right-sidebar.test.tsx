@@ -891,6 +891,17 @@ describe("SessionRightSidebar", () => {
     expect(screen.getByText("Sandbox tools will appear here when available.")).toBeVisible();
   });
 
+  it("says workspace tools never start on Kubernetes", () => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "kubernetes");
+    try {
+      render(inspector());
+      selectTab("Tools");
+      expect(screen.getByText(/aren’t available for sandboxes on Kubernetes/)).toBeVisible();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("shows checklist counts and completion from the current task events", () => {
     render(
       inspector({
