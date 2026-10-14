@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PermissionId } from "@open-inspect/shared/rbac";
-import { sessionSubscriptionResponseSchema } from "@open-inspect/shared/types/provider-accounts";
+import { sessionSubscriptionResponseSchema } from "@open-inspect/shared/types/session-subscription";
 import { HOUSEHOLD, seedHousehold } from "../auth-homes/auth-homes.test-support";
 import type { SqlDatabase } from "../db/sql-database";
 import { applyMigrations } from "../node/migrate";
@@ -83,6 +83,28 @@ describe("handleSessionSubscription", () => {
       accountDisplayName: "Owner ChatGPT Pro",
     });
     expect(subscriptions.xai).toMatchObject({ holder: "workspace", holderUserId: null });
+    expect(subscriptions["zai-coding-plan"]).toEqual({
+      provider: "zai-coding-plan",
+      authMode: "auth_home",
+      holder: "you",
+      shared: false,
+      holderUserId: HOUSEHOLD.owner,
+      holderDisplayName: HOUSEHOLD.owner,
+      accountDisplayName: null,
+    });
+  });
+
+  it("reports workspace credentials for Z.AI when no home serves the session", async () => {
+    await db
+      .prepare("UPDATE sessions SET auth_home_id = NULL, auth_home_selection = NULL WHERE id = ?")
+      .bind(HOUSEHOLD.sessionId)
+      .run();
+    const subscriptions = await subscriptionsFor(HOUSEHOLD.owner);
+    expect(subscriptions["zai-coding-plan"]).toMatchObject({
+      authMode: "api_key",
+      holder: "workspace",
+      holderUserId: null,
+    });
   });
 
   it("tells another viewer a colleague's subscription is used without naming them", async () => {
@@ -97,6 +119,10 @@ describe("handleSessionSubscription", () => {
       holder: "colleague",
       holderUserId: null,
       accountDisplayName: null,
+    });
+    expect(subscriptions["zai-coding-plan"]).toMatchObject({
+      holder: "colleague",
+      holderUserId: null,
     });
   });
 

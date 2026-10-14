@@ -3,7 +3,7 @@
 import {
   sessionSubscriptionResponseSchema,
   type SessionSubscription,
-} from "@open-inspect/shared/types/provider-accounts";
+} from "@open-inspect/shared/types/session-subscription";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
 import useSWR from "swr";
 

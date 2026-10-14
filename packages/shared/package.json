@@ -154,6 +154,10 @@
       "import": "./dist/types/provider-accounts.js",
       "types": "./dist/types/provider-accounts.d.ts"
     },
+    "./types/session-subscription": {
+      "import": "./dist/types/session-subscription.js",
+      "types": "./dist/types/session-subscription.d.ts"
+    },
     "./types/auth-homes": {
       "import": "./dist/types/auth-homes.js",
       "types": "./dist/types/auth-homes.d.ts"

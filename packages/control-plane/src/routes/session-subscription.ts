@@ -1,8 +1,8 @@
-import type { AuthHome } from "@open-inspect/shared/types/auth-homes";
+import type { AuthHome, AuthHomeProviderId } from "@open-inspect/shared/types/auth-homes";
 import type {
   SessionSubscription,
   SessionSubscriptionResponse,
-} from "@open-inspect/shared/types/provider-accounts";
+} from "@open-inspect/shared/types/session-subscription";
 import { UserAuthHomeStore } from "../auth-homes/store";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import { SessionIndexStore } from "../db/session-index";
@@ -12,32 +12,54 @@ import type { Env } from "../types";
 import { error } from "./shared";
 import type { SessionRouteContext } from "./session-route";
 
+/** Z.AI has no provider-auth row: only a home carries it, else workspace secrets do. */
+const ZAI_PROVIDER = "zai-coding-plan" satisfies AuthHomeProviderId;
+
 interface Holder {
   /** Every id that names the holder; [0] is canonical (a home lists merged identities). */
   userIds: readonly string[];
   accountDisplayName: string | null;
 }
 
-async function holderFor(
+interface SpentSubscription {
+  provider: AuthHomeProviderId;
+  authMode: SessionSubscription["authMode"];
+  shared: boolean;
+  holder: Holder | null;
+}
+
+function homeHolder(home: AuthHome): Holder {
+  return { userIds: home.ownerUserIds, accountDisplayName: null };
+}
+
+async function spentFromProviderAuth(
   auth: SessionModelProviderAuthInput,
   home: AuthHome | null,
   accounts: ModelProviderAccountStore
-): Promise<Holder | null> {
+): Promise<SpentSubscription> {
+  const spent = {
+    provider: auth.provider,
+    authMode: auth.authMode,
+    shared: auth.selectionSource === "auth_home_shared",
+  };
   if (auth.authMode === "auth_home") {
-    return home ? { userIds: home.ownerUserIds, accountDisplayName: null } : null;
+    return { ...spent, holder: home ? homeHolder(home) : null };
   }
   if (auth.authMode === "provider_account") {
     const account = await accounts.getById(auth.providerAccountId);
-    return account?.ownerUserId
-      ? { userIds: [account.ownerUserId], accountDisplayName: account.displayName }
-      : null;
+    return {
+      ...spent,
+      holder: account?.ownerUserId
+        ? { userIds: [account.ownerUserId], accountDisplayName: account.displayName }
+        : null,
+    };
   }
-  return null;
+  return { ...spent, holder: null };
 }
 
 /**
- * Which Claude/Codex/Grok subscription the session spends per provider. Whose it
- * is is stated relative to the viewer; the holder is named only to the holder, the
+ * Which Claude/Codex/Grok/Z.AI subscription the session spends per provider. Whose
+ * it is is stated relative to the viewer; the holder is named only to the holder, the
  * session's starter and workspace administrators, as with Codex seat usage.
  */
 export async function handleSessionSubscription(
@@ -55,10 +77,23 @@ export async function handleSessionSubscription(
   const viewerStartedSession =
     viewerId !== null && (viewerId === row.userId || viewerId === row.triggerActorUserId);
 
-  const providerAuth = await sessions.getProviderAuth(row.id);
   const home = row.authHomeId ? await new UserAuthHomeStore(ctx.db).getById(row.authHomeId) : null;
   const accounts = new ModelProviderAccountStore(ctx.db);
-  const holders = await Promise.all(providerAuth.map((auth) => holderFor(auth, home, accounts)));
+  const spent = await Promise.all(
+    (await sessions.getProviderAuth(row.id)).map((auth) =>
+      spentFromProviderAuth(auth, home, accounts)
+    )
+  );
+  spent.push(
+    home?.providers.includes(ZAI_PROVIDER)
+      ? {
+          provider: ZAI_PROVIDER,
+          authMode: "auth_home",
+          shared: row.authHomeSelection === "shared",
+          holder: homeHolder(home),
+        }
+      : { provider: ZAI_PROVIDER, authMode: "api_key", shared: false, holder: null }
+  );
 
   const disclosed = (holder: Holder | null): holder is Holder =>
     holder !== null &&
@@ -68,21 +103,20 @@ export async function handleSessionSubscription(
   const names = new Map(
     (
       await new UserStore(ctx.db).getUsersByIds(
-        holders.filter(disclosed).map((holder) => holder.userIds[0])
+        spent.flatMap(({ holder }) => (disclosed(holder) ? [holder.userIds[0]] : []))
       )
     ).map((user) => [user.id, user.displayName])
   );
 
-  const subscriptions = providerAuth.map((auth, index): SessionSubscription => {
-    const holder = holders[index];
+  const subscriptions = spent.map(({ provider, authMode, shared, holder }): SessionSubscription => {
     const ownedByViewer = viewerId !== null && holder?.userIds.includes(viewerId) === true;
-    const personal = auth.authMode === "auth_home" || auth.authMode === "provider_account";
+    const personal = authMode === "auth_home" || authMode === "provider_account";
     const holderUserId = disclosed(holder) ? holder.userIds[0] : null;
     return {
-      provider: auth.provider,
-      authMode: auth.authMode,
+      provider,
+      authMode,
       holder: ownedByViewer ? "you" : personal ? "colleague" : "workspace",
-      shared: auth.selectionSource === "auth_home_shared",
+      shared,
       holderUserId,
       holderDisplayName: holderUserId ? (names.get(holderUserId) ?? null) : null,
       accountDisplayName: disclosed(holder) ? holder.accountDisplayName : null,
