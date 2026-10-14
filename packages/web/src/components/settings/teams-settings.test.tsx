@@ -66,6 +66,10 @@ vi.mock("@/hooks/use-teams", () => ({
     removeMember: mocks.remove,
   }),
   useTeamMemberCandidates: () => ({ candidates: mocks.candidates, loading: false, error: null }),
+  teamCacheKey: (path: string, userId: string | undefined) => (userId ? [path, userId] : null),
+}));
+vi.mock("@/hooks/use-repos", () => ({
+  useRepos: () => ({ repos: [], loading: false, error: undefined }),
 }));
 
 const team = {
@@ -290,6 +294,38 @@ describe("Teams settings", () => {
         defaultVisibility: "team",
       })
     );
+  });
+
+  it("shows the team's repository grants only with repository read access", async () => {
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      String(path).endsWith("/repository-grants")
+        ? Response.json({
+            grants: [
+              {
+                id: "grant_one",
+                teamId: team.id,
+                kind: "repository",
+                repoExternalId: 7,
+                owner: "acme",
+                name: "playground",
+                createdAt: 1,
+              },
+            ],
+          })
+        : Response.json({})
+    );
+    const { unmount } = render(<TeamDetail team={{ ...team, capabilities }} />);
+    expect(screen.queryByRole("heading", { name: "Repositories" })).toBeNull();
+    unmount();
+    render(
+      <SWRConfig value={{ provider: () => new Map() }}>
+        <TeamDetail
+          team={{ ...team, capabilities: { ...capabilities, canReadTeamRepositories: true } }}
+        />
+      </SWRConfig>
+    );
+    expect(screen.getByRole("heading", { name: "Repositories" })).toBeInTheDocument();
+    expect(await screen.findByText("acme/playground")).toBeInTheDocument();
   });
 
   it("enables metadata and lifecycle controls with capabilities", () => {

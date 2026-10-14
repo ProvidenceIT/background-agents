@@ -208,6 +208,7 @@ export function AutomationForm({
         loadingEnvironments={loadingEnvironments}
         multiTargetAllowed={multiRepoAllowed}
         repositoryRequired={repositoryRequired}
+        repositoryScopeTeam={teamId ? scope.allTeams.find((team) => team.id === teamId) : null}
       />
 
       <AutomationAgentFields

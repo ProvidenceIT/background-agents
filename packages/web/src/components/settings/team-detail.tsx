@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { TeamRepositories } from "@/components/teams/team-repositories";
 import { TeamMembersTable } from "./team-members-table";
 
 type TeamDraft = Pick<TeamResponse, "name" | "slug" | "joinPolicy" | "defaultVisibility"> & {
@@ -238,6 +239,7 @@ export function TeamDetail({ team }: { team: TeamResponse }) {
           <TeamMembersTable team={team} members={members} />
         )}
       </section>
+      {capabilities.canReadTeamRepositories && <TeamRepositories team={team} />}
     </div>
   );
 }
