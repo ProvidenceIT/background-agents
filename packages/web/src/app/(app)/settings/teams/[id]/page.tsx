@@ -17,7 +17,7 @@ export default function TeamDetailPage() {
   ) : error || !team ? (
     <ErrorBanner>Team not found.</ErrorBanner>
   ) : (
-    <TeamDetail key={team.id} team={team} />
+    <TeamDetail key={team.id} team={team} showRepositories />
   );
 
   if (isMobile) {

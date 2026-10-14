@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { TeamRepositories } from "@/components/teams/team-repositories";
 import { TeamMembersTable } from "./team-members-table";
 
 type TeamDraft = Pick<TeamResponse, "name" | "slug" | "joinPolicy" | "defaultVisibility"> & {
@@ -42,7 +43,14 @@ function sameDraft(a: TeamDraft, b: TeamDraft): boolean {
   );
 }
 
-export function TeamDetail({ team }: { team: TeamResponse }) {
+export function TeamDetail({
+  team,
+  showRepositories = false,
+}: {
+  team: TeamResponse;
+  /** The team page has its own Repositories tab; only the settings route shows grants here. */
+  showRepositories?: boolean;
+}) {
   const capabilities = useTeamCapabilities(team);
   const { updateTeam, changeArchive } = useTeam(team.id);
   const { members, loading, error } = useTeamMembers(team.id);
@@ -238,6 +246,7 @@ export function TeamDetail({ team }: { team: TeamResponse }) {
           <TeamMembersTable team={team} members={members} />
         )}
       </section>
+      {showRepositories && capabilities.canReadTeamRepositories && <TeamRepositories team={team} />}
     </div>
   );
 }

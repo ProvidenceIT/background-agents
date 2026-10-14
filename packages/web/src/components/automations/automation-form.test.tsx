@@ -59,7 +59,10 @@ vi.mock("@/hooks/use-resource-teams", () => ({
       { id: "team-1", name: "Engineering" },
       { id: "team-2", name: "Design" },
     ],
-    allTeams: [],
+    allTeams: [
+      { id: "team-1", name: "Engineering" },
+      { id: "team-2", name: "Design" },
+    ],
     loading: false,
     error: null,
     allowWorkspace: scopeMocks.allowWorkspace,
@@ -188,6 +191,20 @@ describe("automation cron submission", () => {
     expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains that a team's repository list is limited to its grants", async () => {
+    const user = userEvent.setup();
+    render(<AutomationForm mode="create" submitting={false} onSubmit={vi.fn()} />);
+    expect(screen.queryByText(/granted to the/)).not.toBeInTheDocument();
+    await chooseTeam(user, "Engineering");
+    expect(
+      screen.getByText(/Showing 3 repositories granted to the Engineering team\./)
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Manage repository grants" })).toHaveAttribute(
+      "href",
+      "/settings/teams/team-1"
+    );
   });
 
   it.each(["team-1", null])("keeps owner %s read-only and omits edit ownership", (teamId) => {

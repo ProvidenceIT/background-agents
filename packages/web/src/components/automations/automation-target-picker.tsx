@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
@@ -21,6 +22,8 @@ interface AutomationTargetPickerProps {
   loadingEnvironments: boolean;
   multiTargetAllowed: boolean;
   repositoryRequired: boolean;
+  /** The owning team when the repository list is limited to that team's grants. */
+  repositoryScopeTeam?: { id: string; name: string } | null;
 }
 
 function getTargetLabel({
@@ -92,6 +95,7 @@ export function AutomationTargetPicker({
   loadingEnvironments,
   multiTargetAllowed,
   repositoryRequired,
+  repositoryScopeTeam,
 }: AutomationTargetPickerProps) {
   const {
     selectedRepoNames,
@@ -225,6 +229,20 @@ export function AutomationTargetPicker({
           </PopoverContent>
         </Popover>
         <FieldDescription>{description}</FieldDescription>
+        {repositoryScopeTeam && !loadingRepos && (
+          <FieldDescription>
+            Showing {repos.length} {repos.length === 1 ? "repository" : "repositories"} granted to
+            the {repositoryScopeTeam.name} team.{" "}
+            <Link
+              href={`/settings/teams/${encodeURIComponent(repositoryScopeTeam.id)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              Manage repository grants
+            </Link>
+          </FieldDescription>
+        )}
       </div>
 
       {usesSingleRepository && (
