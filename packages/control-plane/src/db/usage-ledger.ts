@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  MAX_SESSION_SUBSCRIPTION_SLOTS,
+  type SessionSubscriptionSlot,
+} from "@open-inspect/shared/types/session-subscription";
 import type { UsagePeriodTotals, UsagePeriodWindow } from "@open-inspect/shared/types/usage-quotas";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 import type { UsageScope } from "./usage-quotas";
@@ -15,6 +19,8 @@ export interface SettledTurn {
   costUsd: number;
   inputTokens: number | null;
   outputTokens: number | null;
+  /** The subscription-home slot the turn spent, as the sandbox reported it. */
+  subscriptionSlot: string | null;
   settledAt: number;
 }
 
@@ -22,6 +28,14 @@ const totalsRowSchema = z.object({
   turns: z.number(),
   tokens: z.number(),
   cost_usd: z.number(),
+});
+
+const slotRowSchema = z.object({
+  slot: z.string(),
+  turns: z.number(),
+  input_tokens: z.number().nullable(),
+  output_tokens: z.number().nullable(),
+  last_used_at: z.number(),
 });
 
 /** Scope filter over ledger rows; the workspace scope matches every row. */
@@ -49,12 +63,13 @@ export class UsageLedgerStore {
       .prepare(
         `INSERT INTO usage_ledger
           (message_id, session_id, user_id, team_id, repo_external_id, harness, model,
-           cost_usd, input_tokens, output_tokens, settled_at)
-         SELECT ?, s.id, ?, s.owner_team_id, ?, ?, ?, ?, ?, ?, ? FROM sessions s WHERE s.id = ?
+           cost_usd, input_tokens, output_tokens, subscription_slot, settled_at)
+         SELECT ?, s.id, ?, s.owner_team_id, ?, ?, ?, ?, ?, ?, ?, ? FROM sessions s WHERE s.id = ?
          ON CONFLICT (message_id) DO UPDATE SET
            cost_usd = excluded.cost_usd,
            input_tokens = excluded.input_tokens,
-           output_tokens = excluded.output_tokens`
+           output_tokens = excluded.output_tokens,
+           subscription_slot = COALESCE(excluded.subscription_slot, usage_ledger.subscription_slot)`
       )
       .bind(
         turn.messageId,
@@ -65,6 +80,7 @@ export class UsageLedgerStore {
         turn.costUsd,
         turn.inputTokens,
         turn.outputTokens,
+        turn.subscriptionSlot,
         turn.settledAt,
         turn.sessionId
       );
@@ -89,5 +105,32 @@ export class UsageLedgerStore {
       .first();
     const totals = totalsRowSchema.parse(row);
     return { turns: totals.turns, tokens: totals.tokens, costUsd: totals.cost_usd };
+  }
+
+  /** The subscription-home slots a session's settled turns spent, most recent first. */
+  async slotsForSession(sessionId: string): Promise<SessionSubscriptionSlot[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT subscription_slot AS slot, COUNT(*) AS turns,
+           SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+           MAX(settled_at) AS last_used_at
+         FROM usage_ledger
+         WHERE session_id = ? AND subscription_slot IS NOT NULL
+         GROUP BY subscription_slot
+         ORDER BY last_used_at DESC, slot
+         LIMIT ?`
+      )
+      .bind(sessionId, MAX_SESSION_SUBSCRIPTION_SLOTS)
+      .all();
+    return results.map((raw) => {
+      const row = slotRowSchema.parse(raw);
+      return {
+        slot: row.slot,
+        turns: row.turns,
+        inputTokens: row.input_tokens,
+        outputTokens: row.output_tokens,
+        lastUsedAt: row.last_used_at,
+      };
+    });
   }
 }

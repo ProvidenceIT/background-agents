@@ -16,14 +16,17 @@ from sandbox_runtime.harness.claude_env import (
     CLAUDE_POLICY_SETTINGS,
     CLI_BASH_MAX_TIMEOUT_SECONDS,
     OAUTH_CREDENTIAL_VARS,
+    POOL_PICK_FILE,
     STREAM_SILENCE_MARGIN_SECONDS,
     ClaudeAuthMode,
     ClaudeCredential,
     auth_home_claude_token_file,
     bash_timeout_ceiling_seconds,
     clean_child_env,
+    clear_pool_pick,
     denylist_for,
     harness_env,
+    read_pool_pick_slot,
     stream_silence_budget_seconds,
     write_clean_env_wrapper,
 )
@@ -331,3 +334,20 @@ class TestBashTimeoutCeiling:
 
         assert child_env[BASH_MAX_TIMEOUT_ENV_VAR] == "1200000"
         assert bash_timeout_ceiling_seconds(child_env) == bash_timeout_ceiling_seconds(parent)
+
+
+class TestPoolPick:
+    def test_reads_only_a_well_formed_slot_name(self, tmp_path: Path) -> None:
+        pick = tmp_path / POOL_PICK_FILE
+        assert read_pool_pick_slot(tmp_path) is None
+        pick.write_text(json.dumps({"slot": "claude-3", "reason": "ranked"}))
+        assert read_pool_pick_slot(tmp_path) == "claude-3"
+        for junk in ("not json", json.dumps({"slot": "../x"}), json.dumps({"slot": 3}), "[]"):
+            pick.write_text(junk)
+            assert read_pool_pick_slot(tmp_path) is None
+
+    def test_clearing_forgets_the_previous_child(self, tmp_path: Path) -> None:
+        (tmp_path / POOL_PICK_FILE).write_text(json.dumps({"slot": "claude-1"}))
+        clear_pool_pick(tmp_path)
+        clear_pool_pick(tmp_path)
+        assert read_pool_pick_slot(tmp_path) is None

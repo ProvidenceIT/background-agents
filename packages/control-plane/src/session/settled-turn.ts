@@ -18,11 +18,13 @@ export interface SettledTurnSources {
  * recorded, and the prompt author's metered identity (the canonical user id
  * when the participant has one, otherwise the id they prompted under).
  * Null when the message or its author is unknown, which leaves no row.
+ * `subscriptionSlot` comes from the completion itself, not from storage.
  */
 export function resolveSettledTurn(
   sources: SettledTurnSources,
   messageId: string,
-  settledAt: number
+  settledAt: number,
+  subscriptionSlot: string | null = null
 ): SettledTurn | null {
   const sessionId = sources.getSessionId();
   const session = sources.session.getSession();
@@ -41,6 +43,7 @@ export function resolveSettledTurn(
     costUsd: message.reported_cost_usd,
     inputTokens: tokens.inputTokens,
     outputTokens: tokens.outputTokens,
+    subscriptionSlot,
     settledAt,
   };
 }

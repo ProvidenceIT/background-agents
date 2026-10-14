@@ -739,6 +739,7 @@ class AgentBridge:
         emitted_event_count = 0
         tool_call_event_count = 0
         message_cost_usd: float | None = None
+        subscription_slot: str | None = None
         had_error = False
         error_message = None
 
@@ -817,6 +818,9 @@ class AgentBridge:
             # exists; the bridge adds only the output guards below.
             if turn.message_cost_usd is not None:
                 message_cost_usd = turn.message_cost_usd
+            # Which subscription slot the turn spent; only the Claude harness
+            # on a subscription home knows one.
+            subscription_slot = getattr(harness, "subscription_slot", None)
             if not turn.success:
                 had_error = True
                 error_category = "harness_failure"
@@ -885,6 +889,7 @@ class AgentBridge:
             "success": not had_error,
             **({"error": error_message} if error_message else {}),
             **({"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}),
+            **({"subscriptionSlot": subscription_slot} if subscription_slot else {}),
         }
 
     async def _prepare_turn(

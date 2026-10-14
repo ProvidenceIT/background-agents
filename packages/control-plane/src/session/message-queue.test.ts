@@ -428,6 +428,7 @@ describe("SessionMessageQueue", () => {
       }),
       deliverTransition: vi.fn(async () => {}),
     };
+    const recordSettledTurn = vi.fn();
     const handler = new SandboxExecutionEventHandler(
       h.backgroundTasks,
       h.log,
@@ -443,7 +444,8 @@ describe("SessionMessageQueue", () => {
       () => h.queue.broadcastPromptQueue(),
       budget,
       (closure) => closure(),
-      () => {}
+      () => {},
+      recordSettledTurn
     );
     const finishing = handler.handleExecutionComplete(
       {
@@ -451,6 +453,7 @@ describe("SessionMessageQueue", () => {
         messageId: "msg-finishing",
         success: true,
         messageCostUsd: 1,
+        subscriptionSlot: "claude-4",
         sandboxId: "sb",
         timestamp: 2,
       },
@@ -459,6 +462,7 @@ describe("SessionMessageQueue", () => {
     await h.queue.processMessageQueue();
     try {
       expect(budget.observeExecutionCost).toHaveBeenCalledOnce();
+      expect(recordSettledTurn).toHaveBeenCalledWith("msg-finishing", 2000, "claude-4");
       expect(h.projectTerminalMessage).toHaveBeenCalledOnce();
       expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
     } finally {

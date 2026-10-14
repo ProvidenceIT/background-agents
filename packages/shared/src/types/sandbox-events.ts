@@ -89,6 +89,7 @@ const messageSandboxEventBaseSchema = sandboxEventBaseSchema.extend({
   messageId: z.string(),
 });
 const stepIdSchema = z.string().min(1).optional();
+export const subscriptionSlotSchema = z.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
 
 export const sandboxGenerationSchema = z.object({
   sandboxId: z.string().min(1),
@@ -203,6 +204,11 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     error: z.string().optional(),
     /** Final cumulative reported cost of the turn. */
     messageCostUsd: z.number().nonnegative().optional(),
+    /**
+     * The subscription-home slot the turn spent (`claude-3`, or `default` for a
+     * home with one token). A slot name only, never an account identity.
+     */
+    subscriptionSlot: subscriptionSlotSchema.optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("context_compacted"),

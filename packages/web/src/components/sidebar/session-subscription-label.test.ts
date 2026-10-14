@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SessionSubscription } from "@open-inspect/shared/types/session-subscription";
-import { describeSessionSubscription } from "./session-subscription-label";
+import {
+  describeSessionSubscription,
+  describeSubscriptionSlots,
+} from "./session-subscription-label";
 
 const base: SessionSubscription = {
   provider: "anthropic",
@@ -10,6 +13,7 @@ const base: SessionSubscription = {
   holderUserId: "user-1",
   holderDisplayName: "Ada",
   accountDisplayName: null,
+  slots: [],
 };
 
 describe("describeSessionSubscription", () => {
@@ -35,5 +39,23 @@ describe("describeSessionSubscription", () => {
     ],
   ])("describes %o as %s", (overrides, label) => {
     expect(describeSessionSubscription({ ...base, ...overrides })).toBe(label);
+  });
+});
+
+describe("describeSubscriptionSlots", () => {
+  const slot = (name: string, turns: number) => ({
+    slot: name,
+    turns,
+    inputTokens: null,
+    outputTokens: null,
+    lastUsedAt: 1,
+  });
+
+  it("names the one slot, or each slot with its turns", () => {
+    expect(describeSubscriptionSlots([])).toBeNull();
+    expect(describeSubscriptionSlots([slot("claude-3", 4)])).toBe("claude-3");
+    expect(describeSubscriptionSlots([slot("claude-3", 4), slot("claude-7", 1)])).toBe(
+      "claude-3 · 4 turns, claude-7 · 1 turn"
+    );
   });
 });

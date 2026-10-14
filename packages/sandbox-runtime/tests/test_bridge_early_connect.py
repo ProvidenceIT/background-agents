@@ -502,6 +502,21 @@ class TestCommandsWhileBooting:
         assert budget is not None
         assert 9.0 < budget < 10.0
 
+    async def test_the_terminal_names_the_subscription_slot_the_turn_spent(
+        self, tmp_path, monkeypatch
+    ):
+        harness = ScriptedHarness()
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness, early_connect=False)
+        bridge._send_event = AsyncMock()
+        bridge.git_signing.refresh = AsyncMock()
+
+        without = await bridge._handle_prompt(_agent_prompt("msg-1"))
+        harness.subscription_slot = "claude-3"
+        spent = await bridge._handle_prompt(_agent_prompt("msg-2"))
+
+        assert "subscriptionSlot" not in without
+        assert spent["subscriptionSlot"] == "claude-3"
+
     async def test_an_unheld_prompt_gets_what_is_left_of_the_whole_budget(
         self, tmp_path, monkeypatch
     ):
