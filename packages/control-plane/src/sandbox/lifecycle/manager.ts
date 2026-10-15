@@ -489,6 +489,7 @@ export class SandboxLifecycleManager
         mcpServerLookup: config.mcpServerLookup,
         slackAgentNotifyLookup: config.slackAgentNotifyLookup,
         authHomeLookup: config.authHomeLookup,
+        executionTimeoutMs: config.executionTimeoutMs,
       },
       imageBuildLookup,
       getLogger: () => this.log,

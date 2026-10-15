@@ -1291,6 +1291,8 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     slackAgentNotifyLookup,
     // Read only when the provider mounts homes (Kubernetes).
     authHomeLookup: createSessionAuthHomeLookup(db),
+    // The sandbox lifetime when no scope sets one, so it matches the watchdog's budget.
+    executionTimeoutMs: env.EXECUTION_TIMEOUT_MS,
     recordWarning: deps.recordWarning,
     resumeQueuedWork: deps.resumeQueuedWork,
     admitLaunch: deps.admitLaunch,

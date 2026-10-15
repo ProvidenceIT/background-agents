@@ -1,6 +1,7 @@
 import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
 import { extractProviderAndModel, getValidModelOrDefault } from "@open-inspect/shared/models";
 import {
+  DEFAULT_FINAL_SNAPSHOT_BUFFER_MS,
   omitUnsupportedSandboxSettings,
   unsupportedSandboxSettings,
   type McpServerConfig,
@@ -18,6 +19,7 @@ import {
   type SandboxProviderCapabilities,
   type SessionRepositoryInfo,
 } from "../provider";
+import { parseConfiguredExecutionTimeoutMs } from "../execution-budget";
 import { parsePersistedSandboxSettings } from "../settings";
 import {
   evaluateImageBuildForSpawn,
@@ -50,6 +52,13 @@ export interface SandboxLaunchConfig {
   slackAgentNotifyLookup?: SlackAgentNotifyLookup;
   /** The session's bound subscription home; consulted only by providers that mount one. */
   authHomeLookup?: SessionAuthHomeLookup;
+  /**
+   * The deployment's `EXECUTION_TIMEOUT_MS`, unparsed: the sandbox lifetime
+   * when the session's effective settings set none, on providers that take
+   * one. Parsed at use through the execution budget's own parser so a value
+   * the watchdog ignores is ignored here too.
+   */
+  executionTimeoutMs?: string;
 }
 
 export interface SandboxLaunchContextDependencies {
@@ -304,7 +313,41 @@ export class SandboxLaunchContext {
     const timeoutMs = sandboxSettings.sandboxTimeoutMs;
     return {
       sandboxSettings,
-      timeoutSeconds: timeoutMs === undefined ? undefined : timeoutMs / 1000,
+      timeoutSeconds:
+        timeoutMs === undefined
+          ? this.resolveExecutionTimeoutSeconds(sandboxSettings)
+          : timeoutMs / 1000,
     };
+  }
+
+  /**
+   * The lifetime a launch falls back to when no scope sets `sandboxTimeoutMs`:
+   * the deployment's `EXECUTION_TIMEOUT_MS`, which the session watchdog and
+   * the scheduler's sweep already budget from (`resolveExecutionBudgetMs`), so
+   * the sandbox no longer expires under a prompt that budget still allows.
+   * Rounded up to whole seconds, because providers take seconds and the TTL
+   * must never undercut the budget. A value the final snapshot buffer would
+   * swallow is ignored with a warning, the way an explicit setting is rejected
+   * at write time, leaving the provider default in force.
+   */
+  private resolveExecutionTimeoutSeconds(sandboxSettings: SandboxSettings): number | undefined {
+    const executionTimeoutMs = parseConfiguredExecutionTimeoutMs(this.config.executionTimeoutMs);
+    if (executionTimeoutMs === undefined) return undefined;
+    const timeoutSeconds = Math.ceil(executionTimeoutMs / 1000);
+    const finalSnapshotBufferMs =
+      sandboxSettings.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS;
+    if (timeoutSeconds * 1000 <= finalSnapshotBufferMs) {
+      this.getLogger().warn(
+        "Ignoring EXECUTION_TIMEOUT_MS as the sandbox lifetime; it does not exceed the final snapshot buffer",
+        {
+          event: "sandbox.execution_timeout_ignored",
+          provider: this.provider.name,
+          execution_timeout_ms: executionTimeoutMs,
+          final_snapshot_buffer_ms: finalSnapshotBufferMs,
+        }
+      );
+      return undefined;
+    }
+    return timeoutSeconds;
   }
 }
