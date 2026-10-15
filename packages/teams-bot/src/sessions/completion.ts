@@ -48,7 +48,7 @@ import {
   THREAD_CLOSED_MESSAGE,
   TRUNCATED_NOTE,
 } from "./messages";
-import type { ProgressRenderer } from "./progress";
+import { progressStreamKey, type ProgressRenderer } from "./progress";
 
 /** Teams rejects messages around 28 KB; the answer is cut well before that and the session link remains. */
 const MAX_ANSWER_CHARS = 20_000;
@@ -297,7 +297,10 @@ export async function deliverCompletion(
       ? (deps.store.getTurnPlaceholder(threadKey, input.messageId) ??
         (isCurrentTurn ? thread.progressActivityId : null))
       : null;
-    const progressId = await deps.progress.finish(threadKey, ownPlaceholder ?? null);
+    const progressId = await deps.progress.finish(
+      progressStreamKey(threadKey, input.sessionId),
+      ownPlaceholder ?? null
+    );
     const target = progressId ?? ownPlaceholder ?? undefined;
     const finalId = await updateOrPost(port, target, text);
     deps.store.markCallbackPosted(input.messageId, COMPLETE_KIND);
@@ -357,7 +360,7 @@ export function noteToolCall(deps: CompletionDeps, payload: ToolCallCallback, tr
   const { address, replyToId } = resolveAddress(deps.store, threadKey, payload.context, thread);
   const { summary } = summarizeToolCall({ tool: payload.tool, args: payload.args ?? {} });
   deps.progress.note(
-    threadKey,
+    progressStreamKey(threadKey, payload.sessionId),
     { port: deps.bot.replyPort(address, replyToId), progressActivityId: thread.progressActivityId },
     summary
   );
@@ -390,7 +393,7 @@ export async function deliverThreadClosed(
     return "skipped";
   }
   deps.store.closeThreadRecord(threadKey, input.sessionId);
-  await deps.progress.finish(threadKey);
+  await deps.progress.finish(progressStreamKey(threadKey, input.sessionId));
   if (!deps.store.claimCallback(input.sessionId, THREAD_CLOSED_KIND)) {
     deps.log.info("callback.thread_closed", { ...logBase, outcome: "duplicate" });
     return "duplicate";

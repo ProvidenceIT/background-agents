@@ -7,6 +7,10 @@
  * one. The completion drains the stream before it writes the final text, so
  * no progress edit can land after the answer.
  *
+ * A thread can hold more than one conversation (its own session and
+ * colleagues' forks), each with its own "Working..." reply, so streams are
+ * keyed per conversation (`progressStreamKey`), not per thread.
+ *
  * In memory on purpose: after a restart the lines of the turn so far are
  * gone, and the next callback starts again from "Working..." on the activity
  * the SQLite record names.
@@ -30,18 +34,23 @@ interface ProgressTarget {
   progressActivityId: string | null;
 }
 
+/** The stream key of one conversation in a thread: the thread's own session, or a fork. */
+export function progressStreamKey(threadKey: string, sessionId: string): string {
+  return `${threadKey}|${sessionId}`;
+}
+
 export interface ProgressRenderer {
-  /** Add a line to the thread's progress; the edit happens in the background. */
-  note(threadKey: string, target: ProgressTarget, line: string): void;
+  /** Add a line to the conversation's progress; the edit happens in the background. */
+  note(streamKey: string, target: ProgressTarget, line: string): void;
   /**
-   * End the thread's progress stream and wait for its last edit. Resolves to
+   * End the conversation's progress stream and wait for its last edit. Resolves to
    * the activity that holds the progress text (it moves when an edit had to
    * fall back to a post), or `undefined` when no progress was rendered. With
    * `forActivityId`, only a stream started for that placeholder is ended; a
    * stream that belongs to another turn is left alone and `undefined` is
    * returned.
    */
-  finish(threadKey: string, forActivityId?: string | null): Promise<string | undefined>;
+  finish(streamKey: string, forActivityId?: string | null): Promise<string | undefined>;
 }
 
 interface ChunkSource {
@@ -96,7 +105,7 @@ function clipLine(line: string): string {
   return single.length > MAX_LINE_LENGTH ? `${single.slice(0, MAX_LINE_LENGTH - 1)}…` : single;
 }
 
-interface ThreadProgress {
+interface ConversationProgress {
   /** The activity the stream was started for; a different one means a new turn. */
   forActivityId: string | null;
   source: ChunkSource;
@@ -105,15 +114,15 @@ interface ThreadProgress {
 }
 
 export function createProgressRenderer(log: Logger): ProgressRenderer {
-  const threads = new Map<string, ThreadProgress>();
+  const streams = new Map<string, ConversationProgress>();
 
-  async function run(threadKey: string, state: ThreadProgress, target: ProgressTarget) {
+  async function run(streamKey: string, state: ConversationProgress, target: ProgressTarget) {
     const sink = createStreamingEditReplySink(target.port, target.progressActivityId ?? undefined);
     let activityId = target.progressActivityId ?? undefined;
     try {
       activityId = (await sink.begin()).progressActivityId ?? activityId;
     } catch (error) {
-      log.warn("progress.begin_failed", { thread_key: threadKey, error: asError(error) });
+      log.warn("progress.begin_failed", { stream_key: streamKey, error: asError(error) });
     }
     for await (const chunk of conflateTeamsRenderStream(state.source.iterable)) {
       if (chunk.type !== "text_delta") break;
@@ -122,39 +131,39 @@ export function createProgressRenderer(log: Logger): ProgressRenderer {
         const result = await sink.emit(chunk.text, renderProgressText(state.lines));
         if (result?.progressActivityId) activityId = result.progressActivityId;
       } catch (error) {
-        log.warn("progress.edit_failed", { thread_key: threadKey, error: asError(error) });
+        log.warn("progress.edit_failed", { stream_key: streamKey, error: asError(error) });
       }
     }
     return activityId;
   }
 
-  function start(threadKey: string, target: ProgressTarget): ThreadProgress {
-    const state: ThreadProgress = {
+  function start(streamKey: string, target: ProgressTarget): ConversationProgress {
+    const state: ConversationProgress = {
       forActivityId: target.progressActivityId,
       source: createChunkSource(),
       lines: [],
       settled: Promise.resolve(undefined),
     };
-    state.settled = run(threadKey, state, target);
-    threads.set(threadKey, state);
+    state.settled = run(streamKey, state, target);
+    streams.set(streamKey, state);
     return state;
   }
 
   return {
-    note(threadKey, target, line) {
-      let state = threads.get(threadKey);
+    note(streamKey, target, line) {
+      let state = streams.get(streamKey);
       if (state && state.forActivityId !== target.progressActivityId) {
         state.source.push({ type: "done" });
         state = undefined;
       }
-      state ??= start(threadKey, target);
+      state ??= start(streamKey, target);
       state.source.push({ type: "text_delta", text: `\n${clipLine(line)}` });
     },
-    async finish(threadKey, forActivityId) {
-      const state = threads.get(threadKey);
+    async finish(streamKey, forActivityId) {
+      const state = streams.get(streamKey);
       if (!state) return undefined;
       if (forActivityId !== undefined && state.forActivityId !== forActivityId) return undefined;
-      threads.delete(threadKey);
+      streams.delete(streamKey);
       state.source.push({ type: "done" });
       return state.settled;
     },
