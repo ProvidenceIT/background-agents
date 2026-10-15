@@ -1,6 +1,7 @@
 /**
  * The bot's durable state, one SQLite file on the state volume (node:sqlite,
- * no native dependency): the thread -> session map, the conversation
+ * no native dependency): each thread's conversations (its main session and
+ * colleagues' forks) and their turns' placeholders, the conversation
  * references needed to post proactively after a restart, and the claims that
  * make retried deliveries idempotent (inbound activities by id, callbacks by
  * `(messageId, kind)`, finished once the message is posted).
@@ -18,10 +19,19 @@ export const STATE_FILE_NAME = "teams-bot.sqlite";
 
 type TurnState = "idle" | "working";
 
-export interface ThreadSessionRecord {
+/**
+ * A thread's link to one session. A thread has one main conversation
+ * (`forkActor` null), the session a mention started, and at most one fork per
+ * person: the session a colleague's follow-up started when they could not
+ * spend the main conversation's subscription home. Each conversation has its
+ * own turns, "Working..." replies and progress.
+ */
+export interface ThreadConversation {
   /** Teams conversation id including the root message (`...;messageid=<root>`), or the chat id. */
   threadKey: string;
   sessionId: string;
+  /** The person whose fork this is (`microsoft:<oid>`); null for the thread's main conversation. */
+  forkActor: string | null;
   /** The Teams user who started the session, as `microsoft:<oid>`; callbacks read the session as this actor. */
   actor: string | null;
   teamId: string | null;
@@ -43,10 +53,11 @@ export interface ThreadSessionRecord {
   updatedAt: number;
 }
 
-export type NewThreadSession = Pick<
-  ThreadSessionRecord,
+export type NewThreadConversation = Pick<
+  ThreadConversation,
   | "threadKey"
   | "sessionId"
+  | "forkActor"
   | "actor"
   | "teamId"
   | "repoFullName"
@@ -56,15 +67,16 @@ export type NewThreadSession = Pick<
   | "channelId"
   | "rootActivityId"
 > &
-  Partial<Pick<ThreadSessionRecord, "progressActivityId" | "lastMessageId" | "turnState">>;
+  Partial<Pick<ThreadConversation, "progressActivityId" | "lastMessageId" | "turnState">>;
 
-export type ThreadSessionPatch = Partial<
-  Pick<ThreadSessionRecord, "progressActivityId" | "lastMessageId" | "turnState" | "closed">
+export type ThreadConversationPatch = Partial<
+  Pick<ThreadConversation, "progressActivityId" | "lastMessageId" | "turnState" | "closed">
 >;
 
-interface ThreadSessionRow {
+interface ThreadConversationRow {
   thread_key: string;
   session_id: string;
+  fork_actor: string | null;
   actor: string | null;
   team_id: string | null;
   repo_full_name: string | null;
@@ -81,10 +93,15 @@ interface ThreadSessionRow {
   updated_at: number;
 }
 
+const CONVERSATION_COLUMNS = `thread_key, session_id, fork_actor, actor, team_id, repo_full_name, model,
+  reasoning_effort, service_url, channel_id, root_activity_id, progress_activity_id, last_message_id,
+  turn_state, closed, created_at, updated_at`;
+
 const SCHEMA = `
-CREATE TABLE IF NOT EXISTS thread_sessions (
-  thread_key TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS thread_conversations (
+  thread_key TEXT NOT NULL,
   session_id TEXT NOT NULL,
+  fork_actor TEXT,
   actor TEXT,
   team_id TEXT,
   repo_full_name TEXT,
@@ -98,29 +115,11 @@ CREATE TABLE IF NOT EXISTS thread_sessions (
   turn_state TEXT NOT NULL DEFAULT 'idle' CHECK (turn_state IN ('idle', 'working')),
   closed INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_thread_sessions_session ON thread_sessions(session_id);
-CREATE TABLE IF NOT EXISTS thread_forks (
-  thread_key TEXT NOT NULL,
-  session_id TEXT NOT NULL,
-  actor TEXT NOT NULL,
-  team_id TEXT,
-  repo_full_name TEXT,
-  model TEXT NOT NULL,
-  reasoning_effort TEXT,
-  service_url TEXT NOT NULL,
-  channel_id TEXT,
-  root_activity_id TEXT,
-  progress_activity_id TEXT,
-  last_message_id TEXT,
-  turn_state TEXT NOT NULL DEFAULT 'idle' CHECK (turn_state IN ('idle', 'working')),
-  closed INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  PRIMARY KEY (thread_key, actor)
+  PRIMARY KEY (thread_key, session_id)
 );
-CREATE INDEX IF NOT EXISTS idx_thread_forks_session ON thread_forks(thread_key, session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_conversations_slot
+  ON thread_conversations(thread_key, coalesce(fork_actor, ''));
 CREATE TABLE IF NOT EXISTS turn_placeholders (
   thread_key TEXT NOT NULL,
   session_id TEXT,
@@ -156,10 +155,11 @@ CREATE TABLE IF NOT EXISTS callback_deliveries (
  */
 export const STALE_CALLBACK_CLAIM_MS = 15 * 60 * 1000;
 
-function toRecord(row: ThreadSessionRow): ThreadSessionRecord {
+function toConversation(row: ThreadConversationRow): ThreadConversation {
   return {
     threadKey: row.thread_key,
     sessionId: row.session_id,
+    forkActor: row.fork_actor,
     actor: row.actor,
     teamId: row.team_id,
     repoFullName: row.repo_full_name,
@@ -202,6 +202,54 @@ export class TeamsStateStore {
     if (!placeholderColumns.some((column) => column.name === "session_id")) {
       this.db.exec("ALTER TABLE turn_placeholders ADD COLUMN session_id TEXT");
     }
+    this.mergeLegacyThreadTables();
+  }
+
+  /**
+   * Threads were once kept in two tables, `thread_sessions` (the main
+   * conversation) and `thread_forks`; both become rows of
+   * `thread_conversations`. A placeholder written before placeholders carried
+   * a session belongs to the main conversation.
+   */
+  private mergeLegacyThreadTables(): void {
+    const has = (table: string) =>
+      this.db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get(table) !== undefined;
+    const sessions = has("thread_sessions");
+    const forks = has("thread_forks");
+    if (!sessions && !forks) return;
+    const legacyColumns = `thread_key, session_id, actor, team_id, repo_full_name, model,
+      reasoning_effort, service_url, channel_id, root_activity_id, progress_activity_id,
+      last_message_id, turn_state, closed, created_at, updated_at`;
+    this.db.exec("BEGIN");
+    try {
+      if (sessions) {
+        this.db.exec(
+          `INSERT OR IGNORE INTO thread_conversations (fork_actor, ${legacyColumns})
+           SELECT NULL, ${legacyColumns} FROM thread_sessions`
+        );
+        this.db.exec(
+          `UPDATE turn_placeholders SET session_id = (
+             SELECT session_id FROM thread_sessions
+             WHERE thread_sessions.thread_key = turn_placeholders.thread_key
+           ) WHERE session_id IS NULL`
+        );
+        this.db.exec("DROP TABLE thread_sessions");
+      }
+      if (forks) {
+        this.db.exec(
+          `INSERT OR IGNORE INTO thread_conversations (fork_actor, ${legacyColumns})
+           SELECT actor, ${legacyColumns} FROM thread_forks`
+        );
+        this.db.exec("DROP TABLE thread_forks");
+      }
+      this.db.exec("DELETE FROM turn_placeholders WHERE session_id IS NULL");
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   /** The store on disk under `stateDir`, created on first use. */
@@ -221,87 +269,73 @@ export class TeamsStateStore {
     this.db.close();
   }
 
-  getThreadSession(threadKey: string): ThreadSessionRecord | null {
-    const row = this.db
-      .prepare("SELECT * FROM thread_sessions WHERE thread_key = ?")
-      .get(threadKey) as ThreadSessionRow | undefined;
-    return row ? toRecord(row) : null;
+  /** The thread's main conversation: the session a mention in it started. */
+  getMainConversation(threadKey: string): ThreadConversation | null {
+    return this.conversationWhere("thread_key = ? AND fork_actor IS NULL", threadKey);
   }
 
-  /** Every thread mapped to `sessionId`; callbacks carry the session, not the thread. */
-  findThreadSessionsBySessionId(sessionId: string): ThreadSessionRecord[] {
-    const rows = this.db
-      .prepare("SELECT * FROM thread_sessions WHERE session_id = ? ORDER BY created_at")
-      .all(sessionId) as unknown as ThreadSessionRow[];
-    return rows.map(toRecord);
+  /** `actor`'s fork in the thread, open or closed. */
+  getFork(threadKey: string, actor: string): ThreadConversation | null {
+    return this.conversationWhere("thread_key = ? AND fork_actor = ?", threadKey, actor);
+  }
+
+  /** The thread's conversation with `sessionId`: its main one or a fork; callbacks name the session. */
+  getConversation(threadKey: string, sessionId: string): ThreadConversation | null {
+    return this.conversationWhere("thread_key = ? AND session_id = ?", threadKey, sessionId);
   }
 
   /**
-   * The session a colleague's follow-up in the thread forked to, when the
-   * thread's own session runs on a subscription home they may not spend.
-   * The thread keeps its own session for everyone else; this one is the
-   * sender's only.
+   * Record a conversation, replacing the one in the same place (the thread's
+   * main conversation, or this person's fork) together with its placeholders.
+   * The thread's other conversations are untouched.
    */
-  getThreadFork(threadKey: string, actor: string): ThreadSessionRecord | null {
-    const row = this.db
-      .prepare("SELECT * FROM thread_forks WHERE thread_key = ? AND actor = ?")
-      .get(threadKey, actor) as ThreadSessionRow | undefined;
-    return row ? toRecord(row) : null;
-  }
-
-  /** Record (or replace) the sender's fork in the thread; the thread's mapping is untouched. */
-  putThreadFork(session: NewThreadSession & { actor: string }): ThreadSessionRecord {
+  putConversation(conversation: NewThreadConversation): ThreadConversation {
     const now = this.now();
+    const replaced = conversation.forkActor
+      ? this.getFork(conversation.threadKey, conversation.forkActor)
+      : this.getMainConversation(conversation.threadKey);
+    if (replaced) {
+      this.db
+        .prepare("DELETE FROM turn_placeholders WHERE thread_key = ? AND session_id = ?")
+        .run(replaced.threadKey, replaced.sessionId);
+    }
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO thread_forks (
-           thread_key, session_id, actor, team_id, repo_full_name, model, reasoning_effort,
-           service_url, channel_id, root_activity_id, progress_activity_id, last_message_id,
-           turn_state, closed, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+        `INSERT OR REPLACE INTO thread_conversations (${CONVERSATION_COLUMNS})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
       )
       .run(
-        session.threadKey,
-        session.sessionId,
-        session.actor,
-        session.teamId,
-        session.repoFullName,
-        session.model,
-        session.reasoningEffort,
-        session.serviceUrl,
-        session.channelId,
-        session.rootActivityId,
-        session.progressActivityId ?? null,
-        session.lastMessageId ?? null,
-        session.turnState ?? "idle",
+        conversation.threadKey,
+        conversation.sessionId,
+        conversation.forkActor,
+        conversation.actor,
+        conversation.teamId,
+        conversation.repoFullName,
+        conversation.model,
+        conversation.reasoningEffort,
+        conversation.serviceUrl,
+        conversation.channelId,
+        conversation.rootActivityId,
+        conversation.progressActivityId ?? null,
+        conversation.lastMessageId ?? null,
+        conversation.turnState ?? "idle",
         now,
         now
       );
-    return this.getThreadFork(session.threadKey, session.actor)!;
+    return this.getConversation(conversation.threadKey, conversation.sessionId)!;
   }
 
-  /** The thread's record for `sessionId`: its own session, or a sender's fork. */
-  getThreadRecord(threadKey: string, sessionId: string): ThreadSessionRecord | null {
-    const thread = this.getThreadSession(threadKey);
-    if (thread && thread.sessionId === sessionId) return thread;
-    const row = this.db
-      .prepare("SELECT * FROM thread_forks WHERE thread_key = ? AND session_id = ?")
-      .get(threadKey, sessionId) as ThreadSessionRow | undefined;
-    return row ? toRecord(row) : null;
-  }
-
-  /** `updateThreadSession` for whichever record of the thread holds `sessionId`. */
-  updateThreadRecord(
+  updateConversation(
     threadKey: string,
     sessionId: string,
-    patch: ThreadSessionPatch
-  ): ThreadSessionRecord | null {
-    const current = this.getThreadRecord(threadKey, sessionId);
+    patch: ThreadConversationPatch
+  ): ThreadConversation | null {
+    const current = this.getConversation(threadKey, sessionId);
     if (!current) return null;
     const next = { ...current, ...patch };
     this.db
       .prepare(
-        `UPDATE ${this.recordTable(threadKey, sessionId)}
+        `UPDATE thread_conversations
            SET progress_activity_id = ?, last_message_id = ?, turn_state = ?, closed = ?, updated_at = ?
          WHERE thread_key = ? AND session_id = ?`
       )
@@ -314,93 +348,14 @@ export class TeamsStateStore {
         threadKey,
         sessionId
       );
-    return this.getThreadRecord(threadKey, sessionId);
+    return this.getConversation(threadKey, sessionId);
   }
 
-  /** Mark the thread's session or a sender's fork closed; false when the thread has neither. */
-  closeThreadRecord(threadKey: string, sessionId: string): boolean {
-    if (!this.getThreadRecord(threadKey, sessionId)) return false;
-    this.updateThreadRecord(threadKey, sessionId, { closed: true, turnState: "idle" });
-    return true;
-  }
-
-  private recordTable(threadKey: string, sessionId: string): "thread_sessions" | "thread_forks" {
-    return this.getThreadSession(threadKey)?.sessionId === sessionId
-      ? "thread_sessions"
-      : "thread_forks";
-  }
-
-  /** Insert the mapping, replacing any earlier session mapped to the same thread. */
-  putThreadSession(session: NewThreadSession): ThreadSessionRecord {
-    const now = this.now();
-    // The replaced session's placeholders go with it (rows written before
-    // placeholders carried a session are taken to be its); a fork's stay.
-    this.db
-      .prepare(
-        `DELETE FROM turn_placeholders WHERE thread_key = ? AND (
-           session_id IS NULL
-           OR session_id IN (SELECT session_id FROM thread_sessions WHERE thread_key = ?)
-         )`
-      )
-      .run(session.threadKey, session.threadKey);
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO thread_sessions (
-           thread_key, session_id, actor, team_id, repo_full_name, model, reasoning_effort,
-           service_url, channel_id, root_activity_id, progress_activity_id, last_message_id,
-           turn_state, closed, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
-      )
-      .run(
-        session.threadKey,
-        session.sessionId,
-        session.actor,
-        session.teamId,
-        session.repoFullName,
-        session.model,
-        session.reasoningEffort,
-        session.serviceUrl,
-        session.channelId,
-        session.rootActivityId,
-        session.progressActivityId ?? null,
-        session.lastMessageId ?? null,
-        session.turnState ?? "idle",
-        now,
-        now
-      );
-    return this.getThreadSession(session.threadKey)!;
-  }
-
-  updateThreadSession(threadKey: string, patch: ThreadSessionPatch): ThreadSessionRecord | null {
-    const current = this.getThreadSession(threadKey);
-    if (!current) return null;
-    const next = { ...current, ...patch };
-    this.db
-      .prepare(
-        `UPDATE thread_sessions
-           SET progress_activity_id = ?, last_message_id = ?, turn_state = ?, closed = ?, updated_at = ?
-         WHERE thread_key = ?`
-      )
-      .run(
-        next.progressActivityId,
-        next.lastMessageId,
-        next.turnState,
-        next.closed ? 1 : 0,
-        this.now(),
-        threadKey
-      );
-    return this.getThreadSession(threadKey);
-  }
-
-  /** Mark the thread's session closed; false when the thread maps to a different session. */
-  closeThreadSession(threadKey: string, sessionId: string): boolean {
-    const result = this.db
-      .prepare(
-        `UPDATE thread_sessions SET closed = 1, turn_state = 'idle', updated_at = ?
-         WHERE thread_key = ? AND session_id = ?`
-      )
-      .run(this.now(), threadKey, sessionId);
-    return result.changes > 0;
+  private conversationWhere(where: string, ...params: string[]): ThreadConversation | null {
+    const row = this.db
+      .prepare(`SELECT * FROM thread_conversations WHERE ${where}`)
+      .get(...params) as ThreadConversationRow | undefined;
+    return row ? toConversation(row) : null;
   }
 
   /**

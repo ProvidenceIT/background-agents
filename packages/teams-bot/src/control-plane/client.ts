@@ -25,6 +25,7 @@ import {
   type InstallationRepository,
 } from "@open-inspect/shared/types/repository-catalog";
 import { sessionMessageSchema, type SessionMessage } from "@open-inspect/shared/types/sessions";
+import { NO_ELIGIBLE_HOME } from "@open-inspect/shared/types/auth-homes";
 import {
   listArtifactsResponseSchema,
   type ArtifactResponse,
@@ -58,9 +59,18 @@ export function msteamsChannelScope(channelId: string): string {
  * Why a control-plane call did not succeed, from the response the bot
  * renders. `rate_limited` is any 429 other than a usage quota (the prompt
  * queue being full, for one); the control plane explains it in `error`.
+ * `no_eligible_home` is the 403 for an actor who may not spend the session's
+ * (or any) subscription home.
  */
 type ControlPlaneFailureReason =
-  "not_enrolled" | "quota" | "rate_limited" | "forbidden" | "not_found" | "invalid" | "transient";
+  | "not_enrolled"
+  | "no_eligible_home"
+  | "quota"
+  | "rate_limited"
+  | "forbidden"
+  | "not_found"
+  | "invalid"
+  | "transient";
 
 export interface ControlPlaneFailure {
   ok: false;
@@ -124,17 +134,19 @@ async function classifyFailure(response: Response): Promise<ControlPlaneFailure>
   const reason: ControlPlaneFailureReason =
     status === 403 && code === "service_actor_not_enrolled"
       ? "not_enrolled"
-      : status === 429 && code === "USAGE_QUOTA_EXCEEDED"
-        ? "quota"
-        : status === 429
-          ? "rate_limited"
-          : status === 403
-            ? "forbidden"
-            : status === 404
-              ? "not_found"
-              : status === 400 || status === 409 || status === 422
-                ? "invalid"
-                : "transient";
+      : status === 403 && code === NO_ELIGIBLE_HOME
+        ? "no_eligible_home"
+        : status === 429 && code === "USAGE_QUOTA_EXCEEDED"
+          ? "quota"
+          : status === 429
+            ? "rate_limited"
+            : status === 403
+              ? "forbidden"
+              : status === 404
+                ? "not_found"
+                : status === 400 || status === 409 || status === 422
+                  ? "invalid"
+                  : "transient";
   return { ok: false, reason, status, ...(code ? { code } : {}), ...(message ? { message } : {}) };
 }
 

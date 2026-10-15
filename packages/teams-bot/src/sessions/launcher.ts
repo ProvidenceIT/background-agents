@@ -1,7 +1,10 @@
 /**
- * Starting a session from a channel mention, and the model/flag resolution
- * both the launcher and follow-ups share. Every control-plane call carries
- * the Teams user as actor; every denial is rendered in the thread.
+ * Sending a prompt into a thread conversation: starting a session from a
+ * channel mention, and following up in the conversation a sender's reply
+ * goes to, which forks to a session of the sender's own when the thread's
+ * session runs on a subscription home they may not spend. Every
+ * control-plane call carries the Teams user as actor; every denial is
+ * rendered in the thread.
  */
 
 import type { HarnessId } from "@open-inspect/shared/harnesses";
@@ -13,19 +16,25 @@ import {
   normalizeModelId,
 } from "@open-inspect/shared/models";
 import type { InlinePromptOptions } from "@open-inspect/shared/inline-prompt-flags";
-import type { MsTeamsCallbackContext } from "@open-inspect/shared/types/session-api";
 import type { ActivityAddress, BotFrameworkClient } from "../bot-framework/client";
 import type { ControlPlaneClient } from "../control-plane/client";
 import { type ControlPlaneFailure, type ControlPlaneResult } from "../control-plane/client";
 import type { Logger } from "../logger";
-import type { TeamsStateStore } from "../state/store";
+import type { TeamsStateStore, ThreadConversation } from "../state/store";
 import { toStoredConversationReference } from "../teams/conversation-reference";
 import { teamsGetChannelId } from "../teams/message";
-import { WORKING_TEXT } from "../teams/reply-sink";
 import type { TeamsActivity } from "../types";
 import type { RepositoryRef } from "./commands";
 import {
+  beginTurn,
+  markConversationClosed,
+  openConversation,
+  teamsCallbackContext,
+  type ThreadPlace,
+} from "./thread-turn";
+import {
   BINDING_UNAVAILABLE_MESSAGE,
+  FOLLOW_UP_FAILED_MESSAGE,
   chooseRepositoryMessage,
   DEFAULT_FORBIDDEN_MESSAGE,
   DEFAULT_QUOTA_MESSAGE,
@@ -33,7 +42,9 @@ import {
   NOT_A_CHANNEL_MESSAGE,
   PROMPT_FAILED_MESSAGE,
   SESSION_CREATE_FAILED_MESSAGE,
+  SESSION_NOT_ACCESSIBLE_MESSAGE,
   signInMessage,
+  THREAD_CLOSED_MESSAGE,
   UNBOUND_CHANNEL_MESSAGE,
 } from "./messages";
 
@@ -48,7 +59,7 @@ export interface LaunchDeps {
   defaultReasoningEffort?: string;
 }
 
-export interface ModelSelection {
+interface ModelSelection {
   model: string;
   reasoningEffort?: string;
 }
@@ -68,7 +79,7 @@ function harnessForModel(model: string): HarnessId | undefined {
 }
 
 /** Apply inline flags to the defaults, or say why they cannot be applied. */
-export function resolveModelSelection(
+function resolveModelSelection(
   options: InlinePromptOptions,
   defaults: ModelSelection
 ): { ok: true; selection: ModelSelection } | { ok: false; error: string } {
@@ -110,6 +121,7 @@ export function renderFailure(
     case "rate_limited":
       return failure.message ?? DEFAULT_RATE_LIMITED_MESSAGE;
     case "forbidden":
+    case "no_eligible_home":
       return failure.message ?? DEFAULT_FORBIDDEN_MESSAGE;
     case "invalid":
       return failure.message ?? fallback;
@@ -131,8 +143,8 @@ export interface LaunchInput {
   traceId: string;
   /**
    * The sender's own session for a follow-up the thread's session refused:
-   * recorded as the sender's fork, leaving the thread's mapping to everyone
-   * else.
+   * recorded as the sender's fork, leaving the thread's main conversation to
+   * everyone else.
    */
   fork?: boolean;
 }
@@ -225,15 +237,14 @@ export async function launchSession(deps: LaunchDeps, input: LaunchInput): Promi
   }
   const sessionId = session.data.sessionId;
 
-  const callbackContext: MsTeamsCallbackContext = {
-    source: "msteams",
-    conversationId: input.threadKey,
-    serviceUrl: address.serviceUrl,
-    replyToId: rootActivityId,
+  const place: ThreadPlace = { address, rootActivityId };
+  const callbackContext = teamsCallbackContext({
+    threadKey: input.threadKey,
+    place,
     channelId,
     repoFullName: repo.data.fullName,
     model: selection.selection.model,
-  };
+  });
   const prompt = await deps.controlPlane.sendPrompt(
     actor,
     sessionId,
@@ -257,32 +268,24 @@ export async function launchSession(deps: LaunchDeps, input: LaunchInput): Promi
     return;
   }
 
-  const working = await reply(WORKING_TEXT);
-  const record = {
-    threadKey: input.threadKey,
-    sessionId,
-    actor,
-    teamId,
-    repoFullName: repo.data.fullName,
-    model: selection.selection.model,
-    reasoningEffort: selection.selection.reasoningEffort ?? null,
-    serviceUrl: address.serviceUrl,
-    channelId,
-    rootActivityId,
-    progressActivityId: working.id || null,
-    lastMessageId: prompt.data.messageId,
-    turnState: "working",
-  } as const;
-  if (input.fork) deps.store.putThreadFork(record);
-  else deps.store.putThreadSession(record);
-  if (working.id) {
-    deps.store.putTurnPlaceholder(
-      input.threadKey,
-      record.sessionId,
-      prompt.data.messageId,
-      working.id
-    );
-  }
+  await openConversation(
+    deps,
+    place,
+    {
+      threadKey: input.threadKey,
+      sessionId,
+      forkActor: input.fork ? actor : null,
+      actor,
+      teamId,
+      repoFullName: repo.data.fullName,
+      model: selection.selection.model,
+      reasoningEffort: selection.selection.reasoningEffort ?? null,
+      serviceUrl: address.serviceUrl,
+      channelId,
+      rootActivityId,
+    },
+    prompt.data.messageId
+  );
   deps.store.putConversationReference(input.threadKey, toStoredConversationReference(activity));
   deps.log.info("launch.started", {
     ...logBase,
@@ -292,4 +295,117 @@ export async function launchSession(deps: LaunchDeps, input: LaunchInput): Promi
     repo: repo.data.fullName,
     model: selection.selection.model,
   });
+}
+
+export interface FollowUpInput {
+  activity: TeamsActivity;
+  threadKey: string;
+  address: ActivityAddress;
+  rootActivityId: string;
+  actor: string;
+  /** The conversation the sender's reply goes to (`conversationFor`). */
+  conversation: ThreadConversation;
+  /** The prompt, with any quoted-reply context already prefixed. */
+  content: string;
+  options: InlinePromptOptions;
+  traceId: string;
+}
+
+/** The repository a conversation's session runs on, for a fork that starts its own session. */
+function conversationRepository(conversation: ThreadConversation): RepositoryRef | null {
+  if (!conversation.repoFullName) return null;
+  const slash = conversation.repoFullName.lastIndexOf("/");
+  if (slash <= 0) return null;
+  return {
+    owner: conversation.repoFullName.slice(0, slash),
+    name: conversation.repoFullName.slice(slash + 1),
+    fullName: conversation.repoFullName,
+  };
+}
+
+/**
+ * Send a reply in the thread to its conversation as the next turn. Replies
+ * in the thread on every outcome; a reply the conversation's subscription
+ * home refuses becomes the sender's fork.
+ */
+export async function followUp(deps: LaunchDeps, input: FollowUpInput): Promise<void> {
+  const { conversation } = input;
+  const place: ThreadPlace = { address: input.address, rootActivityId: input.rootActivityId };
+  const reply = (text: string) =>
+    deps.bot.replyToActivity(input.address, input.rootActivityId, text);
+  const logBase = {
+    trace_id: input.traceId,
+    thread_key: input.threadKey,
+    session_id: conversation.sessionId,
+  };
+  if (conversation.closed) {
+    await reply(THREAD_CLOSED_MESSAGE);
+    return;
+  }
+  const selection = resolveModelSelection(input.options, {
+    model: conversation.model,
+    reasoningEffort: conversation.reasoningEffort ?? undefined,
+  });
+  if (!selection.ok) {
+    await reply(selection.error);
+    return;
+  }
+  const overrides = input.options.model || input.options.reasoningEffort ? selection.selection : {};
+  const prompt = await deps.controlPlane.sendPrompt(
+    input.actor,
+    conversation.sessionId,
+    {
+      content: input.content,
+      ...overrides,
+      callbackContext: teamsCallbackContext({
+        threadKey: input.threadKey,
+        place,
+        channelId: conversation.channelId,
+        repoFullName: conversation.repoFullName,
+        model: selection.selection.model,
+      }),
+    },
+    input.traceId
+  );
+  if (!prompt.ok) {
+    if (prompt.reason === "no_eligible_home") {
+      // The conversation's session runs on a subscription home this sender
+      // may not spend: the follow-up becomes a session of the sender's own,
+      // resolved for them (and refused with its own message if none fits).
+      // It is the sender's fork: the thread keeps its session for its owner,
+      // and the sender's later replies go to the fork.
+      deps.log.info("follow_up.forked", logBase);
+      await launchSession(deps, {
+        activity: input.activity,
+        threadKey: input.threadKey,
+        address: input.address,
+        rootActivityId: input.rootActivityId,
+        actor: input.actor,
+        repo: conversationRepository(conversation),
+        prompt: input.content,
+        options: { ...input.options, model: selection.selection.model },
+        traceId: input.traceId,
+        fork: true,
+      });
+      return;
+    }
+    if (prompt.reason === "not_found") {
+      // The control plane also answers 404 when THIS user may not read the
+      // session (private, or team enforcement), so only the user who started
+      // it can tell us the session is really gone; anyone else is told they
+      // cannot reach it, and the thread stays open for its owner.
+      if (conversation.actor === input.actor) {
+        markConversationClosed(deps.store, input.threadKey, conversation.sessionId);
+        await reply(THREAD_CLOSED_MESSAGE);
+        return;
+      }
+      deps.log.info("follow_up.denied", { ...logBase, http_status: prompt.status });
+      await reply(SESSION_NOT_ACCESSIBLE_MESSAGE);
+      return;
+    }
+    await reply(renderFailure(prompt, deps.webAppUrl, FOLLOW_UP_FAILED_MESSAGE));
+    return;
+  }
+  await beginTurn(deps, place, conversation, prompt.data.messageId);
+  deps.log.info("follow_up.sent", { ...logBase, message_id: prompt.data.messageId });
 }
