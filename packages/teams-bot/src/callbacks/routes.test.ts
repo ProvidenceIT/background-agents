@@ -297,7 +297,7 @@ describe("POST /callbacks/complete", () => {
     expect(await response.json()).toEqual({ error: "unauthorized" });
     expect(h.connectorCalls()).toEqual([WORKING_REPLY]);
     expect(h.controlPlaneCalls()).toHaveLength(controlPlaneBefore);
-    expect(h.store.getThreadSession(THREAD_KEY)?.turnState).toBe("working");
+    expect(h.store.getMainConversation(THREAD_KEY)?.turnState).toBe("working");
   });
 
   it("answers 401 for a stale timestamp and 400 for a signed body of the wrong shape", async () => {
@@ -344,7 +344,7 @@ describe("POST /callbacks/complete", () => {
     ]);
     expect(reads[1].headers[ACTOR_HEADER.toLowerCase()]).toBe(`microsoft:${USER_OID}`);
     expect(new URL(reads[1].url).searchParams.get("message_id")).toBe("message-1");
-    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+    expect(h.store.getMainConversation(THREAD_KEY)).toMatchObject({
       turnState: "idle",
       progressActivityId: null,
       closed: false,
@@ -635,7 +635,7 @@ describe("POST /callbacks/tool_call", () => {
         text: "<at>Open-Inspect</at> also add tests",
       })
     );
-    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+    expect(h.store.getMainConversation(THREAD_KEY)).toMatchObject({
       lastMessageId: "message-2",
       progressActivityId: "reply-2",
       turnState: "working",
@@ -658,7 +658,7 @@ describe("POST /callbacks/tool_call", () => {
       path: `${THREAD_ACTIVITIES}/reply-1`,
     });
     expect(h.connectorCalls().at(-1)?.text).toContain("First answer.");
-    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+    expect(h.store.getMainConversation(THREAD_KEY)).toMatchObject({
       lastMessageId: "message-2",
       progressActivityId: "reply-2",
       turnState: "working",
@@ -690,7 +690,7 @@ describe("POST /callbacks/tool_call", () => {
       ["PUT", "reply-2"],
       ["PUT", "reply-2"],
     ]);
-    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+    expect(h.store.getMainConversation(THREAD_KEY)).toMatchObject({
       turnState: "idle",
       progressActivityId: null,
     });
@@ -744,7 +744,10 @@ describe("POST /callbacks/thread_closed", () => {
     };
     const closed = await h.callback("thread_closed", payload);
     expect(await closed.json()).toEqual({ ok: true, outcome: "delivered" });
-    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({ closed: true, turnState: "idle" });
+    expect(h.store.getMainConversation(THREAD_KEY)).toMatchObject({
+      closed: true,
+      turnState: "idle",
+    });
     expect(h.connectorCalls().at(-1)).toMatchObject({
       method: "POST",
       path: `${THREAD_ACTIVITIES}/${ROOT_ID}`,
@@ -769,7 +772,7 @@ describe("POST /callbacks/thread_closed", () => {
       context: { conversationId: THREAD_KEY, serviceUrl: SERVICE_URL },
     });
     expect(await response.json()).toEqual({ ok: true, outcome: "skipped" });
-    expect(h.store.getThreadSession(THREAD_KEY)?.closed).toBe(false);
+    expect(h.store.getMainConversation(THREAD_KEY)?.closed).toBe(false);
     expect(h.connectorCalls()).toEqual([WORKING_REPLY]);
   });
 });
@@ -831,7 +834,7 @@ describe("a colleague's fork beside the thread's session", () => {
     const h = forkHarness();
     await h.start();
     await h.colleagueFollowUp();
-    expect(h.store.getThreadFork(THREAD_KEY, `microsoft:${COLLEAGUE}`)).toMatchObject({
+    expect(h.store.getFork(THREAD_KEY, `microsoft:${COLLEAGUE}`)).toMatchObject({
       sessionId: "session-fork",
       progressActivityId: "reply-2",
       turnState: "working",
@@ -865,7 +868,7 @@ describe("a colleague's fork beside the thread's session", () => {
       context: { conversationId: THREAD_KEY, serviceUrl: SERVICE_URL, replyToId: ROOT_ID },
     });
     expect(await closed.json()).toEqual({ ok: true, outcome: "delivered" });
-    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+    expect(h.store.getMainConversation(THREAD_KEY)).toMatchObject({
       sessionId: "session-1",
       closed: false,
       turnState: "working",

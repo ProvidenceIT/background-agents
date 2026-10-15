@@ -36,8 +36,7 @@ import {
   type SessionReadScope,
 } from "../control-plane/client";
 import { asError, type Logger } from "../logger";
-import type { TeamsStateStore, ThreadSessionRecord } from "../state/store";
-import { updateOrPost } from "../teams/reply-sink";
+import type { TeamsStateStore, ThreadConversation } from "../state/store";
 import {
   AGENT_COMPLETED_MESSAGE,
   agentFailedMessage,
@@ -48,7 +47,8 @@ import {
   THREAD_CLOSED_MESSAGE,
   TRUNCATED_NOTE,
 } from "./messages";
-import { progressStreamKey, type ProgressRenderer } from "./progress";
+import type { ProgressRenderer } from "./progress";
+import { closeConversation, noteProgress, settleTurn } from "./thread-turn";
 
 /** Teams rejects messages around 28 KB; the answer is cut well before that and the session link remains. */
 const MAX_ANSWER_CHARS = 20_000;
@@ -68,15 +68,6 @@ export interface CompletionDeps {
 
 export type DeliveryOutcome = "delivered" | "duplicate" | "skipped";
 
-/** The thread record a callback addresses: the thread's own session or a sender's fork. */
-function threadFor(
-  store: TeamsStateStore,
-  threadKey: string,
-  sessionId: string
-): ThreadSessionRecord | null {
-  return store.getThreadRecord(threadKey, sessionId);
-}
-
 /**
  * Where to post: the stored conversation reference when there is one (it
  * carries the bot and user accounts the connector expects), else the
@@ -87,7 +78,7 @@ function resolveAddress(
   store: TeamsStateStore,
   threadKey: string,
   coordinates: ThreadCoordinates,
-  thread: ThreadSessionRecord | null
+  thread: ThreadConversation | null
 ): { address: ActivityAddress; replyToId: string | undefined } {
   const reference = store.getConversationReference(threadKey);
   const address: ActivityAddress = reference
@@ -238,7 +229,7 @@ export async function deliverCompletion(
     session_id: input.sessionId,
     message_id: input.messageId,
   };
-  const thread = threadFor(deps.store, threadKey, input.sessionId);
+  const thread = deps.store.getConversation(threadKey, input.sessionId);
   if (thread?.closed) {
     deps.log.info("callback.complete", { ...logBase, outcome: "skipped", skip_reason: "closed" });
     return "skipped";
@@ -288,29 +279,15 @@ export async function deliverCompletion(
 
     const { address, replyToId } = resolveAddress(deps.store, threadKey, input.context, thread);
     const port = deps.bot.replyPort(address, replyToId);
-    // Each turn writes its answer into its own "Working..." reply. The thread's
-    // live progress stream is ended only when it was rendering this turn, so a
-    // turn that completes after a follow-up superseded it neither touches the
-    // new turn's placeholder nor tears down its stream.
-    const isCurrentTurn = thread !== null && thread.lastMessageId === input.messageId;
-    const ownPlaceholder = thread
-      ? (deps.store.getTurnPlaceholder(threadKey, input.messageId) ??
-        (isCurrentTurn ? thread.progressActivityId : null))
-      : null;
-    const progressId = await deps.progress.finish(
-      progressStreamKey(threadKey, input.sessionId),
-      ownPlaceholder ?? null
-    );
-    const target = progressId ?? ownPlaceholder ?? undefined;
-    const finalId = await updateOrPost(port, target, text);
+    const { finalId, target } = await settleTurn(deps, {
+      threadKey,
+      sessionId: input.sessionId,
+      conversation: thread,
+      messageId: input.messageId,
+      port,
+      text,
+    });
     deps.store.markCallbackPosted(input.messageId, COMPLETE_KIND);
-    if (isCurrentTurn) {
-      deps.store.updateThreadRecord(threadKey, input.sessionId, {
-        turnState: "idle",
-        progressActivityId: null,
-      });
-    }
-    if (thread) deps.store.deleteTurnPlaceholder(threadKey, input.messageId);
     deps.log.info("callback.complete", {
       ...logBase,
       outcome: "success",
@@ -334,7 +311,7 @@ export async function deliverCompletion(
  */
 export function noteToolCall(deps: CompletionDeps, payload: ToolCallCallback, traceId: string) {
   const threadKey = payload.context.conversationId;
-  const thread = threadFor(deps.store, threadKey, payload.sessionId);
+  const thread = deps.store.getConversation(threadKey, payload.sessionId);
   const superseded =
     thread !== null &&
     payload.messageId !== undefined &&
@@ -359,11 +336,7 @@ export function noteToolCall(deps: CompletionDeps, payload: ToolCallCallback, tr
   }
   const { address, replyToId } = resolveAddress(deps.store, threadKey, payload.context, thread);
   const { summary } = summarizeToolCall({ tool: payload.tool, args: payload.args ?? {} });
-  deps.progress.note(
-    progressStreamKey(threadKey, payload.sessionId),
-    { port: deps.bot.replyPort(address, replyToId), progressActivityId: thread.progressActivityId },
-    summary
-  );
+  noteProgress(deps, thread, deps.bot.replyPort(address, replyToId), summary);
 }
 
 export interface ThreadClosedInput {
@@ -382,8 +355,8 @@ export async function deliverThreadClosed(
 ): Promise<DeliveryOutcome> {
   const threadKey = input.context.conversationId;
   const logBase = { trace_id: input.traceId, thread_key: threadKey, session_id: input.sessionId };
-  const record = deps.store.getThreadRecord(threadKey, input.sessionId);
-  const mapped = record ?? deps.store.getThreadSession(threadKey);
+  const record = deps.store.getConversation(threadKey, input.sessionId);
+  const mapped = record ?? deps.store.getMainConversation(threadKey);
   if (mapped && mapped.sessionId !== input.sessionId) {
     deps.log.info("callback.thread_closed", {
       ...logBase,
@@ -392,8 +365,7 @@ export async function deliverThreadClosed(
     });
     return "skipped";
   }
-  deps.store.closeThreadRecord(threadKey, input.sessionId);
-  await deps.progress.finish(progressStreamKey(threadKey, input.sessionId));
+  await closeConversation(deps, threadKey, input.sessionId);
   if (!deps.store.claimCallback(input.sessionId, THREAD_CLOSED_KIND)) {
     deps.log.info("callback.thread_closed", { ...logBase, outcome: "duplicate" });
     return "duplicate";

@@ -9,7 +9,7 @@ import { isAllowedServiceUrl } from "../bot-framework/service-url";
 import type { ControlPlaneClient } from "../control-plane/client";
 import { microsoftActor } from "../control-plane/client";
 import { asError, type Logger } from "../logger";
-import type { TeamsStateStore, ThreadSessionRecord } from "../state/store";
+import type { TeamsStateStore, ThreadConversation } from "../state/store";
 import {
   checkTeamsActivity,
   formatQuotedReplyContext,
@@ -19,17 +19,15 @@ import {
   teamsQuotedReplyContext,
   teamsThreadKey,
 } from "../teams/message";
-import { WORKING_TEXT } from "../teams/reply-sink";
 import type { TeamsActivity } from "../types";
-import { parseCommand, type Command, type RepositoryRef } from "./commands";
-import { NO_ELIGIBLE_HOME } from "@open-inspect/shared/types/auth-homes";
-import { launchSession, renderFailure, resolveModelSelection } from "./launcher";
+import { parseCommand } from "./commands";
+import { conversationFor, stopTurn } from "./thread-turn";
+import { followUp, launchSession, renderFailure } from "./launcher";
 import {
   FOLLOW_UP_FAILED_MESSAGE,
   HELP_TEXT,
   NO_IDENTITY_MESSAGE,
   NO_SESSION_IN_THREAD_MESSAGE,
-  SESSION_NOT_ACCESSIBLE_MESSAGE,
   sessionUrl,
   STOP_FAILED_MESSAGE,
   STOP_REQUESTED_MESSAGE,
@@ -86,18 +84,6 @@ function accountOf(value: { id?: string; name?: string } | undefined) {
   return value?.id ? { id: value.id, ...(value.name ? { name: value.name } : {}) } : undefined;
 }
 
-/** The repository a thread's session runs on, for a follow-up that starts its own session. */
-function threadRepository(thread: ThreadSessionRecord): RepositoryRef | null {
-  if (!thread.repoFullName) return null;
-  const slash = thread.repoFullName.lastIndexOf("/");
-  if (slash <= 0) return null;
-  return {
-    owner: thread.repoFullName.slice(0, slash),
-    name: thread.repoFullName.slice(slash + 1),
-    fullName: thread.repoFullName,
-  };
-}
-
 export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandler {
   const enqueue = deps.enqueue ?? createKeyedQueue();
   const launchDeps = () => ({
@@ -113,7 +99,7 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
   const reply = (ctx: ThreadContext, text: string) =>
     deps.bot.replyToActivity(ctx.address, ctx.rootActivityId, text);
 
-  async function handleStatus(ctx: ThreadContext, thread: ThreadSessionRecord | null) {
+  async function handleStatus(ctx: ThreadContext, thread: ThreadConversation | null) {
     if (!thread) {
       await reply(ctx, NO_SESSION_IN_THREAD_MESSAGE);
       return;
@@ -142,7 +128,7 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
     await reply(ctx, lines.join("\n"));
   }
 
-  async function handleStop(ctx: ThreadContext, thread: ThreadSessionRecord | null) {
+  async function handleStop(ctx: ThreadContext, thread: ThreadConversation | null) {
     if (!thread || thread.closed) {
       await reply(ctx, thread ? THREAD_CLOSED_MESSAGE : NO_SESSION_IN_THREAD_MESSAGE);
       return;
@@ -152,123 +138,12 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
       await reply(ctx, renderFailure(result, deps.webAppUrl, STOP_FAILED_MESSAGE));
       return;
     }
-    deps.store.updateThreadRecord(ctx.threadKey, thread.sessionId, { turnState: "idle" });
+    stopTurn(deps.store, thread);
     await reply(ctx, STOP_REQUESTED_MESSAGE);
   }
 
-  async function handleFollowUp(
-    ctx: ThreadContext,
-    thread: ThreadSessionRecord,
-    command: Extract<Command, { kind: "prompt" }>
-  ) {
-    if (thread.closed) {
-      await reply(ctx, THREAD_CLOSED_MESSAGE);
-      return;
-    }
-    const selection = resolveModelSelection(command.options, {
-      model: thread.model,
-      reasoningEffort: thread.reasoningEffort ?? undefined,
-    });
-    if (!selection.ok) {
-      await reply(ctx, selection.error);
-      return;
-    }
-    const overrides =
-      command.options.model || command.options.reasoningEffort ? selection.selection : {};
-    const content = formatQuotedReplyContext(teamsQuotedReplyContext(ctx.activity)) + command.text;
-    const prompt = await deps.controlPlane.sendPrompt(
-      ctx.actor,
-      thread.sessionId,
-      {
-        content,
-        ...overrides,
-        callbackContext: {
-          source: "msteams",
-          conversationId: ctx.threadKey,
-          serviceUrl: ctx.address.serviceUrl,
-          replyToId: ctx.rootActivityId,
-          ...(thread.channelId ? { channelId: thread.channelId } : {}),
-          ...(thread.repoFullName ? { repoFullName: thread.repoFullName } : {}),
-          model: selection.selection.model,
-        },
-      },
-      ctx.traceId
-    );
-    if (!prompt.ok) {
-      if (prompt.status === 403 && prompt.code === NO_ELIGIBLE_HOME) {
-        // The thread's session runs on a subscription home this sender may
-        // not spend: the follow-up becomes a session of the sender's own,
-        // resolved for them (and refused with its own message if none fits).
-        // It is the sender's fork: the thread keeps its session for its
-        // owner, and the sender's later replies go to the fork.
-        deps.log.info("follow_up.forked", {
-          trace_id: ctx.traceId,
-          thread_key: ctx.threadKey,
-          session_id: thread.sessionId,
-        });
-        await launchSession(launchDeps(), {
-          activity: ctx.activity,
-          threadKey: ctx.threadKey,
-          address: ctx.address,
-          rootActivityId: ctx.rootActivityId,
-          actor: ctx.actor,
-          repo: threadRepository(thread),
-          prompt: content,
-          options: { ...command.options, model: selection.selection.model },
-          traceId: ctx.traceId,
-          fork: true,
-        });
-        return;
-      }
-      if (prompt.reason === "not_found") {
-        // The control plane also answers 404 when THIS user may not read the
-        // session (private, or team enforcement), so only the user who started
-        // it can tell us the session is really gone; anyone else is told they
-        // cannot reach it, and the thread stays open for its owner.
-        if (thread.actor === ctx.actor) {
-          deps.store.closeThreadRecord(ctx.threadKey, thread.sessionId);
-          await reply(ctx, THREAD_CLOSED_MESSAGE);
-          return;
-        }
-        deps.log.info("follow_up.denied", {
-          trace_id: ctx.traceId,
-          thread_key: ctx.threadKey,
-          session_id: thread.sessionId,
-          http_status: prompt.status,
-        });
-        await reply(ctx, SESSION_NOT_ACCESSIBLE_MESSAGE);
-        return;
-      }
-      await reply(ctx, renderFailure(prompt, deps.webAppUrl, FOLLOW_UP_FAILED_MESSAGE));
-      return;
-    }
-    const working = await reply(ctx, WORKING_TEXT);
-    deps.store.updateThreadRecord(ctx.threadKey, thread.sessionId, {
-      progressActivityId: working.id || null,
-      lastMessageId: prompt.data.messageId,
-      turnState: "working",
-    });
-    if (working.id) {
-      deps.store.putTurnPlaceholder(
-        ctx.threadKey,
-        thread.sessionId,
-        prompt.data.messageId,
-        working.id
-      );
-    }
-    deps.log.info("follow_up.sent", {
-      trace_id: ctx.traceId,
-      thread_key: ctx.threadKey,
-      session_id: thread.sessionId,
-      message_id: prompt.data.messageId,
-    });
-  }
-
   async function dispatch(ctx: ThreadContext): Promise<void> {
-    // A sender with a fork in this thread talks to it; everyone else to the
-    // thread's own session.
-    const fork = deps.store.getThreadFork(ctx.threadKey, ctx.actor);
-    const thread = fork && !fork.closed ? fork : deps.store.getThreadSession(ctx.threadKey);
+    const thread = conversationFor(deps.store, ctx.threadKey, ctx.actor);
     const text = normalizeTeamsText(ctx.activity);
     const command = parseCommand(text, { inThread: thread !== null });
     switch (command.kind) {
@@ -286,7 +161,17 @@ export function createActivityHandler(deps: ActivityHandlerDeps): ActivityHandle
         return;
       case "prompt":
         if (thread) {
-          await handleFollowUp(ctx, thread, command);
+          await followUp(launchDeps(), {
+            activity: ctx.activity,
+            threadKey: ctx.threadKey,
+            address: ctx.address,
+            rootActivityId: ctx.rootActivityId,
+            actor: ctx.actor,
+            conversation: thread,
+            content: formatQuotedReplyContext(teamsQuotedReplyContext(ctx.activity)) + command.text,
+            options: command.options,
+            traceId: ctx.traceId,
+          });
           return;
         }
         await launchSession(launchDeps(), {

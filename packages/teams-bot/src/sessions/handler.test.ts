@@ -307,7 +307,7 @@ describe("POST /api/messages", () => {
         replyToId: ROOT_ID,
       },
     ]);
-    expect(h.store.getThreadSession(THREAD_KEY)).toBeNull();
+    expect(h.store.getMainConversation(THREAD_KEY)).toBeNull();
   });
 
   it("says so when the binding lookup is unavailable", async () => {
@@ -327,7 +327,7 @@ describe("POST /api/messages", () => {
       "POST /sessions",
     ]);
     expect(h.replies().map((reply) => reply.text)).toEqual([signInMessage(WEB_APP_URL)]);
-    expect(h.store.getThreadSession(THREAD_KEY)).toBeNull();
+    expect(h.store.getMainConversation(THREAD_KEY)).toBeNull();
   });
 
   it("creates a session and sends the prompt with the right body and actor header", async () => {
@@ -380,7 +380,7 @@ describe("POST /api/messages", () => {
         replyToId: ROOT_ID,
       },
     ]);
-    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+    expect(h.store.getMainConversation(THREAD_KEY)).toMatchObject({
       sessionId: "session-1",
       teamId: "team-platform",
       repoFullName: "ProvidenceIT/playground",
@@ -495,7 +495,7 @@ describe("POST /api/messages", () => {
     });
     await quota.post(activityFixture());
     expect(quota.replies().map((reply) => reply.text)).toEqual(["Daily turn quota reached (1/1)."]);
-    expect(quota.store.getThreadSession(THREAD_KEY)).toBeNull();
+    expect(quota.store.getMainConversation(THREAD_KEY)).toBeNull();
 
     const denied = harness({
       [`GET /channel-bindings/msteams/${CHANNEL_ID}`]: boundChannel,
@@ -531,7 +531,7 @@ describe("POST /api/messages", () => {
       WORKING_TEXT,
       "Prompt queue is full (5 pending). Wait for the current turn to finish.",
     ]);
-    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+    expect(h.store.getMainConversation(THREAD_KEY)).toMatchObject({
       lastMessageId: "message-1",
       closed: false,
     });
@@ -588,7 +588,7 @@ describe("POST /api/messages", () => {
         model: "zai-coding-plan/glm-5.3",
       },
     });
-    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+    expect(h.store.getMainConversation(THREAD_KEY)).toMatchObject({
       model: "zai-coding-plan/glm-5.3",
       reasoningEffort: null,
     });
@@ -615,7 +615,7 @@ describe("POST /api/messages", () => {
       model: "anthropic/claude-haiku-4-5",
       callbackContext: { model: "anthropic/claude-haiku-4-5" },
     });
-    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+    expect(h.store.getMainConversation(THREAD_KEY)).toMatchObject({
       model: "anthropic/claude-haiku-4-5",
     });
   });
@@ -675,7 +675,7 @@ describe("POST /api/messages", () => {
       model: "anthropic/claude-opus-4-6",
       reasoningEffort: "low",
     });
-    expect(plain.store.getThreadSession(THREAD_KEY)).toMatchObject({
+    expect(plain.store.getMainConversation(THREAD_KEY)).toMatchObject({
       model: "anthropic/claude-opus-4-6",
       reasoningEffort: "low",
     });
@@ -752,7 +752,7 @@ describe("POST /api/messages", () => {
         replyToId: ROOT_ID,
       },
     ]);
-    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+    expect(h.store.getMainConversation(THREAD_KEY)).toMatchObject({
       sessionId: "session-1",
       lastMessageId: "message-1",
       progressActivityId: "reply-2",
@@ -771,7 +771,8 @@ describe("POST /api/messages", () => {
         return promptQueued(request);
       },
     });
-    h.store.putThreadSession({
+    h.store.putConversation({
+      forkActor: null,
       threadKey: THREAD_KEY,
       sessionId: "session-1",
       actor: `microsoft:${USER_OID}`,
@@ -793,7 +794,7 @@ describe("POST /api/messages", () => {
       })
     );
     expect(h.replies().map((reply) => reply.text)).toEqual([SESSION_NOT_ACCESSIBLE_MESSAGE]);
-    expect(h.store.getThreadSession(THREAD_KEY)?.closed).toBe(false);
+    expect(h.store.getMainConversation(THREAD_KEY)?.closed).toBe(false);
 
     await h.post(
       activityFixture({ id: "3", replyToId: ROOT_ID, text: "<at>Open-Inspect</at> continue" })
@@ -809,7 +810,7 @@ describe("POST /api/messages", () => {
       SESSION_NOT_ACCESSIBLE_MESSAGE,
       WORKING_TEXT,
     ]);
-    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+    expect(h.store.getMainConversation(THREAD_KEY)).toMatchObject({
       closed: false,
       lastMessageId: "message-1",
       turnState: "working",
@@ -836,7 +837,8 @@ describe("POST /api/messages", () => {
       "POST /sessions": () => json({ sessionId: "session-2", status: "created" }),
       "POST /sessions/session-2/prompt": promptQueued,
     });
-    h.store.putThreadSession({
+    h.store.putConversation({
+      forkActor: null,
       threadKey: THREAD_KEY,
       sessionId: "session-1",
       actor: `microsoft:${USER_OID}`,
@@ -872,11 +874,11 @@ describe("POST /api/messages", () => {
     expect(texts).not.toContain(SESSION_NOT_ACCESSIBLE_MESSAGE);
     expect(texts).toEqual([WORKING_TEXT]);
     // The thread keeps its own session for its owner; the fork is the colleague's.
-    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+    expect(h.store.getMainConversation(THREAD_KEY)).toMatchObject({
       sessionId: "session-1",
       actor: `microsoft:${USER_OID}`,
     });
-    expect(h.store.getThreadFork(THREAD_KEY, `microsoft:${colleague}`)).toMatchObject({
+    expect(h.store.getFork(THREAD_KEY, `microsoft:${colleague}`)).toMatchObject({
       sessionId: "session-2",
     });
 
@@ -922,7 +924,8 @@ describe("POST /api/messages", () => {
       "POST /sessions/session-1/prompt": refused,
       "POST /sessions": refused,
     });
-    h.store.putThreadSession({
+    h.store.putConversation({
+      forkActor: null,
       threadKey: THREAD_KEY,
       sessionId: "session-1",
       actor: `microsoft:${USER_OID}`,
@@ -943,7 +946,7 @@ describe("POST /api/messages", () => {
       })
     );
     expect(h.replies().map((reply) => reply.text)).toEqual([refusal]);
-    expect(h.store.getThreadSession(THREAD_KEY)?.sessionId).toBe("session-1");
+    expect(h.store.getMainConversation(THREAD_KEY)?.sessionId).toBe("session-1");
   });
 
   it("attributes a mention in a 19: thread to its sender, never the thread's starter", async () => {
@@ -968,7 +971,8 @@ describe("POST /api/messages", () => {
       "POST /sessions": sessionCreated,
       "POST /sessions/session-1/prompt": () => json({ error: "Session not found" }, 404),
     });
-    h.store.putThreadSession({
+    h.store.putConversation({
+      forkActor: null,
       threadKey: THREAD_KEY,
       sessionId: "session-1",
       actor: `microsoft:${USER_OID}`,
@@ -987,7 +991,7 @@ describe("POST /api/messages", () => {
     });
     await h.post(followUp);
     expect(h.replies().map((reply) => reply.text)).toEqual([THREAD_CLOSED_MESSAGE]);
-    expect(h.store.getThreadSession(THREAD_KEY)?.closed).toBe(true);
+    expect(h.store.getMainConversation(THREAD_KEY)?.closed).toBe(true);
     await h.post(
       activityFixture({ id: "3", replyToId: ROOT_ID, text: "<at>Open-Inspect</at> again" })
     );
@@ -1014,7 +1018,7 @@ describe("POST /api/messages", () => {
       `microsoft:${USER_OID}`
     );
     expect(h.replies().map((reply) => reply.text)).toEqual([WORKING_TEXT, STOP_REQUESTED_MESSAGE]);
-    expect(h.store.getThreadSession(THREAD_KEY)?.turnState).toBe("idle");
+    expect(h.store.getMainConversation(THREAD_KEY)?.turnState).toBe("idle");
   });
 
   it("reports status with the web link and the live turn state", async () => {
