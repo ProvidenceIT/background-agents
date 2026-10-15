@@ -17,9 +17,11 @@ from sandbox_runtime.harness.claude_env import (
 from sandbox_runtime.harness.claude_pool import (
     EXHAUSTED_PERCENT,
     FRESH_SECONDS,
+    Window,
     model_window,
     pick_slot,
     pool_slots,
+    rank_pick,
 )
 
 NOW = 1_800_000_000.0
@@ -204,6 +206,66 @@ class TestPick:
         )
         pick = _pick(home)
         assert (pick.slot, pick.reason, pick.percent_remaining) == ("claude-2", "exhausted", 0)
+
+
+class TestRankPick:
+    """The ranking core the Codex pool shares (``account_windows=None``: any window id)."""
+
+    def test_any_window_ranks_when_no_account_windows_are_named(self) -> None:
+        readings = {
+            "codex-1": [Window("weekly", 0, NOW + 3600)],
+            "codex-2": [Window("weekly", 88, NOW + 86400)],
+            "codex-3": [Window("weekly", 100, NOW + 86400)],
+        }
+        picks = {
+            rank_pick(
+                ["codex-1", "codex-2", "codex-3"],
+                readings,
+                NOW - 60,
+                account_windows=None,
+                now=NOW,
+                rng=random.Random(seed),
+            )
+            for seed in range(20)
+        }
+        # 88 is more than SPREAD_PERCENT below 100, so only codex-3 is near the best.
+        assert {(p.slot, p.reason) for p in picks if p} == {("codex-3", "ranked")}
+
+    def test_named_account_windows_ignore_a_weekly_only_reading(self) -> None:
+        ranked = rank_pick(
+            ["a"],
+            {"a": [Window("weekly", 50, None)]},
+            NOW,
+            account_windows=("five_hour",),
+            now=NOW,
+            rng=random.Random(0),
+        )
+        assert ranked is not None and ranked.reason == "spread"
+
+    def test_blocked_until_rules_a_slot_out_and_falls_back_to_the_earliest(self) -> None:
+        args = {"account_windows": None, "now": NOW, "rng": random.Random(0)}
+        ranked = rank_pick(["a", "b"], {}, None, blocked_until={"a": NOW + 60}, **args)
+        assert ranked is not None and ranked.slot == "b"
+        ranked = rank_pick(
+            ["a", "b"], {}, None, blocked_until={"a": NOW + 60, "b": NOW + 30}, **args
+        )
+        assert ranked is not None and (ranked.slot, ranked.reason) == ("b", "exhausted")
+        assert rank_pick([], {}, None, **args) is None
+
+    def test_the_module_still_runs_standalone(self, tmp_path: Path) -> None:
+        source = Path(__file__).parents[1] / "src/sandbox_runtime/harness/claude_pool.py"
+        (tmp_path / "standalone_pool.py").write_text(source.read_text())
+        subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                "import sys; sys.path.insert(0, '.'); import standalone_pool",
+            ],
+            cwd=tmp_path,
+            check=True,
+            timeout=30,
+        )
 
 
 def _fake_binary(tmp_path: Path) -> Path:

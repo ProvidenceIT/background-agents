@@ -819,7 +819,7 @@ class AgentBridge:
             if turn.message_cost_usd is not None:
                 message_cost_usd = turn.message_cost_usd
             # Which subscription slot the turn spent; only the Claude harness
-            # on a subscription home knows one.
+            # and the Codex harness on a home with a login pool know one.
             subscription_slot = getattr(harness, "subscription_slot", None)
             if not turn.success:
                 had_error = True

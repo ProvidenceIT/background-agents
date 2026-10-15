@@ -11,6 +11,11 @@ Codex prints one JSON object per line (codex-cli 0.162):
 - ``error {message}``: a transport retry ("Reconnecting... 2/5"), not the end
   of the turn; ``turn.failed`` is.
 
+A failure the subscription pool can act on (a usage limit, a refused login, a
+thread another account made; ``codex_pool.classify_failure``) is translated
+with ``hold=True``: the harness keeps those events back while it decides
+whether another slot runs the turn instead, and releases them otherwise.
+
 The translator keeps per-turn state only. Like the Claude translator, a
 ``token`` event carries the turn's whole text so far, and a tool call is
 reported ``running`` when its item starts and ``completed``/``error`` when it
@@ -26,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 from .base import BridgeEvent, TurnOutcome
 from .codex_env import RELOGIN_HINT
+from .codex_pool import FailureKind, classify_failure
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -49,15 +55,40 @@ class CodexTurnState:
     texts: dict[str, str] = field(default_factory=dict)
     last_token_content: str | None = None
     terminal: bool = False
+    # Whether this attempt produced anything besides reasoning (a message, a tool call).
+    progress: bool = False
+    # Set when the terminal failure is one the pool can act on.
+    failure_kind: FailureKind | None = None
+    failure_detail: str | None = None
+    # Translated events the harness keeps back while it decides on a failover.
+    held: list[BridgeEvent] = field(default_factory=list)
+    # Retries of one turn: item ids repeat per child, so later attempts prefix theirs.
+    attempt: int = 0
+    relogin_hint: str = RELOGIN_HINT
 
     def turn_text(self) -> str:
         return "\n\n".join(text for text in self.texts.values() if text)
+
+    def reset_for_retry(self) -> None:
+        """Start the turn's next attempt; the message, step and text so far stay."""
+        self.attempt += 1
+        self.thread_id = None
+        self.terminal = False
+        self.progress = False
+        self.failure_kind = None
+        self.failure_detail = None
+        self.held = []
+
+    def item_key(self, item_id: str) -> str:
+        return item_id if self.attempt == 0 else f"a{self.attempt}-{item_id}"
 
 
 @dataclass(frozen=True)
 class CodexTranslation:
     events: list[BridgeEvent]
     outcome: TurnOutcome | None = None
+    # Keep these events back: the failure is one the pool may fail over from.
+    hold: bool = False
 
 
 def parse_event_line(line: str | bytes) -> dict[str, Any] | None:
@@ -73,10 +104,12 @@ def parse_event_line(line: str | bytes) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) and isinstance(parsed.get("type"), str) else None
 
 
-def turn_failure_message(detail: str) -> str:
+def turn_failure_message(detail: str, relogin_hint: str = RELOGIN_HINT) -> str:
     """The user-facing failure, with the re-login hint when Codex was refused."""
-    if any(marker in detail for marker in AUTH_FAILURE_MARKERS):
-        return f"Codex was refused by OpenAI: {detail}. The home's login may have expired: {RELOGIN_HINT}."
+    if any(marker in detail for marker in AUTH_FAILURE_MARKERS) or (
+        classify_failure(detail) is FailureKind.AUTH_REFUSED
+    ):
+        return f"Codex was refused by OpenAI: {detail}. The home's login may have expired: {relogin_hint}."
     return f"Codex turn failed: {detail}"
 
 
@@ -96,10 +129,15 @@ class CodexTranslator:
             item = event.get("item")
             if not isinstance(item, dict):
                 return CodexTranslation([])
+            if item.get("type") not in ("reasoning", "error"):
+                state.progress = True
             return CodexTranslation([*self._step_start(state), *self._item(state, kind, item)])
         if kind == "error":
             message = str(event.get("message") or "Codex reported an error")
-            return CodexTranslation([{"type": "warning", "scope": "provider", "message": message}])
+            return CodexTranslation(
+                [{"type": "warning", "scope": "provider", "message": message}],
+                hold=classify_failure(message) is not FailureKind.OTHER,
+            )
         if kind == "turn.completed":
             state.terminal = True
             finish: BridgeEvent = {
@@ -120,10 +158,15 @@ class CodexTranslator:
                 if isinstance(error, dict)
                 else str(error or "unknown error")
             )
-            message = turn_failure_message(detail)
+            message = turn_failure_message(detail, state.relogin_hint)
+            failure = classify_failure(detail)
+            if failure is not FailureKind.OTHER:
+                state.failure_kind = failure
+                state.failure_detail = detail
             return CodexTranslation(
                 [{"type": "error", "error": message, "messageId": state.message_id}],
                 TurnOutcome.failed(message),
+                hold=failure is not FailureKind.OTHER,
             )
         return CodexTranslation([])
 
@@ -135,7 +178,7 @@ class CodexTranslator:
 
     def _item(self, state: CodexTurnState, kind: str, item: Mapping[str, Any]) -> list[BridgeEvent]:
         item_type = item.get("type")
-        item_id = str(item.get("id") or uuid.uuid4())
+        item_id = state.item_key(str(item.get("id") or uuid.uuid4()))
         completed = kind == "item.completed"
         if item_type == "agent_message":
             text = item.get("text")

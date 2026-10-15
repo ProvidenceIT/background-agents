@@ -4,7 +4,8 @@ The control plane mounts the home at ``$SF_AUTH_HOME`` and lists the
 providers it carries in ``$SF_AUTH_HOME_PROVIDERS``. The boot report states
 whether the mount is there, those providers, and when the Claude token
 expires (``claude/expires_at``, written next to the token when it is minted).
-It never opens the token or reports any other file.
+For a Codex login pool it adds slot counts and names (never a login). It never
+opens a token or reports any other file.
 """
 
 from __future__ import annotations
@@ -17,14 +18,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .boot_events import REDACTED_VALUE
-from .harness import claude_pool
+from .harness import claude_pool, codex_pool
 from .harness.claude_env import (
     AUTH_HOME_CLAUDE_EXPIRES_AT,
     AUTH_HOME_CLAUDE_TOKEN,
     AUTH_HOME_ENV_VAR,
     AUTH_HOME_PROVIDERS_ENV_VAR,
 )
-from .harness.codex_env import AUTH_HOME_CODEX_AUTH
+from .harness.codex_env import AUTH_HOME_CODEX_AUTH, AUTH_HOME_CODEX_DIR
+from .harness.codex_pool import LinkState
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -56,27 +58,54 @@ def auth_home_boot_report(environ: Mapping[str, str] = os.environ) -> dict[str, 
         known = [(ms, value) for value in expiries if (ms := _expiry_ms(value)) is not None]
         report["claude_pool_slots"] = len(slots)
         report["claude_expires_at"] = min(known)[1] if known else None
+    report.update(_codex_pool_report(root))
     return report
+
+
+def _codex_pool_report(root: Path) -> dict[str, Any]:
+    """Slot count, blocked or unusable slots by reason, headroom age, and a legacy login in the way.
+
+    Empty without a pool. Stats and the pool's own state files only: no login is opened.
+    """
+    pool = codex_pool.pool_root(root)
+    slots = codex_pool.pool_slots(pool)
+    # A slot whose login is missing or empty is reported too (by name), so the
+    # owner sees it needs re-enrolment even when no slot is usable.
+    if not slots and not codex_pool.unusable_slots(pool):
+        return {}
+    link = codex_pool.link_state(root / AUTH_HOME_CODEX_DIR, pool)
+    return {
+        "codex_pool_slots": len(slots),
+        "codex_pool_blocked": codex_pool.block_reasons(pool),
+        "codex_pool_headroom_age_s": codex_pool.headroom_age_seconds(pool),
+        "codex_pool_legacy_file": link in (LinkState.LEGACY_FILE, LinkState.FOREIGN_LINK),
+    }
 
 
 # A pool slot's files, under claude/pool/<slot>/ (see harness/claude_pool.py).
 _POOL_TOKEN = "oauth-token"
 _POOL_EXPIRES_AT = "expires_at"
+# The Claude pool, and the Codex login pool beside codex/ (harness/codex_pool.py).
+_CLAUDE_POOL = Path("claude") / claude_pool.POOL_DIR
+_CODEX_POOL = Path(codex_pool.POOL_DIR)
 
 
-def _pool_slot_dirs(root: Path) -> list[Path]:
-    """The pool slots with a non-empty token file, by directory; empty without a pool.
+def _pool_slot_dirs(
+    root: Path, pool: Path = _CLAUDE_POOL, credential: str = _POOL_TOKEN
+) -> list[Path]:
+    """The slots of ``root/pool`` with a non-empty ``credential`` file, by directory.
 
-    Sizes only: the report and the redactor's listing never open a token here.
+    Empty without a pool. Sizes only: the report and the redactor's listing
+    never open a token here.
     """
     try:
-        entries = sorted((root / "claude" / claude_pool.POOL_DIR).iterdir())
+        entries = sorted((root / pool).iterdir())
     except OSError:
         return []
     slots = []
     for entry in entries:
         try:
-            if (entry / _POOL_TOKEN).stat().st_size > 0:
+            if (entry / credential).stat().st_size > 0:
                 slots.append(entry)
         except OSError:
             continue
@@ -121,8 +150,8 @@ class AuthHomeSecretRedactor:
     $SF_AUTH_HOME/...``). Tool output becomes session events the control
     plane stores, so every outbound event is scrubbed of the values the home
     holds now: the Claude token, the ``env`` file's values and every string
-    in Codex's ``auth.json``, plus anything shaped like a Claude token. The
-    files are re-read only when they change.
+    in Codex's ``auth.json`` and in every Codex pool slot's, plus anything
+    shaped like a Claude token. The files are re-read only when they change.
     """
 
     def __init__(self, home: Path) -> None:
@@ -144,6 +173,9 @@ class AuthHomeSecretRedactor:
             values.update(self._read(relative, _token_values))
         values.update(self._read(_AUTH_HOME_ENV_FILE, _env_values))
         values.update(self._read(AUTH_HOME_CODEX_AUTH, _json_string_values))
+        for slot in _pool_slot_dirs(self._home, _CODEX_POOL, codex_pool.AUTH_FILE):
+            relative = str(slot.relative_to(self._home) / codex_pool.AUTH_FILE)
+            values.update(self._read(relative, _json_string_values))
         return tuple(sorted(values, key=len, reverse=True))
 
     def redact(self, event: dict[str, Any]) -> dict[str, Any]:

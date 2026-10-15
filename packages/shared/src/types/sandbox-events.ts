@@ -205,8 +205,8 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     /** Final cumulative reported cost of the turn. */
     messageCostUsd: z.number().nonnegative().optional(),
     /**
-     * The subscription-home slot the turn spent (`claude-3`, or `default` for a
-     * home with one token). A slot name only, never an account identity.
+     * The subscription-home slot the turn spent (`claude-3`, `codex-2`, or `default`
+     * for a Claude home with one token). A slot name only, never an account identity.
      */
     subscriptionSlot: subscriptionSlotSchema.optional(),
   }),

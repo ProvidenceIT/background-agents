@@ -52,8 +52,9 @@ export const sessionSubscriptionSchema = z.strictObject({
   accountDisplayName: z.string().nullable(),
   /**
    * The home slots the session's turns spent, most recently used first. Only a
-   * Claude home reports them; empty for every other entry and for turns that
-   * settled before the sandbox reported slots.
+   * Claude home (claude/pool) and a Codex home with a login pool (codex-pool) report
+   * them; empty for every other entry and for turns that settled before the sandbox
+   * reported slots.
    */
   slots: z.array(sessionSubscriptionSlotSchema).max(MAX_SESSION_SUBSCRIPTION_SLOTS),
 });

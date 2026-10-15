@@ -98,3 +98,38 @@ async def test_the_forwarder_sends_and_buffers_only_redacted_events(tmp_path: Pa
     assert sent[0]["output"] == "env says ***"
     # A critical event keeps its ack id through redaction.
     assert sent[1]["ackId"]
+
+
+def _codex_pool_home(tmp_path: Path) -> Path:
+    """A Codex claim as a pool pod mounts it: codex/ plus codex-pool/<slot>/auth.json."""
+    home = tmp_path / "sf-auth-codex"
+    (home / "codex").mkdir(parents=True)
+    for slot in ("codex-1", "codex-2"):
+        (home / "codex-pool" / slot).mkdir(parents=True)
+        (home / "codex-pool" / slot / "auth.json").write_text(
+            json.dumps({"tokens": {"refresh_token": f"{slot}-placeholder-refresh-token"}})
+        )
+    (home / "codex" / "auth.json").symlink_to("../codex-pool/codex-1/auth.json")
+    return home
+
+
+def test_redacts_every_codex_pool_login_and_follows_a_re_enrolment(tmp_path: Path):
+    home = _codex_pool_home(tmp_path)
+    redactor = AuthHomeSecretRedactor(home)
+
+    redacted = redactor.redact(
+        _tool_result("codex-1-placeholder-refresh-token codex-2-placeholder-refresh-token")
+    )
+    assert redacted["output"] == "*** ***"
+
+    (home / "codex-pool" / "codex-2" / "auth.json").write_text(
+        json.dumps({"tokens": {"refresh_token": "codex-2-re-enrolled-refresh-token"}})
+    )
+    (home / "codex-pool" / "codex-3").mkdir()
+    (home / "codex-pool" / "codex-3" / "auth.json").write_text(
+        json.dumps({"tokens": {"access_token": "codex-3-late-access-token"}})
+    )
+    redacted = redactor.redact(
+        _tool_result("codex-2-re-enrolled-refresh-token codex-3-late-access-token")
+    )
+    assert redacted["output"] == "*** ***"

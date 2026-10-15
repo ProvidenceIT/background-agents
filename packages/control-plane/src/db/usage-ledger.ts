@@ -107,8 +107,18 @@ export class UsageLedgerStore {
     return { turns: totals.turns, tokens: totals.tokens, costUsd: totals.cost_usd };
   }
 
-  /** The subscription-home slots a session's settled turns spent, most recent first. */
-  async slotsForSession(sessionId: string): Promise<SessionSubscriptionSlot[]> {
+  /**
+   * The subscription-home slots a session's settled turns spent, most recent first.
+   * `harness.only` keeps the turns of one harness, `harness.except` drops them (turns
+   * with no recorded harness are kept by `except`), so a Claude and a Codex pool slot
+   * are never listed under each other's provider.
+   */
+  async slotsForSession(
+    sessionId: string,
+    harness: { only?: string; except?: string } = {}
+  ): Promise<SessionSubscriptionSlot[]> {
+    const only = harness.only ?? null;
+    const except = harness.except ?? null;
     const { results } = await this.db
       .prepare(
         `SELECT subscription_slot AS slot, COUNT(*) AS turns,
@@ -116,11 +126,13 @@ export class UsageLedgerStore {
            MAX(settled_at) AS last_used_at
          FROM usage_ledger
          WHERE session_id = ? AND subscription_slot IS NOT NULL
+           AND (? IS NULL OR harness = ?)
+           AND (? IS NULL OR harness IS NULL OR harness <> ?)
          GROUP BY subscription_slot
          ORDER BY last_used_at DESC, slot
          LIMIT ?`
       )
-      .bind(sessionId, MAX_SESSION_SUBSCRIPTION_SLOTS)
+      .bind(sessionId, only, only, except, except, MAX_SESSION_SUBSCRIPTION_SLOTS)
       .all();
     return results.map((raw) => {
       const row = slotRowSchema.parse(raw);

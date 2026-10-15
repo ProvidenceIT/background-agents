@@ -1,3 +1,4 @@
+# ruff: noqa: RUF001  (Codex writes its messages with U+2019 apostrophes)
 """CodexHarness against a fake ``codex`` executable.
 
 The fake replays a recorded ``codex exec --json`` transcript (or a scripted
@@ -11,8 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
+import signal
 import stat
 import sys
 import tomllib
@@ -32,6 +35,7 @@ from sandbox_runtime.harness.codex import (
     rollout_exists,
 )
 from sandbox_runtime.harness.codex_env import codex_child_env, codex_home_path
+from sandbox_runtime.harness.codex_pool import FailureKind
 from sandbox_runtime.harness.codex_tools import (
     read_tool_config,
     tool_server_overrides,
@@ -491,6 +495,59 @@ class TestTranslator:
         assert parse_event_line('{"no_type": 1}') is None
         assert parse_event_line('{"type":"turn.started"}') == {"type": "turn.started"}
 
+    def test_a_usage_limit_is_held_and_classified(self):
+        translator = CodexTranslator()
+        state = CodexTurnState(message_id="m")
+        warning = translator.translate(state, {"type": "error", "message": USAGE_TEXT})
+        failed = translator.translate(
+            state, {"type": "turn.failed", "error": {"message": USAGE_TEXT}}
+        )
+        assert warning.hold and failed.hold
+        assert failed.outcome is not None and not failed.outcome.success
+        assert state.failure_kind is FailureKind.USAGE_LIMIT
+        assert state.failure_detail == USAGE_TEXT
+
+    def test_other_failures_and_retries_are_not_held(self):
+        translator = CodexTranslator()
+        state = CodexTurnState(message_id="m")
+        retry = translator.translate(state, {"type": "error", "message": "Reconnecting... 1/5"})
+        failed = translator.translate(
+            state, {"type": "turn.failed", "error": {"message": "stream disconnected"}}
+        )
+        assert not retry.hold and not failed.hold
+        assert state.failure_kind is None
+
+    def test_a_refusal_carries_the_slot_hint(self):
+        state = CodexTurnState(message_id="m", relogin_hint="re-enrol codex-2")
+        failed = CodexTranslator().translate(
+            state, {"type": "turn.failed", "error": {"message": REFUSED_TEXT}}
+        )
+        assert failed.hold and state.failure_kind is FailureKind.AUTH_REFUSED
+        assert failed.outcome is not None and "re-enrol codex-2" in (failed.outcome.error or "")
+
+    def test_progress_starts_with_the_first_item_that_is_not_reasoning(self):
+        state, _ = self.turn(
+            {"type": "item.completed", "item": {"id": "r", "type": "reasoning", "text": "hm"}}
+        )
+        assert not state.progress
+        state, _ = self.turn(
+            {"type": "item.started", "item": {"id": "c", "type": "command_execution"}}
+        )
+        assert state.progress
+
+    def test_a_retry_keeps_the_step_and_text_but_not_the_item_ids(self):
+        translator = CodexTranslator()
+        state = CodexTurnState(message_id="m")
+        message = {"type": "item.completed", "item": {"id": "item_0", "type": "agent_message"}}
+        first = translator.translate(state, {**message, "item": {**message["item"], "text": "A"}})
+        step_id = state.step_id
+        state.reset_for_retry()
+        second = translator.translate(state, {**message, "item": {**message["item"], "text": "B"}})
+        assert state.step_id == step_id
+        assert [e["content"] for e in first.events if e["type"] == "token"] == ["A"]
+        assert [e["content"] for e in second.events if e["type"] == "token"] == ["A\n\nB"]
+        assert (state.progress, state.failure_kind, state.held) == (True, None, [])
+
     def test_usage_without_counts_is_dropped(self):
         assert usage_tokens({}) is None
         assert usage_tokens({"output_tokens": 3}) == {"output": 3}
@@ -524,3 +581,669 @@ class TestToolServer:
             str(tmp_path / "oi.json"),
         ]
         assert Path(server["env"]["PYTHONPATH"], "sandbox_runtime", "harness").is_dir()
+
+
+# --- the login pool (harness/codex_pool.py) ----------------------------------
+
+FAILED_THREAD = "0199a213-0000-7000-8000-00000000fa11"
+USAGE_TEXT = (
+    "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase "
+    "more credits or try again at Oct 20th, 2026 5:11 AM."
+)
+REFUSED_TEXT = (
+    "Your access token could not be refreshed because your refresh token was already used. "
+    "Please log out and sign in again."
+)
+
+# Behaves as the slot's login says: the fake auth.json names a mode, never a token.
+FAKE_POOL_CODEX = """#!{python}
+import json, os, sys, time
+home = os.environ["CODEX_HOME"]
+try:
+    with open(os.path.join(home, "auth.json")) as handle:
+        auth = json.load(handle)
+except (OSError, ValueError):
+    auth = {{}}
+mode, slot = auth.get("mode", "ok"), auth.get("slot")
+new_thread = auth.get("thread")
+argv = sys.argv[1:]
+resume = argv[argv.index("resume") + 1] if "resume" in argv else None
+with open(os.environ["FAKE_CODEX_RECORD"], "a") as handle:
+    handle.write(json.dumps({{
+        "argv": argv,
+        "env": {{k: v for k, v in os.environ.items() if not k.startswith("FAKE_")}},
+        "stdin": sys.stdin.read(),
+        "slot": slot,
+        "mode": mode,
+        "pid": os.getpid(),
+    }}) + "\\n")
+
+def out(event):
+    sys.stdout.write(json.dumps(event) + "\\n")
+    sys.stdout.flush()
+
+def fail(text):
+    out({{"type": "error", "message": text}})
+    out({{"type": "turn.failed", "error": {{"message": text}}}})
+    sys.exit(1)
+
+if mode == "stderr_usage":
+    sys.stderr.write({usage!r} + "\\n")
+    sys.exit(1)
+FOREIGN = "invalid_encrypted_content: The encrypted content could not be verified."
+TOOL = {{"id": "item_1", "type": "command_execution", "command": "touch a", "exit_code": 0,
+        "aggregated_output": "", "status": "completed"}}
+RESUME_FOREIGN = ("foreign", "foreign_then_exhausted", "foreign_then_exhaust_after_tool")
+if mode == "foreign_always" or (resume and mode in RESUME_FOREIGN):
+    out({{"type": "thread.started", "thread_id": resume or {failed!r}}})
+    out({{"type": "turn.started"}})
+    fail(FOREIGN)
+if mode == "foreign_after_tool":
+    out({{"type": "thread.started", "thread_id": resume or {failed!r}}})
+    out({{"type": "turn.started"}})
+    out({{"type": "item.completed", "item": TOOL}})
+    fail(FOREIGN)
+if mode == "foreign_then_exhausted":
+    mode = "exhausted"
+if mode == "foreign_then_exhaust_after_tool":
+    mode = "exhaust_after_tool"
+ok = mode in ("ok", "foreign", "slow")
+out({{"type": "thread.started", "thread_id": resume or new_thread or ({thread!r} if ok else {failed!r})}})
+out({{"type": "turn.started"}})
+out({{"type": "item.completed", "item": {{"id": "item_0", "type": "reasoning", "text": "thinking"}}}})
+if mode == "slow":
+    time.sleep(30)
+if mode == "exhausted_slow":
+    time.sleep(1.0)
+    fail({usage!r})
+if mode == "exhausted":
+    fail({usage!r})
+if mode == "refused":
+    fail({refused!r})
+if mode == "exhaust_after_tool":
+    command = {{"id": "item_1", "type": "command_execution", "command": "touch a", "exit_code": 0,
+               "aggregated_output": "", "status": "completed"}}
+    out({{"type": "item.started", "item": dict(command, status="in_progress")}})
+    out({{"type": "item.completed", "item": command}})
+    fail({usage!r})
+out({{"type": "item.completed", "item": {{"id": "item_1", "type": "agent_message", "text": "done on " + str(slot)}}}})
+out({{"type": "turn.completed", "usage": {{"input_tokens": 10, "output_tokens": 2}}}})
+"""
+
+
+class PoolRig(Rig):
+    """A home whose Codex logins are pool slots, each with a scripted behaviour."""
+
+    def __init__(
+        self, tmp_path: Path, modes: dict[str, str], *, percents: dict[str, int] | None = None
+    ):
+        super().__init__(tmp_path, auth=False)
+        self.pool = self.auth_home / "codex-pool"
+        self.pool.mkdir()
+        for slot, mode in modes.items():
+            (self.pool / slot).mkdir(parents=True)
+            self.set_mode(slot, mode)
+        # Fresh headroom that ranks the slots in the order given: 100, 80, 60, ...
+        percents = percents or {slot: 100 - 20 * i for i, slot in enumerate(modes)}
+        self.headroom(percents)
+        self.binary.write_text(
+            FAKE_POOL_CODEX.format(
+                python=sys.executable,
+                usage=USAGE_TEXT,
+                refused=REFUSED_TEXT,
+                thread=THREAD_ID,
+                failed=FAILED_THREAD,
+            )
+        )
+        self.environ["CODEX_ACCESS_TOKEN"] = "placeholder-access-token"
+        self.environ["CODEX_REFRESH_TOKEN_URL_OVERRIDE"] = "https://example.invalid/token"
+        self.harness = self.build()
+
+    def set_mode(self, slot: str, mode: str, *, thread: str | None = None) -> None:
+        login: dict[str, Any] = {"slot": slot, "mode": mode}
+        if thread is not None:
+            login["thread"] = thread  # the id a new thread on this slot gets
+        (self.pool / slot / "auth.json").write_text(json.dumps(login))
+
+    def headroom(self, percents: dict[str, int]) -> None:
+        from datetime import UTC, datetime
+
+        (self.pool / "headroom.json").write_text(
+            json.dumps(
+                {
+                    "capturedAt": datetime.now(UTC).isoformat(),
+                    "slots": {
+                        slot: {"windows": [{"id": "weekly", "percentRemaining": pct}]}
+                        for slot, pct in percents.items()
+                    },
+                }
+            )
+        )
+
+    def link(self) -> str:
+        return str((self.auth_home / "codex" / "auth.json").readlink())
+
+    def state(self) -> dict[str, Any]:
+        return json.loads((self.pool / "state.json").read_text())
+
+    def warnings(self) -> list[str]:
+        return [e["message"] for e in self.events if e["type"] == "warning"]
+
+    def errors(self) -> list[str]:
+        return [e["error"] for e in self.events if e["type"] == "error"]
+
+
+THREE = {"codex-1": "ok", "codex-2": "ok", "codex-3": "ok"}
+
+
+def _configs(argv: list[str]) -> list[dict[str, Any]]:
+    return [tomllib.loads(argv[i + 1]) for i, arg in enumerate(argv) if arg == "--config"]
+
+
+class TestPoolTurn:
+    async def test_a_turn_runs_on_the_ranked_slot_through_the_link(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, THREE)
+        await rig.harness.open()
+
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+
+        assert outcome == TurnOutcome.ok()
+        [run] = rig.runs()
+        assert run["slot"] == "codex-1"
+        assert run["env"]["CODEX_HOME"] == str(rig.auth_home / "codex")
+        assert rig.link() == "../codex-pool/codex-1/auth.json"
+        assert rig.harness.subscription_slot == "codex-1"
+        record = json.loads((rig.tmp_path / "codex-config" / "sf-codex-pool-pick.json").read_text())
+        assert {k: record[k] for k in ("slot", "reason", "percentRemaining", "attempt")} == {
+            "slot": "codex-1",
+            "reason": "ranked",
+            "percentRemaining": 100,
+            "attempt": 0,
+        }
+        assert rig.state()["threads"] == {THREAD_ID: "codex-1"}
+
+    async def test_pool_mode_strips_the_token_env_and_hides_codex_home_from_tools(
+        self, tmp_path: Path
+    ):
+        rig = PoolRig(tmp_path, THREE)
+        await rig.harness.open()
+        await rig.harness.run_prompt(prompt(), rig.emit)
+
+        [run] = rig.runs()
+        for name in (
+            "OPENAI_API_KEY",
+            "CODEX_API_KEY",
+            "CODEX_ACCESS_TOKEN",
+            "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+        ):
+            assert name not in run["env"]
+        assert {"shell_environment_policy": {"exclude": ["CODEX_HOME"]}} in _configs(run["argv"])
+
+    async def test_a_legacy_login_file_keeps_todays_path(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, THREE)
+        (rig.auth_home / "codex" / "auth.json").write_text('{"mode": "ok", "slot": "legacy"}')
+        await rig.harness.open()
+
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+
+        assert outcome == TurnOutcome.ok()
+        [run] = rig.runs()
+        assert run["slot"] == "legacy"
+        assert (rig.auth_home / "codex" / "auth.json").is_file()
+        assert not (rig.auth_home / "codex" / "auth.json").is_symlink()
+        assert rig.harness.subscription_slot is None
+        assert not [c for c in _configs(run["argv"]) if "shell_environment_policy" in c]
+        assert not (rig.pool / "state.json").exists()
+        rig.harness.log.warn.assert_any_call(
+            "codex.pool.legacy_file", link="legacy_file", pool_slots=3
+        )
+
+    async def test_an_empty_pool_without_a_login_names_the_pool(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {})
+        with pytest.raises(HarnessStartError, match="codex-pool/ directory but no slot"):
+            await rig.harness.open()
+
+
+class TestPoolFailover:
+    async def test_a_usage_limit_before_any_output_moves_the_turn_to_the_next_slot(
+        self, tmp_path: Path
+    ):
+        rig = PoolRig(tmp_path, {"codex-1": "exhausted", "codex-2": "ok", "codex-3": "ok"})
+        await rig.harness.open()
+
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+
+        assert outcome == TurnOutcome.ok()
+        first, second = rig.runs()
+        assert (first["slot"], second["slot"]) == ("codex-1", "codex-2")
+        # The failed attempt's new thread is dropped: the retry starts fresh with the prompt.
+        assert "resume" not in second["argv"]
+        assert second["stdin"] == "What is in this repository?"
+        assert rig.warnings() == ["Codex slot codex-1 hit its usage limit; continued on codex-2."]
+        assert rig.errors() == []
+        assert [e["type"] for e in rig.events].count("step_start") == 1
+        assert rig.harness.session_id == THREAD_ID
+        assert rig.harness.subscription_slot == "codex-2"
+        state = rig.state()
+        assert state["slots"]["codex-1"]["exhaustedUntil"] == "2026-10-20T05:11:00Z"
+        assert state["threads"] == {THREAD_ID: "codex-2"}
+        assert rig.link() == "../codex-pool/codex-2/auth.json"
+
+    async def test_a_resumed_thread_resumes_on_the_next_slot(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "exhausted", "codex-2": "ok"})
+        _rollout(rig, THREAD_ID)
+        await rig.harness.open()
+        assert await rig.harness.resume_session(THREAD_ID)
+
+        outcome = await rig.harness.run_prompt(prompt("Next"), rig.emit)
+
+        assert outcome == TurnOutcome.ok()
+        first, second = rig.runs()
+        for run in (first, second):
+            assert run["argv"][run["argv"].index("resume") + 1] == THREAD_ID
+            assert run["stdin"] == "Next"
+        assert second["slot"] == "codex-2"
+
+    async def test_a_usage_limit_after_output_continues_instead_of_replaying(self, tmp_path: Path):
+        from sandbox_runtime.harness.codex_pool import CONTINUE_PROMPT
+
+        rig = PoolRig(tmp_path, {"codex-1": "exhaust_after_tool", "codex-2": "ok"})
+        await rig.harness.open()
+
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+
+        assert outcome == TurnOutcome.ok()
+        _, second = rig.runs()
+        assert second["argv"][second["argv"].index("resume") + 1] == FAILED_THREAD
+        assert second["stdin"] == CONTINUE_PROMPT
+        calls = [e for e in rig.events if e["type"] == "tool_call"]
+        assert [c["status"] for c in calls] == ["running", "completed"]
+        tokens = [e["content"] for e in rig.events if e["type"] == "token"]
+        assert tokens == ["done on codex-2"]
+        assert len({e["stepId"] for e in rig.events if "stepId" in e}) == 1
+
+    async def test_codex_exiting_with_the_limit_on_stderr_fails_over_too(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "stderr_usage", "codex-2": "ok"})
+        await rig.harness.open()
+
+        assert await rig.harness.run_prompt(prompt(), rig.emit) == TurnOutcome.ok()
+        assert [run["slot"] for run in rig.runs()] == ["codex-1", "codex-2"]
+
+    async def test_every_slot_exhausted_ends_with_one_error_naming_the_reset(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, dict.fromkeys(THREE, "exhausted"))
+        await rig.harness.open()
+
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+
+        assert not outcome.success
+        assert outcome.error is not None
+        assert outcome.error.startswith(
+            "Codex turn failed: every Codex subscription slot is at its limit "
+            "(earliest reset 2026-10-20T05:11:00Z): You’ve hit your usage limit."
+        )
+        assert rig.errors() == [outcome.error]
+        assert [run["slot"] for run in rig.runs()] == ["codex-1", "codex-2", "codex-3"]
+        # The limit's own warnings stay held back; only the failovers are announced.
+        assert rig.warnings() == ["Codex slot codex-1 hit its usage limit; continued on codex-2."]
+
+    async def test_the_next_turn_skips_the_exhausted_slot(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "exhausted", "codex-2": "ok"})
+        await rig.harness.open()
+        await rig.harness.run_prompt(prompt(), rig.emit)
+        rig.set_mode("codex-1", "ok")
+
+        await rig.harness.run_prompt(prompt("Again"), rig.emit)
+
+        assert [run["slot"] for run in rig.runs()] == ["codex-1", "codex-2", "codex-2"]
+
+    async def test_a_refused_login_is_marked_named_and_skipped(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "refused", "codex-2": "ok"})
+        await rig.harness.open()
+
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+
+        assert outcome == TurnOutcome.ok()
+        [refusal, failover] = rig.warnings()
+        assert "slot codex-1 was refused" in refusal
+        assert "--codex-slot codex-1" in refusal
+        assert failover == "Codex slot codex-1 was refused by OpenAI; continued on codex-2."
+        assert "authRefused" in rig.state()["slots"]["codex-1"]
+
+    async def test_a_thread_another_account_made_is_rebased_once(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "foreign", "codex-2": "ok"})
+        _rollout(rig, THREAD_ID, "Write the parser")
+        await rig.harness.open()
+        assert await rig.harness.resume_session(THREAD_ID)
+
+        outcome = await rig.harness.run_prompt(prompt("Now the tests"), rig.emit)
+
+        assert outcome == TurnOutcome.ok()
+        first, second = rig.runs()
+        assert first["slot"] == second["slot"] == "codex-1"
+        assert "resume" in first["argv"]
+        assert "resume" not in second["argv"]
+        assert "user: Write the parser" in second["stdin"]
+        assert second["stdin"].endswith("Now the tests")
+        assert any("continues in a new thread" in w for w in rig.warnings())
+        assert rig.errors() == []
+        rig.harness.log.warn.assert_any_call(
+            "codex.pool.rebase", slot="codex-1", agent_session_id=THREAD_ID
+        )
+
+    async def test_an_abort_between_attempts_cancels_the_turn(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "exhausted", "codex-2": "ok"})
+        await rig.harness.open()
+
+        async def emit(event: dict[str, Any]) -> None:
+            rig.events.append(event)
+            if event["type"] == "warning":
+                assert await rig.harness.abort() is True
+
+        outcome = await rig.harness.run_prompt(prompt(), emit)
+
+        assert outcome == TurnOutcome(success=False, error="Task was cancelled", cancelled=True)
+        assert len(rig.runs()) == 1
+        assert await rig.harness.abort() is False
+
+    async def test_the_deadline_is_shared_by_every_attempt(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "exhausted_slow", "codex-2": "slow"})
+        harness = CodexHarness(
+            config=rig.harness.config,
+            log=MagicMock(),
+            limits=PromptLimits(
+                inactivity_timeout_seconds=10.0,
+                prompt_max_duration_seconds=2.0,
+                prompt_cleanup_timeout_seconds=2.0,
+            ),
+            environ=rig.environ,
+        )
+        await harness.open()
+        started = asyncio.get_running_loop().time()
+
+        outcome = await harness.run_prompt(prompt(), rig.emit)
+
+        assert outcome == TurnOutcome.failed("Prompt exceeded max duration of 2s.")
+        assert asyncio.get_running_loop().time() - started < 5
+        assert [run["slot"] for run in rig.runs()] == ["codex-1", "codex-2"]
+        assert not _alive(rig.runs()[1]["pid"])
+
+    async def test_a_child_not_confirmed_gone_pins_the_link(self, tmp_path: Path):
+        """W3: once a child may outlive its turn, the link never moves again."""
+        rig = PoolRig(tmp_path, {"codex-1": "exhausted", "codex-2": "ok"})
+        await rig.harness.open()
+        rig.harness._pool_dirty = True
+        (rig.auth_home / "codex" / "auth.json").symlink_to("../codex-pool/codex-1/auth.json")
+
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+
+        assert not outcome.success
+        assert "hit your usage limit" in (outcome.error or "")
+        assert [run["slot"] for run in rig.runs()] == ["codex-1"]
+        assert rig.link() == "../codex-pool/codex-1/auth.json"
+        # The held failure is released as it would be without a pool.
+        assert rig.errors() == [outcome.error]
+        assert USAGE_TEXT in rig.warnings()
+
+
+REBASED_THREAD = "0199a213-0000-7000-8000-0000000ba5e0"
+
+
+class TestPoolRebaseAndProgress:
+    async def test_a_rebase_that_never_finishes_keeps_the_conversation_thread(self, tmp_path: Path):
+        """Foreign on resume, then every slot exhausted: the next turn still resumes THREAD_ID."""
+        rig = PoolRig(tmp_path, {"codex-1": "foreign_then_exhausted", "codex-2": "exhausted"})
+        _rollout(rig, THREAD_ID, "Write the parser")
+        await rig.harness.open()
+        assert await rig.harness.resume_session(THREAD_ID)
+
+        outcome = await rig.harness.run_prompt(prompt("Now the tests"), rig.emit)
+
+        assert not outcome.success
+        assert "every Codex subscription slot is at its limit" in (outcome.error or "")
+        runs = rig.runs()
+        assert [(r["slot"], "resume" in r["argv"]) for r in runs] == [
+            ("codex-1", True),
+            ("codex-1", False),
+            ("codex-2", False),
+        ]
+        assert rig.harness.session_id == THREAD_ID
+        argv = rig.harness.build_argv("gpt-6-sol", None, [])
+        assert argv[argv.index("resume") + 1] == THREAD_ID
+        # The thread is not tied to the slot it could not be resumed on.
+        assert THREAD_ID not in rig.state()["threads"]
+        rig.harness.log.info.assert_any_call(
+            "codex.pool.rebase_dropped", agent_session_id=THREAD_ID, dropped=None
+        )
+
+    async def test_a_rebase_then_a_usage_limit_moves_the_handoff_to_the_next_slot(
+        self, tmp_path: Path
+    ):
+        rig = PoolRig(tmp_path, {"codex-1": "foreign_then_exhausted", "codex-2": "ok"})
+        rig.set_mode("codex-2", "ok", thread=REBASED_THREAD)
+        _rollout(rig, THREAD_ID, "Write the parser")
+        await rig.harness.open()
+        assert await rig.harness.resume_session(THREAD_ID)
+
+        outcome = await rig.harness.run_prompt(prompt("Now the tests"), rig.emit)
+
+        assert outcome == TurnOutcome.ok()
+        first, second, third = rig.runs()
+        assert [r["slot"] for r in (first, second, third)] == ["codex-1", "codex-1", "codex-2"]
+        assert "resume" not in third["argv"]
+        assert "user: Write the parser" in third["stdin"]
+        assert third["stdin"].endswith("Now the tests")
+        assert "exhaustedUntil" in rig.state()["slots"]["codex-1"]
+        assert rig.harness.session_id == REBASED_THREAD
+        assert rig.state()["threads"][REBASED_THREAD] == "codex-2"
+        assert sum("continues in a new thread" in w for w in rig.warnings()) == 1
+
+    async def test_a_turn_rebases_at_most_once(self, tmp_path: Path):
+        """Progress, limit, rebase, progress, limit: the cross-account resume is not rebased again."""
+        from sandbox_runtime.harness.codex_pool import CONTINUE_PROMPT
+
+        rig = PoolRig(
+            tmp_path,
+            {
+                "codex-1": "exhaust_after_tool",
+                "codex-2": "foreign_then_exhaust_after_tool",
+                "codex-3": "foreign",
+            },
+        )
+        rig.set_mode("codex-2", "foreign_then_exhaust_after_tool", thread=REBASED_THREAD)
+        await rig.harness.open()
+
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+
+        assert not outcome.success
+        assert "invalid_encrypted_content" in (outcome.error or "")
+        runs = rig.runs()
+        resumed = [
+            r["argv"][r["argv"].index("resume") + 1] if "resume" in r["argv"] else None
+            for r in runs
+        ]
+        assert [r["slot"] for r in runs] == ["codex-1", "codex-2", "codex-2", "codex-3"]
+        assert resumed == [None, FAILED_THREAD, None, REBASED_THREAD]
+        assert runs[1]["stdin"] == CONTINUE_PROMPT
+        assert runs[3]["stdin"] == CONTINUE_PROMPT
+        assert sum("continues in a new thread" in w for w in rig.warnings()) == 1
+        # The rebased thread carries the work: it stays the conversation's thread.
+        assert rig.harness.session_id == REBASED_THREAD
+
+    async def test_a_fresh_thread_after_a_rebase_reruns_its_handoff_not_continue(
+        self, tmp_path: Path
+    ):
+        """Turn-wide progress must not make a later fresh thread resume with CONTINUE_PROMPT."""
+        from sandbox_runtime.harness.codex_pool import CONTINUE_PROMPT
+
+        rig = PoolRig(
+            tmp_path,
+            {"codex-1": "exhaust_after_tool", "codex-2": "foreign_then_exhausted", "codex-3": "ok"},
+        )
+        rig.set_mode("codex-2", "foreign_then_exhausted", thread=REBASED_THREAD)
+        await rig.harness.open()
+
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+
+        assert outcome == TurnOutcome.ok()
+        runs = rig.runs()
+        assert [r["slot"] for r in runs] == ["codex-1", "codex-2", "codex-2", "codex-3"]
+        last = runs[3]
+        assert "resume" not in last["argv"]
+        assert last["stdin"].startswith("[This conversation continues")
+        assert last["stdin"].endswith(CONTINUE_PROMPT)
+
+    async def test_a_foreign_thread_on_a_new_thread_is_released_not_rebased(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "foreign_always", "codex-2": "ok"})
+        await rig.harness.open()
+
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+
+        assert not outcome.success
+        assert len(rig.runs()) == 1
+        assert rig.errors() == [outcome.error]
+        assert not any("continues in a new thread" in w for w in rig.warnings())
+
+    async def test_a_foreign_thread_after_progress_is_released_not_rebased(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "foreign_after_tool", "codex-2": "ok"})
+        _rollout(rig, THREAD_ID)
+        await rig.harness.open()
+        assert await rig.harness.resume_session(THREAD_ID)
+
+        outcome = await rig.harness.run_prompt(prompt("Next"), rig.emit)
+
+        assert not outcome.success
+        assert len(rig.runs()) == 1
+        assert rig.errors() == [outcome.error]
+        assert not any("continues in a new thread" in w for w in rig.warnings())
+        assert rig.harness.session_id == THREAD_ID
+
+
+class TestPoolThreadMemory:
+    async def test_a_cancelled_failover_remembers_the_slot_that_ran_last(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "exhausted", "codex-2": "slow"})
+        _rollout(rig, THREAD_ID)
+        await rig.harness.open()
+        assert await rig.harness.resume_session(THREAD_ID)
+
+        task = asyncio.create_task(rig.harness.run_prompt(prompt("Next"), rig.emit))
+        await _wait_for(lambda: len(_runs_or_empty(rig)) == 2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert rig.state()["threads"][THREAD_ID] == "codex-2"
+
+    async def test_a_timed_out_turn_remembers_its_slot(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "slow", "codex-2": "ok"})
+        harness = CodexHarness(
+            config=rig.harness.config,
+            log=MagicMock(),
+            limits=PromptLimits(
+                inactivity_timeout_seconds=10.0,
+                prompt_max_duration_seconds=1.0,
+                prompt_cleanup_timeout_seconds=2.0,
+            ),
+            environ=rig.environ,
+        )
+        await harness.open()
+
+        outcome = await harness.run_prompt(prompt(), rig.emit)
+
+        assert outcome == TurnOutcome.failed("Prompt exceeded max duration of 1s.")
+        assert rig.state()["threads"] == {THREAD_ID: "codex-1"}
+
+
+class TestPoolChildGuard:
+    async def test_a_child_that_outlives_its_turn_pins_the_link_across_a_bridge_restart(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """W3: a child the harness could not confirm gone keeps the link, in this bridge and the next."""
+        rig = PoolRig(tmp_path, {"codex-1": "slow", "codex-2": "ok"})
+        await rig.harness.open()
+        # The signals never arrive: the child survives the cancel.
+        monkeypatch.setattr("sandbox_runtime.harness.codex.os.killpg", lambda pid, sig: None)
+        task = asyncio.create_task(rig.harness.run_prompt(prompt(), rig.emit))
+        await _wait_for(lambda: len(_runs_or_empty(rig)) == 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        pid = rig.runs()[0]["pid"]
+        try:
+            assert _alive(pid)
+            rig.harness.log.warn.assert_any_call(
+                "codex.pool.dirty", reason="child_not_confirmed_gone", slot="codex-1"
+            )
+            rig.set_mode("codex-1", "exhausted")
+
+            # The same bridge: pinned to codex-1, no failover to codex-2.
+            outcome = await rig.harness.run_prompt(prompt("Again"), rig.emit)
+            assert not outcome.success
+            assert rig.link() == "../codex-pool/codex-1/auth.json"
+
+            # A restarted bridge (new harness, same sandbox) finds the child and stays pinned.
+            restarted = rig.build()
+            await restarted.open()
+            restarted.log.warn.assert_any_call(
+                "codex.pool.dirty", reason="earlier_child_alive", slot=None
+            )
+            outcome = await restarted.run_prompt(prompt("Once more"), rig.emit)
+            assert not outcome.success
+            assert [r["slot"] for r in rig.runs()] == ["codex-1", "codex-1", "codex-1"]
+            assert rig.link() == "../codex-pool/codex-1/auth.json"
+        finally:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+
+        # Once that child is gone, a new bridge switches freely again.
+        await _wait_for(lambda: not _alive(pid))
+        fresh = rig.build()
+        await fresh.open()
+        assert await fresh.run_prompt(prompt("Later"), rig.emit) == TurnOutcome.ok()
+        assert rig.runs()[-1]["slot"] == "codex-2"
+
+    async def test_a_child_that_exited_leaves_no_record(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, THREE)
+        await rig.harness.open()
+        await rig.harness.run_prompt(prompt(), rig.emit)
+        assert not (rig.tmp_path / "codex-config" / "sf-codex-child.json").exists()
+
+    async def test_an_unusable_slot_is_named_at_open(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, THREE)
+        (rig.pool / "codex-4").mkdir()
+        (rig.pool / "codex-4" / "auth.json").write_text("")
+        await rig.harness.open()
+        rig.harness.log.warn.assert_any_call(
+            "codex.pool.slot_unusable", slot="codex-4", reason="empty_login"
+        )
+
+
+def _runs_or_empty(rig: Rig) -> list[dict[str, Any]]:
+    return rig.runs() if rig.record.exists() else []
+
+
+async def _wait_for(condition, timeout_seconds: float = 10.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while not condition():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not met in time")
+        await asyncio.sleep(0.05)
+
+
+def _rollout(rig: Rig, thread_id: str, text: str = "Earlier request") -> Path:
+    directory = rig.auth_home / "codex" / "sessions" / "2026" / "10" / "14"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"rollout-2026-10-14T09-00-00-{thread_id}.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                },
+            }
+        )
+        + "\n"
+    )
+    return path
