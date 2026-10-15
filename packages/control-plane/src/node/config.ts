@@ -200,6 +200,7 @@ export const NODE_HOST_VARIABLE_NAMES = [
   "SHUTDOWN_TIMEOUT_MS",
   "AUDIT_EXPORT_STDOUT",
   "AUDIT_EXPORT_FILE",
+  "SANDBOX_GATEWAY_PORT",
 ] as const;
 
 /** The global store's file name under `DATA_DIR` (the tables D1 holds on Cloudflare). */
@@ -221,6 +222,8 @@ export interface NodeHostSettings {
   auditExportStdout: boolean;
   /** `AUDIT_EXPORT_FILE`: append every committed audit event to this file, one JSON line each. */
   auditExportFile: string | undefined;
+  /** `SANDBOX_GATEWAY_PORT`: where the workspace tools gateway listens; none when unset. */
+  gatewayPort: number | undefined;
 }
 
 const DEFAULT_HOST = "0.0.0.0";
@@ -256,6 +259,10 @@ export function readNodeHostSettings(source: ConfigSource): NodeHostSettings {
     ),
     auditExportStdout: boolean("AUDIT_EXPORT_STDOUT", variables.AUDIT_EXPORT_STDOUT, false),
     auditExportFile: optionalPath(variables.AUDIT_EXPORT_FILE),
+    gatewayPort:
+      present(variables.SANDBOX_GATEWAY_PORT) === undefined
+        ? undefined
+        : integer("SANDBOX_GATEWAY_PORT", variables.SANDBOX_GATEWAY_PORT, 0),
   };
 }
 

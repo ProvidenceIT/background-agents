@@ -75,6 +75,7 @@ const podSchema = z
         phase: z.string().optional(),
         reason: z.string().optional(),
         message: z.string().optional(),
+        podIP: z.string().optional(),
         conditions: z
           .array(
             z

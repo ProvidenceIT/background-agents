@@ -25,6 +25,7 @@
  */
 
 import { once } from "node:events";
+import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { WebSocketServer } from "ws";
@@ -56,6 +57,9 @@ import { openHostAlarmIndex } from "./host-alarm-index";
 import { createNodeHttpServer, type HealthReport } from "./http-server";
 import { NodeJobs } from "./job-queue";
 import { readServiceAccountCredentials } from "./kubernetes-credentials";
+import { createPodIpResolver, createWorkspaceGatewayServer } from "./workspace-gateway-server";
+import { DEFAULT_KUBERNETES_API_URL, parseWorkspaceGateway } from "../sandbox/provider-factory";
+import { createKubernetesRestClient } from "../sandbox/kubernetes-rest-client";
 import { openJobStore } from "./job-store";
 import { ensurePrivateDirectory } from "./private-paths";
 import { createNodeSessionRuntimeDispatch } from "./runtime-client";
@@ -261,6 +265,7 @@ async function boot(
   });
   await once(server, "listening");
   const address = server.address() as AddressInfo;
+  const gatewayServer = await startWorkspaceGateway(settings, env, log, acquire);
 
   clock.start();
   acquire(() => clock.stop());
@@ -300,6 +305,9 @@ async function boot(
     const closed = once(server, "close");
     server.close();
     server.closeIdleConnections();
+    // Tool traffic is the browser's to retry; it holds no session work.
+    gatewayServer?.closeAllConnections();
+    gatewayServer?.close();
 
     // Everything that can still reach a runtime, under the one budget.
     const abandoned: string[] = [];
@@ -358,4 +366,44 @@ async function countMigrations(db: SqlDatabase): Promise<number> {
     .prepare("SELECT COUNT(*) AS applied FROM _schema_migrations")
     .first<{ applied: number }>();
   return row?.applied ?? 0;
+}
+
+/**
+ * The workspace tools gateway, when the host has a port for it, the gateway is
+ * configured, and it runs in a pod that can list sandbox pods.
+ */
+async function startWorkspaceGateway(
+  settings: NodeHostSettings,
+  env: Env,
+  log: Logger,
+  acquire: (release: () => void) => void
+): Promise<Server | undefined> {
+  const gateway = parseWorkspaceGateway(env);
+  const namespace = env.KUBERNETES_NAMESPACE?.trim();
+  if (settings.gatewayPort === undefined || !gateway) return undefined;
+  if (!env.KUBERNETES_CREDENTIALS || !namespace) {
+    throw new Error("SANDBOX_GATEWAY_PORT needs Kubernetes credentials and KUBERNETES_NAMESPACE");
+  }
+  const api = createKubernetesRestClient({
+    apiUrl: env.KUBERNETES_API_URL?.trim() || DEFAULT_KUBERNETES_API_URL,
+    namespace,
+    credentials: env.KUBERNETES_CREDENTIALS,
+  });
+  const server = createWorkspaceGatewayServer({
+    gateway,
+    resolvePodIp: createPodIpResolver(api),
+    log,
+  });
+  server.listen(settings.gatewayPort, settings.host);
+  acquire(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  await once(server, "listening");
+  log.info("workspace_gateway.listening", {
+    event: "workspace_gateway.listening",
+    port: settings.gatewayPort,
+    domain: gateway.domain,
+  });
+  return server;
 }

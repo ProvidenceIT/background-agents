@@ -185,7 +185,7 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
 }
 
 /** In-cluster API server address, reachable from any pod through the default Service. */
-const DEFAULT_KUBERNETES_API_URL = "https://kubernetes.default.svc";
+export const DEFAULT_KUBERNETES_API_URL = "https://kubernetes.default.svc";
 
 function createKubernetesProviderFromEnv(env: Env): KubernetesSandboxProvider {
   const namespace = env.KUBERNETES_NAMESPACE?.trim();
