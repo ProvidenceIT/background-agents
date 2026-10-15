@@ -1,4 +1,8 @@
-import type { AuthHome, AuthHomeProviderId } from "@open-inspect/shared/types/auth-homes";
+import {
+  CODEX_SEAT,
+  type AuthHome,
+  type AuthHomeProviderId,
+} from "@open-inspect/shared/types/auth-homes";
 import type {
   SessionSubscription,
   SessionSubscriptionResponse,
@@ -13,8 +17,13 @@ import type { Env } from "../types";
 import { error } from "./shared";
 import type { SessionRouteContext } from "./session-route";
 
-/** Only the Claude harness reports which home slot a turn spent. */
-const SLOT_PROVIDER = "anthropic" satisfies AuthHomeProviderId;
+/**
+ * The providers whose harness reports which home pool slot a turn spent: the Claude
+ * harness (claude/pool) and the Codex harness (codex-pool). Codex turns are the
+ * ledger rows of the Codex harness; every other slot is a Claude one.
+ */
+const SLOT_PROVIDERS = new Set<AuthHomeProviderId>(["anthropic", "openai"]);
+const CODEX_SLOT_PROVIDER = "openai" satisfies AuthHomeProviderId;
 
 /** Z.AI has no provider-auth row: only a home carries it, else workspace secrets do. */
 const ZAI_PROVIDER = "zai-coding-plan" satisfies AuthHomeProviderId;
@@ -63,7 +72,7 @@ async function spentFromProviderAuth(
 
 /**
  * Which Claude/Codex/Grok/Z.AI subscription the session spends per provider, and for a
- * Claude home which pool slots its turns spent. Whose it is is stated relative to the
+ * Claude or Codex home which pool slots its turns spent. Whose it is is stated relative to the
  * viewer; the holder is named only to the holder, the session's starter and workspace
  * administrators, as with Codex seat usage.
  */
@@ -84,7 +93,11 @@ export async function handleSessionSubscription(
 
   const home = row.authHomeId ? await new UserAuthHomeStore(ctx.db).getById(row.authHomeId) : null;
   const accounts = new ModelProviderAccountStore(ctx.db);
-  const slots = await new UsageLedgerStore(ctx.db).slotsForSession(row.id);
+  const ledger = new UsageLedgerStore(ctx.db);
+  const [claudeSlots, codexSlots] = await Promise.all([
+    ledger.slotsForSession(row.id, { except: CODEX_SEAT }),
+    ledger.slotsForSession(row.id, { only: CODEX_SEAT }),
+  ]);
   const spent = await Promise.all(
     (await sessions.getProviderAuth(row.id)).map((auth) =>
       spentFromProviderAuth(auth, home, accounts)
@@ -127,7 +140,12 @@ export async function handleSessionSubscription(
       holderDisplayName: holderUserId ? (names.get(holderUserId) ?? null) : null,
       accountDisplayName: disclosed(holder) ? holder.accountDisplayName : null,
       // A slot name says which of the holder's pooled accounts ran, not whose it is.
-      slots: provider === SLOT_PROVIDER && authMode === "auth_home" ? slots : [],
+      slots:
+        SLOT_PROVIDERS.has(provider) && authMode === "auth_home"
+          ? provider === CODEX_SLOT_PROVIDER
+            ? codexSlots
+            : claudeSlots
+          : [],
     };
   });
   return Response.json({ subscriptions } satisfies SessionSubscriptionResponse);

@@ -127,6 +127,45 @@ describe("handleSessionSubscription", () => {
     expect(subscriptions["zai-coding-plan"].slots).toEqual([]);
   });
 
+  it("lists Codex pool slots under openai and keeps them out of the Claude list", async () => {
+    // A Codex session on the home: the resolver records openai as auth_home.
+    await db
+      .prepare(
+        `UPDATE session_model_provider_auth
+           SET auth_mode = 'auth_home', provider_account_id = NULL, selection_source = 'auth_home_shared'
+         WHERE session_id = ? AND provider = 'openai'`
+      )
+      .bind(HOUSEHOLD.sessionId)
+      .run();
+    const ledger = new UsageLedgerStore(db);
+    const turn = (messageId: string, harness: string | null, slot: string, settledAt: number) =>
+      ledger.recordTurn({
+        messageId,
+        sessionId: HOUSEHOLD.sessionId,
+        userId: HOUSEHOLD.owner,
+        repoExternalId: null,
+        harness,
+        model: harness === "codex" ? "openai/gpt-6-sol" : "anthropic/claude-sonnet-4-5",
+        costUsd: 0,
+        inputTokens: 10,
+        outputTokens: 5,
+        subscriptionSlot: slot,
+        settledAt,
+      });
+    await turn("msg-1", "codex", "codex-3", 100);
+    await turn("msg-2", "codex", "codex-2", 200);
+    await turn("msg-3", "claude", "claude-4", 300);
+    await turn("msg-4", null, "claude-1", 400);
+
+    const subscriptions = await subscriptionsFor(HOUSEHOLD.colleague);
+    expect(subscriptions.openai.authMode).toBe("auth_home");
+    expect(subscriptions.openai.slots.map((entry) => entry.slot)).toEqual(["codex-2", "codex-3"]);
+    expect(subscriptions.anthropic.slots.map((entry) => entry.slot)).toEqual([
+      "claude-1",
+      "claude-4",
+    ]);
+  });
+
   it("reports workspace credentials for Z.AI when no home serves the session", async () => {
     await db
       .prepare("UPDATE sessions SET auth_home_id = NULL, auth_home_selection = NULL WHERE id = ?")
