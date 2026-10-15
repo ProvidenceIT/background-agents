@@ -1,7 +1,7 @@
 "use client";
 
 import type { Task } from "@/types/session";
-import { ClockIcon, CheckCircleIcon, EmptyCircleIcon } from "@/components/ui/icons";
+import { ClockIcon, CheckCircleIcon, EmptyCircleIcon, ErrorIcon } from "@/components/ui/icons";
 
 interface TasksSectionProps {
   tasks: Task[];
@@ -46,6 +46,12 @@ function TaskStatusIcon({ status }: { status: Task["status"] }) {
       return (
         <span className="mt-0.5 flex-shrink-0">
           <CheckCircleIcon className="w-4 h-4 text-success" />
+        </span>
+      );
+    case "failed":
+      return (
+        <span className="mt-0.5 flex-shrink-0">
+          <ErrorIcon className="w-4 h-4 text-destructive" />
         </span>
       );
     case "pending":

@@ -15,7 +15,7 @@ import { TerminalIcon, LinkIcon } from "@/components/ui/icons";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { buildAuthenticatedUrl } from "@/lib/urls";
 import { supportsWorkspaceTools } from "@/lib/sandbox-provider";
-import { extractLatestTasks } from "@/lib/tasks";
+import { extractLatestTasks, extractSubagents } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { ParticipantPresence, SessionState } from "@open-inspect/shared/types/server-messages";
@@ -127,6 +127,7 @@ export function SessionRightSidebarContent({
 }: SessionRightSidebarContentProps) {
   const [downloading, setDownloading] = useState(false);
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
+  const subagents = useMemo(() => extractSubagents(events), [events]);
   const warnings = useMemo(
     () =>
       events.filter(
@@ -158,6 +159,7 @@ export function SessionRightSidebarContent({
   const additions = files.reduce((total, file) => total + (file.additions ?? 0), 0);
   const deletions = files.reduce((total, file) => total + (file.deletions ?? 0), 0);
   const completedTasks = tasks.filter((task) => task.status === "completed").length;
+  const finishedSubagents = subagents.filter((agent) => agent.status !== "in_progress").length;
   const hasSandboxTools =
     capabilities.sandboxAccess &&
     Boolean(
@@ -222,8 +224,10 @@ export function SessionRightSidebarContent({
             {tab === "changes" && files.length > 0 && (
               <span className="font-mono text-[10px] text-muted-foreground">{files.length}</span>
             )}
-            {tab === "tasks" && tasks.length > 0 && (
-              <span className="font-mono text-[10px] text-muted-foreground">{tasks.length}</span>
+            {tab === "tasks" && tasks.length + subagents.length > 0 && (
+              <span className="font-mono text-[10px] text-muted-foreground">
+                {tasks.length + subagents.length}
+              </span>
             )}
           </TabsTrigger>
         ))}
@@ -396,9 +400,22 @@ export function SessionRightSidebarContent({
         {tasks.length > 0 ? (
           <TasksSection tasks={tasks} />
         ) : (
-          <p className="text-xs text-muted-foreground">
-            The agent hasn’t published a task list yet.
-          </p>
+          subagents.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              The agent hasn’t published a task list yet.
+            </p>
+          )
+        )}
+        {subagents.length > 0 && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold">Subagents</h3>
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {finishedSubagents} / {subagents.length} done
+              </span>
+            </div>
+            <TasksSection tasks={subagents} />
+          </div>
         )}
         {sessionState && <ChildSessionsSection sessionId={sessionState.id} />}
       </InspectorPanel>

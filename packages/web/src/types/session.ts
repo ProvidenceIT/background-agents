@@ -35,6 +35,6 @@ export type SandboxEvent = SharedSandboxEvent;
 
 export interface Task {
   content: string;
-  status: "pending" | "in_progress" | "completed";
+  status: "pending" | "in_progress" | "completed" | "failed";
   activeForm?: string;
 }

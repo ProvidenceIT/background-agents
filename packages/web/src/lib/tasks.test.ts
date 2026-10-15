@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SandboxEvent } from "@/types/session";
-import { extractLatestTasks } from "./tasks";
+import { extractLatestTasks, extractSubagents } from "./tasks";
 
 let timestamp = 0;
 
@@ -8,7 +8,7 @@ function toolCall(
   tool: string,
   callId: string,
   args: Record<string, unknown>,
-  result: { status?: string; output?: string } = {}
+  result: { status?: string; output?: string; isSubtask?: boolean; taskCallId?: string } = {}
 ): SandboxEvent {
   timestamp += 1;
   return {
@@ -112,5 +112,52 @@ describe("extractLatestTasks", () => {
     expect(extractLatestTasks([todo, task, laterTodo]).map((t) => t.content)).toEqual([
       "Todo again",
     ]);
+  });
+
+  it("keeps the parent's checklist when a subagent writes its own", () => {
+    expect(
+      extractLatestTasks([
+        toolCall("TodoWrite", "call-1", { todos: [{ content: "Parent", status: "pending" }] }),
+        toolCall(
+          "TodoWrite",
+          "call-2",
+          { todos: [{ content: "Child", status: "pending" }] },
+          { isSubtask: true, taskCallId: "agent-1" }
+        ),
+      ]).map((t) => t.content)
+    ).toEqual(["Parent"]);
+  });
+});
+
+describe("extractSubagents", () => {
+  it("lists each subagent the agent launched with its latest state", () => {
+    expect(
+      extractSubagents([
+        toolCall("Task", "agent-1", { description: "Review SQL" }, { status: "running" }),
+        toolCall("task", "agent-2", { description: "Review web" }, { status: "running" }),
+        toolCall("Task", "agent-3", { description: "Review CSV" }, { status: "running" }),
+        toolCall("Bash", "call-1", { command: "ls" }, { status: "completed" }),
+        toolCall("Task", "agent-1", { description: "Review SQL" }, { status: "completed" }),
+        toolCall("Task", "agent-3", { description: "Review CSV" }, { status: "error" }),
+      ])
+    ).toEqual([
+      { content: "Review SQL", status: "completed" },
+      { content: "Review web", status: "in_progress" },
+      { content: "Review CSV", status: "failed" },
+    ]);
+  });
+
+  it("leaves out subagents launched by a subagent", () => {
+    expect(
+      extractSubagents([
+        toolCall("Task", "agent-1", { description: "Outer" }, { status: "running" }),
+        toolCall(
+          "Task",
+          "agent-2",
+          { description: "Inner" },
+          { status: "running", isSubtask: true, taskCallId: "agent-1" }
+        ),
+      ]).map((t) => t.content)
+    ).toEqual(["Outer"]);
   });
 });

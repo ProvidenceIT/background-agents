@@ -932,6 +932,36 @@ describe("SessionRightSidebar", () => {
     expect(screen.getByText("Update the UI")).toBeVisible();
   });
 
+  it("lists the subagents the agent launched under the plan", () => {
+    const subagent = (callId: string, description: string, status: string, timestamp: number) => ({
+      type: "tool_call" as const,
+      sandboxId: "sandbox-1",
+      messageId: "message-1",
+      timestamp,
+      tool: "Task",
+      callId,
+      args: { description },
+      status,
+    });
+    render(
+      inspector({
+        events: [
+          subagent("agent-1", "Review SQL", "running", 1),
+          subagent("agent-2", "Review web", "running", 2),
+          subagent("agent-1", "Review SQL", "completed", 3),
+        ],
+      })
+    );
+    selectTab("Tasks 2");
+    expect(screen.getByRole("heading", { name: "Subagents" })).toBeVisible();
+    expect(screen.getByText("1 / 2 done")).toBeVisible();
+    expect(screen.getByText("Review SQL")).toHaveClass("line-through");
+    expect(screen.getByText("Review web")).toBeVisible();
+    expect(
+      screen.queryByText("The agent hasn’t published a task list yet.")
+    ).not.toBeInTheDocument();
+  });
+
   it("preserves authorized terminal controls and does not leak them into Info", () => {
     const onToggleTerminal = vi.fn();
     render(

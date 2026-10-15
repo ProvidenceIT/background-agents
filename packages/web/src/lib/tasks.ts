@@ -1,8 +1,10 @@
 /**
- * Task extraction utilities: the agent's checklist, from TodoWrite or the Task* tools
+ * Task extraction utilities: the agent's checklist, from TodoWrite or the Task* tools,
+ * and the subagents it launched
  */
 
 import { toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
+import { isSubtaskRootTool } from "@/lib/tool-formatters";
 import type { SandboxEvent, Task } from "@/types/session";
 import { z } from "zod";
 
@@ -48,12 +50,15 @@ function argsTruncated(event: ToolCallEvent): boolean {
   return event.truncated?.fields.some((field) => field.startsWith("args.")) ?? false;
 }
 
-/** One event per tool call, at its first position, carrying its latest state. */
+/**
+ * One event per top-level tool call, at its first position, carrying its latest
+ * state. Calls made inside a subagent are its own business, not the session's plan.
+ */
 function latestToolCalls(events: SandboxEvent[]): ToolCallEvent[] {
   const calls: ToolCallEvent[] = [];
   const indexes = new Map<string, number>();
   for (const event of events) {
-    if (event.type !== "tool_call" || !event.callId) continue;
+    if (event.type !== "tool_call" || !event.callId || event.isSubtask) continue;
     const key = toolCallIdentityKey(event);
     const index = indexes.get(key);
     if (index === undefined) {
@@ -134,4 +139,19 @@ export function extractLatestTasks(events: SandboxEvent[]): Task[] {
     return tasksFromTaskTools(calls.slice(lastTodoWrite + 1));
   }
   return lastTodoWrite === -1 ? [] : tasksFromTodoWrite(calls[lastTodoWrite]);
+}
+
+const SUBAGENT_STATUS: Record<string, Task["status"]> = {
+  completed: "completed",
+  error: "failed",
+};
+
+/** The subagents the agent launched, in launch order, with each one's latest state. */
+export function extractSubagents(events: SandboxEvent[]): Task[] {
+  return latestToolCalls(events)
+    .filter((call) => isSubtaskRootTool(call.tool))
+    .map((call) => ({
+      content: typeof call.args.description === "string" ? call.args.description : "Subagent",
+      status: SUBAGENT_STATUS[call.status ?? ""] ?? "in_progress",
+    }));
 }
