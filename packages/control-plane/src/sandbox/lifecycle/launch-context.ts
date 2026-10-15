@@ -45,6 +45,13 @@ export interface SlackAgentNotifyLookup {
   isEnabledForRepo(repoOwner: string | null, repoName: string | null): Promise<boolean>;
 }
 
+/** Providers whose sandbox lifetime falls back to EXECUTION_TIMEOUT_MS when no scope sets one. */
+const EXECUTION_TIMEOUT_LIFETIME_PROVIDERS: ReadonlySet<string> = new Set([
+  "kubernetes",
+  "modal",
+  "modal-vm",
+]);
+
 export interface SandboxLaunchConfig {
   /** Default model when the session has no override. */
   model: string;
@@ -331,6 +338,12 @@ export class SandboxLaunchContext {
    * at write time, leaving the provider default in force.
    */
   private resolveExecutionTimeoutSeconds(sandboxSettings: SandboxSettings): number | undefined {
+    // Only providers whose own fallback is DEFAULT_SANDBOX_TIMEOUT_SECONDS. E2B keeps its
+    // operator TTL (E2B_SANDBOX_TIMEOUT_SECONDS, bounded by the plan), Vercel caps lifetimes
+    // itself, and OpenComputer uses its own default.
+    if (!EXECUTION_TIMEOUT_LIFETIME_PROVIDERS.has(this.provider.name.trim().toLowerCase())) {
+      return undefined;
+    }
     const executionTimeoutMs = parseConfiguredExecutionTimeoutMs(this.config.executionTimeoutMs);
     if (executionTimeoutMs === undefined) return undefined;
     const timeoutSeconds = Math.ceil(executionTimeoutMs / 1000);

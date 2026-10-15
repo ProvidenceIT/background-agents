@@ -101,6 +101,29 @@ describe("SandboxLaunchContext.resolveSandboxSettings", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  it.each(["e2b", "vercel", "opencomputer"])(
+    "keeps the provider's own lifetime on %s even with EXECUTION_TIMEOUT_MS set",
+    (providerName) => {
+      const { context, logger } = createContext({
+        executionTimeoutMs: String(FOUR_HOURS_MS),
+        providerName,
+      });
+
+      expect(
+        context.resolveSandboxSettings(sessionWithSettings(null)).timeoutSeconds
+      ).toBeUndefined();
+      expect(logger.warn).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["kubernetes", "modal-vm"])("applies the fallback on %s", (providerName) => {
+    const { context } = createContext({ executionTimeoutMs: String(FOUR_HOURS_MS), providerName });
+
+    expect(context.resolveSandboxSettings(sessionWithSettings(null)).timeoutSeconds).toBe(
+      FOUR_HOURS_MS / 1000
+    );
+  });
+
   it("still refuses an explicit timeout on a provider without configurable timeouts", () => {
     const { context } = createContext({ supportsSandboxTimeout: false });
 
@@ -165,7 +188,7 @@ describe("SandboxLaunchContext.resolveSandboxSettings", () => {
 
 describe("sandbox lifetime at launch", () => {
   it("hands a fresh create the EXECUTION_TIMEOUT_MS lifetime when no scope sets one", async () => {
-    const provider = createMockProvider();
+    const provider = { ...createMockProvider(), name: "kubernetes" };
     const storage = createMockStorage(
       createMockSession({ sandbox_settings: null }),
       createMockSandbox({ status: "pending" })

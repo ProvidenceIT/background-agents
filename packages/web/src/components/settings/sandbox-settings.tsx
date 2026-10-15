@@ -600,8 +600,9 @@ export function SandboxSettingsEditor({
           </label>
           <p className="text-xs text-muted-foreground mb-2">
             Requested lifetime for each sandbox session, in minutes. Leave blank to inherit a parent
-            setting, or use the provider default if none is configured. Provider support and limits
-            vary.
+            setting. With none configured, Kubernetes and Modal use the execution timeout of the
+            deployment when the operator set one, and every provider otherwise uses its own default.
+            Provider support and limits vary.
           </p>
           <div className="max-w-sm">
             <Input
