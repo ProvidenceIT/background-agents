@@ -65,6 +65,7 @@ interface UseSessionSocketReturn {
   boot: SessionSocketState["boot"];
   messages: Message[];
   events: SandboxEvent[];
+  planEvents: SandboxEvent[];
   participants: ParticipantPresence[];
   artifacts: Artifact[];
   currentParticipantId: string | null;
@@ -505,6 +506,7 @@ export function useSessionSocket(
     boot: state.boot,
     messages: NO_MESSAGES,
     events: state.events,
+    planEvents: state.planEvents,
     participants: state.participants,
     artifacts: state.artifacts,
     currentParticipantId: state.currentParticipantId,

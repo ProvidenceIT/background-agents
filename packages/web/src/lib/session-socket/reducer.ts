@@ -27,6 +27,11 @@ export interface SessionSocketState {
   presenceSynced: boolean;
   sessionState: SessionState | null;
   events: SandboxEvent[];
+  /**
+   * The agent's plan calls from the whole history, sent with the snapshot so
+   * the Tasks tab is complete while `events` holds only the latest window.
+   */
+  planEvents: SandboxEvent[];
   participants: ParticipantPresence[];
   artifacts: Artifact[];
   currentParticipantId: string | null;
@@ -58,6 +63,7 @@ export const initialSessionSocketState: SessionSocketState = {
   presenceSynced: false,
   sessionState: null,
   events: [],
+  planEvents: [],
   participants: [],
   artifacts: [],
   currentParticipantId: null,
@@ -102,6 +108,10 @@ function renderTimelineEvents(items: SessionTimelineEvent[]): SandboxEvent[] {
   return collapseReplayTokenEvents(items.map((item) => toUiSandboxEvent(item.event)));
 }
 
+function renderPlanEvents(items: SessionTimelineEvent[] | undefined): SandboxEvent[] {
+  return (items ?? []).map((item) => toUiSandboxEvent(item.event));
+}
+
 export function createSessionSocketState(snapshot: SessionSnapshot): SessionSocketState {
   const timelineEvents = snapshot.timeline.events;
   return {
@@ -113,6 +123,7 @@ export function createSessionSocketState(snapshot: SessionSnapshot): SessionSock
     },
     artifacts: snapshot.artifacts.map(toUiArtifact),
     events: renderTimelineEvents(timelineEvents),
+    planEvents: renderPlanEvents(snapshot.timeline.planEvents),
     hasMoreHistory: snapshot.timeline.hasMore,
     cursor: snapshot.timeline.cursor,
     promptQueue: snapshot.promptQueue,
@@ -207,6 +218,7 @@ function reduceServerMessage(
         currentParticipantId: message.participantId || state.currentParticipantId,
         canManageBudget: message.canManageBudget ?? false,
         events: renderTimelineEvents(timelineEvents),
+        planEvents: renderPlanEvents(message.timeline.planEvents),
         hasMoreHistory: message.timeline.hasMore,
         cursor: message.timeline.cursor,
         // A fetch_history dropped by a disconnect would otherwise leave this

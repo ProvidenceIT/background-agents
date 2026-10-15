@@ -52,6 +52,9 @@ export class SessionEventStream {
       events: parseSessionTimelineEvents(page.events),
       hasMore: page.hasMore,
       cursor: page.nextCursor ? toEventStreamCursor(page.nextCursor) : null,
+      planEvents: page.hasMore
+        ? parseSessionTimelineEvents(this.repository.listPlanToolCalls())
+        : undefined,
     };
   }
 

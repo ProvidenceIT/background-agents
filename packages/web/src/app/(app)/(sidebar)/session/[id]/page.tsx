@@ -112,6 +112,7 @@ function SessionContent({
     sandboxError,
     boot,
     events,
+    planEvents,
     participants,
     artifacts,
     currentParticipantId,
@@ -126,6 +127,11 @@ function SessionContent({
     reconnect,
     loadOlderEvents,
   } = socket;
+  // The inspector also needs plan calls older than the loaded window; later states in `events` win.
+  const inspectorEvents = useMemo(
+    () => (planEvents.length ? [...planEvents, ...events] : events),
+    [planEvents, events]
+  );
   const latestTerminalMessageId = useMemo(() => findLatestTerminalMessageId(events), [events]);
   useMarkSessionRead(sessionId, latestTerminalMessageId);
   const { profiles, participants: profiledParticipants } = useSessionParticipantProfiles(
@@ -506,7 +512,7 @@ function SessionContent({
                 sessionState={sessionState}
                 participants={profiledParticipants}
                 presenceSynced={presenceSynced}
-                events={events}
+                events={inspectorEvents}
                 artifacts={artifacts}
                 terminalOpen={terminalOpen}
                 onToggleTerminal={toggleTerminal}
@@ -544,7 +550,7 @@ function SessionContent({
               sessionState={sessionState}
               participants={profiledParticipants}
               presenceSynced={presenceSynced}
-              events={events}
+              events={inspectorEvents}
               artifacts={artifacts}
               terminalOpen={terminalOpen}
               onToggleTerminal={toggleTerminal}
@@ -573,7 +579,7 @@ function SessionContent({
           sessionState={sessionState}
           participants={profiledParticipants}
           presenceSynced={presenceSynced}
-          events={events}
+          events={inspectorEvents}
           artifacts={artifacts}
           terminalOpen={terminalOpen}
           onToggleTerminal={toggleTerminal}

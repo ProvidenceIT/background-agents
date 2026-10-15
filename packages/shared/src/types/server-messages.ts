@@ -127,6 +127,8 @@ const sessionTimelineSchema = z.object({
   events: tolerantSessionTimelineEventsSchema,
   hasMore: z.boolean(),
   cursor: historyCursorSchema.nullable(),
+  /** The agent's plan calls (see PLAN_TOOL_NAMES) from the whole history, oldest first. */
+  planEvents: tolerantSessionTimelineEventsSchema.optional(),
 });
 
 export const sessionSnapshotSchema = z.object({

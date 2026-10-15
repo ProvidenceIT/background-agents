@@ -148,6 +148,7 @@ beforeEach(() => {
     sessionState: mocks.snapshot.session,
     capabilities: resolveSessionCapabilities(mocks.snapshot.session.capabilities, true),
     events: [],
+    planEvents: [],
     participants: [],
     artifacts: [],
     promptQueue: [],
