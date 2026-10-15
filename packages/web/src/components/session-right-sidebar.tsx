@@ -14,7 +14,6 @@ import { ChildSessionsSection } from "./sidebar/child-sessions-section";
 import { TerminalIcon, LinkIcon } from "@/components/ui/icons";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { buildAuthenticatedUrl } from "@/lib/urls";
-import { supportsWorkspaceTools } from "@/lib/sandbox-provider";
 import { extractLatestTasks, extractSubagents } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import type { Artifact, SandboxEvent } from "@/types/session";
@@ -426,11 +425,9 @@ export function SessionRightSidebarContent({
           <p className="text-xs leading-relaxed text-muted-foreground">
             {!sessionState
               ? "Loading workspace tools…"
-              : !supportsWorkspaceTools()
-                ? "The code editor, terminal and desktop aren’t available for sandboxes on Kubernetes. The agent’s own tool calls appear in the conversation."
-                : !capabilities.sandboxAccess
-                  ? "Sandbox access is not available with your permissions."
-                  : "Sandbox tools will appear here when available."}
+              : !capabilities.sandboxAccess
+                ? "Sandbox access is not available with your permissions."
+                : "Sandbox tools will appear here when available."}
           </p>
         )}
 

@@ -891,12 +891,24 @@ describe("SessionRightSidebar", () => {
     expect(screen.getByText("Sandbox tools will appear here when available.")).toBeVisible();
   });
 
-  it("says workspace tools never start on Kubernetes", () => {
+  it("shows Kubernetes sandbox tools like any other provider's", () => {
     vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "kubernetes");
     try {
-      render(inspector());
+      render(
+        inspector({
+          sessionState: {
+            ...SESSION,
+            codeServerUrl: "https://p8080-0123456789abcdef0123.sbx.test/__sf/t/",
+            codeServerPassword: "pw",
+          },
+        })
+      );
       selectTab("Tools");
-      expect(screen.getByText(/aren’t available for sandboxes on Kubernetes/)).toBeVisible();
+      expect(screen.queryByText("Sandbox tools will appear here when available.")).toBeNull();
+      expect(screen.getByRole("link", { name: /open editor/i })).toHaveAttribute(
+        "href",
+        "https://p8080-0123456789abcdef0123.sbx.test/__sf/t/"
+      );
     } finally {
       vi.unstubAllEnvs();
     }

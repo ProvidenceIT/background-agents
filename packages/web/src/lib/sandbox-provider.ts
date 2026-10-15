@@ -45,14 +45,6 @@ export function supportsConfigurableSandboxTimeout(): boolean {
   return providerSupportsConfigurableSandboxTimeout(getPublicSandboxProvider());
 }
 
-/**
- * Whether sessions can expose code-server, the terminal, VNC or tunnels. The
- * Kubernetes provider never starts them (control-plane `kubernetes-provider.ts`).
- */
-export function supportsWorkspaceTools(): boolean {
-  return getPublicSandboxProvider() !== "kubernetes";
-}
-
 /** The providers named in the unsupported-provider copy, in display order. */
 export function getRepoImageProviders(): readonly PublicSandboxProvider[] {
   return IMAGE_BUILD_PROVIDER_IDS;
