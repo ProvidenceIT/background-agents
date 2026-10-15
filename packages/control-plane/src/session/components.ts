@@ -54,7 +54,7 @@ import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecyc
 import { SandboxAccess } from "../sandbox/lifecycle/sandbox-access";
 import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
 import { createSessionAuthHomeLookup } from "../auth-homes/sandbox-mount";
-import { admitAuthHomeTurn, AuthHomeTurnRefusedError } from "../auth-homes/session-binding";
+import { TurnAdmission } from "../auth-homes/turn-admission";
 import { McpServerStore } from "../db/mcp-servers";
 import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
@@ -637,36 +637,20 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     getExecutionTimeoutMs,
     () => lifecycleManager.mayProcessQueuedWork(),
     () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot()),
-    {
+    new TurnAdmission({
+      db,
+      getSessionId: getPublicSessionId,
       // The team comes from the global row, which the session's own storage
-      // does not hold; a prompt admitted over a socket has no request id.
-      admitPrompt: async (userId) => {
-        const sessionId = getPublicSessionId();
-        if (!sessionId) return;
+      // does not hold.
+      admitUsage: async ({ userId, sessionId, requestId }) => {
         await usageQuotas.admitPrompt({
           userId,
           teamId: (await usageQuotas.sessionOwnership(sessionId)).teamId,
           sessionId,
-          requestId: crypto.randomUUID(),
+          requestId,
         });
       },
-    },
-    {
-      admitPrompt: async (userId, model) => {
-        const sessionId = getPublicSessionId();
-        if (!sessionId) return;
-        const refusal = await admitAuthHomeTurn({
-          db,
-          requestId: crypto.randomUUID(),
-          sessionId,
-          actorUserId: userId,
-          triggerKind: "prompt",
-          model: model ?? null,
-          channel: "ws_prompt",
-        });
-        if (refusal) throw new AuthHomeTurnRefusedError(refusal);
-      },
-    }
+    })
   );
 
   // Tier 7 — services over the queue and lifecycle.

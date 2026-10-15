@@ -9,6 +9,7 @@ import {
   seedMessage,
   seedSandboxAuthHash,
   waitForSandboxStatus,
+  PROMPT_TURN,
 } from "./helpers";
 
 beforeEach(cleanD1Tables);
@@ -193,6 +194,7 @@ describe("POST /internal/prompt", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        turn: PROMPT_TURN,
         content: "Re-open session",
         authorId: "user-1",
         source: "web",
@@ -216,6 +218,7 @@ describe("POST /internal/prompt", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        turn: PROMPT_TURN,
         content: "Re-open session",
         authorId: "user-1",
         source: "web",

@@ -144,8 +144,6 @@ vi.mock("../auth-homes/session-binding", async (importOriginal) => {
       db: SqlDatabase,
       input: Parameters<typeof actual.bindSessionAuthHome>[1]
     ) => actual.bindSessionAuthHome(authHomeDb.current ?? db, input),
-    admitAuthHomeTurn: (input: Parameters<typeof actual.admitAuthHomeTurn>[0]) =>
-      actual.admitAuthHomeTurn({ ...input, db: authHomeDb.current ?? input.db }),
   };
 });
 vi.mock("../auth-homes/resolver", async (importOriginal) => {
@@ -4236,49 +4234,47 @@ describe("Scheduler", () => {
       ]);
     });
 
-    it("gates a Slack thread steer on the session's home and audits the served turn", async () => {
+    it("sends a Slack thread steer as a mention turn, and takes the home's refusal as final", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       mockStore.getLatestSteerableRunForThread.mockResolvedValue(
         sampleRunRow({ session_id: "sess-on-home" })
       );
-      // The owner's run, on the owner's unshared home.
-      mockSessionStoreGet.mockResolvedValue({
-        authHomeId: "H1",
-        model: "anthropic/claude-sonnet-4-6",
-        triggerKind: "schedule",
-      });
+      mockUserStoreGetIdentity.mockImplementation(async (provider: string) =>
+        provider === "slack" ? { userId: OWNER } : null
+      );
+      mockGetEffectiveAuthorization.mockResolvedValue(steeringAuthorization({ userId: OWNER }));
       const stub = createMockSessionStub();
       const fetchMock = vi.mocked(stub.fetch);
 
-      // A colleague's reply in the thread: not the owner's, and nothing shared.
+      // The session's prompt queue admits the turn on its home (ADR 0005).
+      expect(
+        await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())
+      ).toMatchObject({ steered: 1 });
+      const sent = await getPromptBody(fetchMock);
+      expect(sent).toMatchObject({
+        turn: { triggerKind: "mention", channel: "slack_steer", requestId: expect.any(String) },
+        canonicalUserId: OWNER,
+      });
+
+      // A refusal is final: the reply is not re-read as a new trigger.
+      fetchMock.mockImplementationOnce(async () =>
+        Response.json(
+          {
+            error: "refused",
+            message: "refused",
+            code: "no_eligible_home",
+            reason: "no_eligible_home",
+          },
+          { status: 403 }
+        )
+      );
       expect(await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())).toEqual({
         triggered: 0,
         skipped: 0,
         steered: 0,
         invocationIds: [],
       });
-      expect(fetchMock).not.toHaveBeenCalled();
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
-      expect(await auditRows("credential.auth_home_prompt")).toEqual([]);
-
-      // The owner's own reply is served and audited.
-      mockUserStoreGetIdentity.mockImplementation(async (provider: string) =>
-        provider === "slack" ? { userId: OWNER } : null
-      );
-      mockGetEffectiveAuthorization.mockResolvedValue(steeringAuthorization({ userId: OWNER }));
-      expect(
-        await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())
-      ).toMatchObject({ steered: 1 });
-      expect(await auditRows("credential.auth_home_prompt")).toEqual([
-        expect.objectContaining({
-          metadata: expect.objectContaining({
-            actor: OWNER,
-            home_owner: OWNER,
-            channel: "slack_steer",
-            trigger_kind: "mention",
-          }),
-        }),
-      ]);
     });
 
     it("serves an owner's run on an issue a colleague authored and audits the author", async () => {

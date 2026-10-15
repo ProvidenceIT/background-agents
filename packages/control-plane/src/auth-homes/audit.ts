@@ -5,6 +5,7 @@ import type {
   TriggerKind,
 } from "@open-inspect/shared/types/auth-homes";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
+import type { TurnChannel } from "./turn-admission";
 
 /** The audit vocabulary of subscription auth homes, in `AUDIT_OPERATION_ACTIONS`. */
 export type AuthHomeAuditAction = Extract<
@@ -136,14 +137,7 @@ export function bindAuthHomePromptAudit(
     homeOwnerUserId: string;
     selection: AuthHomeSelection;
     /** Which entry point admitted the turn. */
-    channel:
-      | "prompt"
-      | "ws_token"
-      | "ws_prompt"
-      | "sandbox_access"
-      | "slack_steer"
-      | "child_spawn"
-      | "scheduled_run";
+    channel: TurnChannel | "child_spawn" | "scheduled_run";
   }
 ): SqlStatement {
   return bindAuthHomeAuditEvent(input.db, {

@@ -1032,6 +1032,7 @@ describe("sandbox access on an auth-home session", () => {
     expect(await refused.json()).toMatchObject({ code: "no_eligible_home" });
     expect((await sandboxAccess(HOUSEHOLD.owner)).status).toBe(200);
     expect(proxied).toBe(2);
-    expect(await fixture.auditRows("credential.auth_home_prompt")).toHaveLength(2);
+    // Entering the sandbox is an access check, not a turn the home served.
+    expect(await fixture.auditRows("credential.auth_home_prompt")).toEqual([]);
   });
 });

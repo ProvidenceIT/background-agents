@@ -140,6 +140,7 @@ describe("ChildSessionsHandler", () => {
         status: "queued",
       });
       expect(enqueuePrompt).toHaveBeenCalledWith({
+        turn: { triggerKind: "child", channel: "child_prompt", requestId: expect.any(String) },
         content: "Continue with the edge cases",
         authorId: "owner-1",
         canonicalUserId: "canonical-1",

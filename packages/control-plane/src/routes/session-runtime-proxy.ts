@@ -44,7 +44,7 @@ import {
 import { parseBody, parseJsonBody } from "./body";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { canManageSessionBudget } from "../session/budget-authorization";
-import { enforceAuthHomeTurn, turnTriggerKind } from "../auth-homes/session-binding";
+import { checkAuthHomeAccess, turnTriggerKind } from "../auth-homes/turn-admission";
 import { handleSessionSubscription } from "./session-subscription";
 
 const participantsResponseSchema = z.object({
@@ -355,14 +355,12 @@ async function handleBudgetUpdate(
 function authHomeGated(handler: ProxyHandler): ProxyHandler {
   return async (request, env, params, ctx) => {
     if (ctx.principal?.kind !== "sandbox") {
-      const refusal = await enforceAuthHomeTurn({
+      const refusal = await checkAuthHomeAccess({
         db: ctx.db,
-        requestId: ctx.request_id,
         sessionId: params.id,
         session: ctx.sessionAdmission?.row,
         actorUserId: ctx.authorization?.userId ?? null,
         triggerKind: turnTriggerKind(ctx.principal),
-        channel: "sandbox_access",
       });
       if (refusal) return refusal;
     }

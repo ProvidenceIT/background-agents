@@ -370,16 +370,9 @@ describe("session ws-token route on an auth-home session", () => {
     const served = await mint(HOUSEHOLD.colleague);
     expect(served.response.status).toBe(200);
     expect(served.minted).toBe(1);
-    expect(await fixture.auditRows("credential.auth_home_prompt")).toEqual([
-      {
-        actor: HOUSEHOLD.colleague,
-        metadata: expect.objectContaining({
-          home_owner: HOUSEHOLD.owner,
-          actor: HOUSEHOLD.colleague,
-          channel: "ws_token",
-        }),
-      },
-    ]);
+    // Minting is an access check: each prompt on the socket is admitted and
+    // audited when it arrives, not the token.
+    expect(await fixture.auditRows("credential.auth_home_prompt")).toEqual([]);
 
     await fixture.setPolicy("owner_only");
     const refused = await mint(HOUSEHOLD.colleague);

@@ -118,11 +118,10 @@ import { resolveScmProviderFromEnv } from "../source-control/config";
 import { createSourceControlProviderFromEnv } from "../source-control";
 import {
   authHomeRefusalMessage,
+  NO_ELIGIBLE_HOME,
   type AuthHomeRefusalReason,
 } from "@open-inspect/shared/types/auth-homes";
-import { authHomesInForce } from "../auth-homes/resolver";
 import {
-  admitAuthHomeTurn,
   applyAuthHomeToProviderAuth,
   authHomeSessionVisibility,
   bindSessionAuthHome,
@@ -342,7 +341,7 @@ interface ExecutionPrincipal {
 
 type SchedulerPromptRequest = Pick<
   EnqueuePromptRequest,
-  "content" | "authorId" | "canonicalUserId" | "source" | "scmEnrichment"
+  "turn" | "content" | "authorId" | "canonicalUserId" | "source" | "scmEnrichment"
 > & {
   callbackContext: AutomationCallbackContext | SlackCallbackContext;
 };
@@ -1350,33 +1349,20 @@ export class Scheduler {
             continue;
           }
           // The reply is a later turn on the session's subscription home, by
-          // the Slack actor: the same per-turn gate and audit as an HTTP or
-          // socket prompt. A refusal is final, like the prompt route's; the
+          // the Slack actor; the session's prompt queue admits it like any
+          // other turn. A refusal is final, like the prompt route's; the
           // reply is not re-read as a new trigger.
-          // Without a registered home there is nothing to gate (and no extra session read).
-          const authHomeRefusal = !(await authHomesInForce(this.db))
-            ? null
-            : await admitAuthHomeTurn({
-                db: this.db,
-                requestId: `slack:${event.channelId}:${event.ts}`,
-                sessionId: steerable.session_id,
-                actorUserId: actor.authorization.userId,
-                triggerKind: "mention",
-                channel: "slack_steer",
-              });
-          if (authHomeRefusal) {
-            this.log.warn("Blocked slack steering on a subscription home", {
-              event: "scheduler.slack_steer_auth_home_refused",
-              automation_id: automation.id,
-              session_id: steerable.session_id,
-              reason: authHomeRefusal.reason,
-            });
-            continue;
-          }
-          if (await this.steerSession(steerable, automation, event, actor.authorization.userId)) {
+          const steer = await this.steerSession(
+            steerable,
+            automation,
+            event,
+            actor.authorization.userId
+          );
+          if (steer === "steered") {
             steered++;
             continue;
           }
+          if (steer === "refused") continue;
         }
         // No steerable session (outside the window, no session yet, or a rare
         // enqueue error) → fall through. Like the @mention path's stale-session
@@ -2062,6 +2048,8 @@ export class Scheduler {
     await this.enqueueSessionPrompt(
       sessionId,
       {
+        // The run's creation bound the home and audited this first turn.
+        turn: { admitted: "at_create" },
         content: instructionsOverride ?? automation.instructions,
         authorId: executionPrincipal.participantUserId,
         canonicalUserId: executionPrincipal.platformUserId,
@@ -2110,7 +2098,7 @@ export class Scheduler {
     automation: AutomationRow,
     event: SlackAutomationEvent,
     actorUserId: string
-  ): Promise<boolean> {
+  ): Promise<"steered" | "refused" | "failed"> {
     const sessionId = run.session_id!;
     const callbackContext: SlackCallbackContext = {
       source: "slack",
@@ -2132,6 +2120,11 @@ export class Scheduler {
       await this.enqueueSessionPrompt(
         sessionId,
         {
+          turn: {
+            triggerKind: "mention",
+            channel: "slack_steer",
+            requestId: `slack:${event.channelId}:${event.ts}`,
+          },
           content: event.text,
           authorId: `slack:${event.actorUserId}`,
           canonicalUserId: actorUserId,
@@ -2160,15 +2153,24 @@ export class Scheduler {
         session_id: sessionId,
         channel: event.channelId,
       });
-      return true;
+      return "steered";
     } catch (e) {
+      if (e instanceof SessionPromptRefusedError) {
+        this.log.warn("Blocked slack steering on a subscription home", {
+          event: "scheduler.slack_steer_auth_home_refused",
+          automation_id: automation.id,
+          session_id: sessionId,
+          reason: e.reason,
+        });
+        return "refused";
+      }
       this.log.warn("Failed to steer thread session; falling through to trigger path", {
         event: "scheduler.slack_steer_failed",
         automation_id: automation.id,
         session_id: sessionId,
         error: e instanceof Error ? e : new Error(String(e)),
       });
-      return false;
+      return "failed";
     }
   }
 
@@ -2189,9 +2191,30 @@ export class Scheduler {
     );
 
     if (!promptResponse.ok) {
+      const refusal = await subscriptionHomeRefusal(promptResponse);
+      if (refusal) throw new SessionPromptRefusedError(refusal);
       throw new Error(`Prompt enqueue failed with status ${promptResponse.status}`);
     }
   }
+}
+
+/** The session's subscription home refused the prompt (turn admission); retrying will not help. */
+class SessionPromptRefusedError extends Error {
+  constructor(readonly reason: string) {
+    super(`Prompt refused by the session's subscription home: ${reason}`);
+    this.name = "SessionPromptRefusedError";
+  }
+}
+
+/** The refusal reason when a prompt response is turn admission's refusal, else null. */
+async function subscriptionHomeRefusal(response: Response): Promise<string | null> {
+  if (response.status !== 400 && response.status !== 403) return null;
+  const body = (await response
+    .clone()
+    .json()
+    .catch(() => null)) as { code?: unknown; reason?: unknown } | null;
+  if (body?.code !== NO_ELIGIBLE_HOME && body?.code !== "public_repo") return null;
+  return typeof body.reason === "string" ? body.reason : String(body.code);
 }
 
 /**

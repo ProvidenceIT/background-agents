@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { initSession, queryDO } from "./helpers";
+import { initSession, queryDO, PROMPT_TURN } from "./helpers";
 
 describe("reasoning effort", () => {
   describe("validation", () => {
@@ -10,6 +10,7 @@ describe("reasoning effort", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          turn: PROMPT_TURN,
           content: "Test prompt",
           authorId: "user-1",
           source: "web",
@@ -35,6 +36,7 @@ describe("reasoning effort", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          turn: PROMPT_TURN,
           content: "Test prompt",
           authorId: "user-1",
           source: "web",
@@ -107,6 +109,7 @@ describe("reasoning effort", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          turn: PROMPT_TURN,
           content: "Test prompt",
           authorId: "user-1",
           source: "web",
@@ -135,6 +138,7 @@ describe("reasoning effort", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          turn: PROMPT_TURN,
           content: "Test prompt",
           authorId: "user-1",
           source: "web",
@@ -170,6 +174,7 @@ describe("reasoning effort", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          turn: PROMPT_TURN,
           content: "Test prompt",
           authorId: "user-1",
           source: "web",

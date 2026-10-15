@@ -1,3 +1,4 @@
+import { triggerKindSchema } from "@open-inspect/shared/types/auth-homes";
 import { messageSourceSchema } from "@open-inspect/shared/types/sessions";
 import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/session-attachments";
 import {
@@ -7,8 +8,25 @@ import {
 } from "@open-inspect/shared/types/prompts";
 import { z } from "zod";
 
+/**
+ * How the queue admits this turn on the session's subscription home (ADR
+ * 0005). Required, so no caller skips the check by leaving it out:
+ * `admitted: "at_create"` for the first prompt of a session whose creation
+ * (child spawn, scheduled run) bound the home and audited the turn; otherwise
+ * the trigger kind and channel to check, with `canonicalUserId` as the actor.
+ */
+const enqueuePromptTurnSchema = z.union([
+  z.object({ admitted: z.literal("at_create") }),
+  z.object({
+    triggerKind: triggerKindSchema,
+    channel: z.enum(["prompt", "slack_steer", "child_prompt"]),
+    requestId: z.string().min(1),
+  }),
+]);
+
 export const enqueuePromptRequestSchema = z
   .object({
+    turn: enqueuePromptTurnSchema,
     content: promptContentSchema,
     authorId: z.string(),
     canonicalUserId: z.string().nullable().optional(),
