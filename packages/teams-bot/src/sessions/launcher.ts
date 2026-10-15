@@ -276,7 +276,12 @@ export async function launchSession(deps: LaunchDeps, input: LaunchInput): Promi
   if (input.fork) deps.store.putThreadFork(record);
   else deps.store.putThreadSession(record);
   if (working.id) {
-    deps.store.putTurnPlaceholder(input.threadKey, prompt.data.messageId, working.id);
+    deps.store.putTurnPlaceholder(
+      input.threadKey,
+      record.sessionId,
+      prompt.data.messageId,
+      working.id
+    );
   }
   deps.store.putConversationReference(input.threadKey, toStoredConversationReference(activity));
   deps.log.info("launch.started", {

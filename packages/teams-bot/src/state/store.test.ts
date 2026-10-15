@@ -128,15 +128,29 @@ describe("TeamsStateStore", () => {
     const store = open();
     store.putThreadSession(newSession());
     expect(store.getTurnPlaceholder(threadKey, "m-1")).toBeNull();
-    store.putTurnPlaceholder(threadKey, "m-1", "reply-1");
-    store.putTurnPlaceholder(threadKey, "m-2", "reply-2");
-    store.putTurnPlaceholder(threadKey, "m-2", "reply-2b");
+    store.putTurnPlaceholder(threadKey, "session-1", "m-1", "reply-1");
+    store.putTurnPlaceholder(threadKey, "session-1", "m-2", "reply-2");
+    store.putTurnPlaceholder(threadKey, "session-1", "m-2", "reply-2b");
     expect(store.getTurnPlaceholder(threadKey, "m-1")).toBe("reply-1");
     expect(store.getTurnPlaceholder(threadKey, "m-2")).toBe("reply-2b");
     store.deleteTurnPlaceholder(threadKey, "m-1");
     expect(store.getTurnPlaceholder(threadKey, "m-1")).toBeNull();
     store.putThreadSession(newSession({ sessionId: "session-2" }));
     expect(store.getTurnPlaceholder(threadKey, "m-2")).toBeNull();
+  });
+
+  it("keeps a fork's placeholders when the thread's own session is replaced", () => {
+    const store = open();
+    store.putThreadSession(newSession());
+    store.putThreadFork({
+      ...newSession({ sessionId: "session-fork" }),
+      actor: "microsoft:colleague",
+    });
+    store.putTurnPlaceholder(threadKey, "session-1", "m-1", "reply-1");
+    store.putTurnPlaceholder(threadKey, "session-fork", "fm-1", "fork-reply-1");
+    store.putThreadSession(newSession({ sessionId: "session-2" }));
+    expect(store.getTurnPlaceholder(threadKey, "m-1")).toBeNull();
+    expect(store.getTurnPlaceholder(threadKey, "fm-1")).toBe("fork-reply-1");
   });
 
   it("keeps conversation references and tolerates corrupt ones", () => {
@@ -218,6 +232,27 @@ describe("TeamsStateStore", () => {
     expect(store.claimCallback("m-old", "complete")).toBe(true);
     store.markCallbackPosted("m-old", "complete");
     expect(store.releaseUnpostedCallbacks()).toBe(0);
+  });
+
+  it("adds the placeholder session column to a database created before it existed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "teams-bot-state-"));
+    dirs.push(dir);
+    const legacy = new DatabaseSync(join(dir, STATE_FILE_NAME));
+    legacy.exec(
+      `CREATE TABLE turn_placeholders (
+         thread_key TEXT NOT NULL, message_id TEXT NOT NULL,
+         progress_activity_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+         PRIMARY KEY (thread_key, message_id));
+       INSERT INTO turn_placeholders VALUES ('${threadKey}', 'm-old', 'reply-old', 1);`
+    );
+    legacy.close();
+    const store = TeamsStateStore.open(dir);
+    stores.push(store);
+    store.putThreadSession(newSession());
+    store.putTurnPlaceholder(threadKey, "session-1", "m-1", "reply-1");
+    expect(store.getTurnPlaceholder(threadKey, "m-1")).toBe("reply-1");
+    // A row from before the column belongs to the thread's own session and goes with it.
+    expect(store.getTurnPlaceholder(threadKey, "m-old")).toBeNull();
   });
 
   it("persists to a file under the state directory and survives reopening", () => {

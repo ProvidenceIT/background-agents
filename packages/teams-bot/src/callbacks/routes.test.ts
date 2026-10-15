@@ -774,6 +774,112 @@ describe("POST /callbacks/thread_closed", () => {
   });
 });
 
+describe("a colleague's fork beside the thread's session", () => {
+  const COLLEAGUE = "99999999-8888-7777-6666-555555555555";
+
+  function forkHarness() {
+    let creates = 0;
+    const h = harness({
+      controlPlane: {
+        "POST /sessions": () =>
+          json({ sessionId: ++creates === 1 ? "session-1" : "session-fork", status: "created" }),
+        // The thread's session serves its owner and refuses the colleague.
+        "POST /sessions/session-1/prompt": (request) =>
+          request.headers[ACTOR_HEADER.toLowerCase()] === `microsoft:${USER_OID}`
+            ? json({ messageId: "message-1", status: "queued" })
+            : json(
+                {
+                  error: "no eligible subscription home for anthropic: refused",
+                  code: "no_eligible_home",
+                  reason: "no_eligible_home",
+                },
+                403
+              ),
+        "POST /sessions/session-fork/prompt": () =>
+          json({ messageId: "fork-message-1", status: "queued" }),
+      },
+    });
+    const colleagueFollowUp = () =>
+      h.post(
+        activityFixture({
+          id: "1759900000002",
+          replyToId: ROOT_ID,
+          from: { id: "29:2user", name: "Riley", aadObjectId: COLLEAGUE },
+          conversation: { id: THREAD_KEY, conversationType: "channel", tenantId: TENANT_ID },
+          text: "<at>Open-Inspect</at> also update the docs",
+        })
+      );
+    return { ...h, colleagueFollowUp };
+  }
+
+  const mainToolCall = (callId: string, command: string) => ({
+    ...toolCallPayload(callId, command),
+    messageId: "message-1",
+  });
+  const forkToolCall = (callId: string, command: string) => ({
+    ...toolCallPayload(callId, command),
+    sessionId: "session-fork",
+    messageId: "fork-message-1",
+  });
+  const lastEditOf = (h: ReturnType<typeof forkHarness>, activityId: string) =>
+    h
+      .connectorCalls()
+      .filter((call) => call.method === "PUT" && call.path.endsWith(`/${activityId}`))
+      .at(-1)?.text;
+
+  it("keeps each conversation's progress on its own Working... reply", async () => {
+    const h = forkHarness();
+    await h.start();
+    await h.colleagueFollowUp();
+    expect(h.store.getThreadFork(THREAD_KEY, `microsoft:${COLLEAGUE}`)).toMatchObject({
+      sessionId: "session-fork",
+      progressActivityId: "reply-2",
+      turnState: "working",
+    });
+
+    await h.callback("tool_call", mainToolCall("c1", "npm test"));
+    await waitFor(() => lastEditOf(h, "reply-1") !== undefined, "main progress edit");
+    await h.callback("tool_call", forkToolCall("f1", "cat docs/README.md"));
+    await waitFor(() => lastEditOf(h, "reply-2") !== undefined, "fork progress edit");
+    await h.callback("tool_call", mainToolCall("c2", "git status"));
+    await waitFor(
+      () => lastEditOf(h, "reply-1")?.includes("git status") === true,
+      "second main progress edit"
+    );
+
+    expect(lastEditOf(h, "reply-1")).toBe(`${WORKING_TEXT}\n\n- Ran: npm test\n- Ran: git status`);
+    expect(lastEditOf(h, "reply-2")).toBe(`${WORKING_TEXT}\n\n- Ran: cat docs/README.md`);
+  });
+
+  it("closing the fork leaves the thread's progress stream running", async () => {
+    const h = forkHarness();
+    await h.start();
+    await h.colleagueFollowUp();
+    await h.callback("tool_call", mainToolCall("c1", "npm test"));
+    await waitFor(() => lastEditOf(h, "reply-1") !== undefined, "main progress edit");
+
+    const closed = await h.callback("thread_closed", {
+      kind: MSTEAMS_THREAD_CLOSED_KIND,
+      sessionId: "session-fork",
+      timestamp: Date.now(),
+      context: { conversationId: THREAD_KEY, serviceUrl: SERVICE_URL, replyToId: ROOT_ID },
+    });
+    expect(await closed.json()).toEqual({ ok: true, outcome: "delivered" });
+    expect(h.store.getThreadSession(THREAD_KEY)).toMatchObject({
+      sessionId: "session-1",
+      closed: false,
+      turnState: "working",
+    });
+
+    await h.callback("tool_call", mainToolCall("c2", "git status"));
+    await waitFor(
+      () => lastEditOf(h, "reply-1")?.includes("git status") === true,
+      "main progress edit after the fork closed"
+    );
+    expect(lastEditOf(h, "reply-1")).toBe(`${WORKING_TEXT}\n\n- Ran: npm test\n- Ran: git status`);
+  });
+});
+
 describe("POST /callbacks/direct_message", () => {
   function directMessage(overrides: Record<string, unknown> = {}) {
     return {
