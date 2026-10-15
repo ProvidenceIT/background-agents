@@ -34,6 +34,7 @@ import { createVercelSandboxClient } from "./providers/vercel/client";
 import { createVercelProvider, type VercelSandboxProvider } from "./providers/vercel/provider";
 import { resolveScmProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
+import type { WorkspaceGatewayConfig } from "./workspace-gateway";
 import { validateKey } from "../db/secrets-validation";
 
 function createModalProviderFromEnv(env: Env, backend: "modal" | "modal-vm"): ModalSandboxProvider {
@@ -259,7 +260,27 @@ function createKubernetesProviderFromEnv(env: Env): KubernetesSandboxProvider {
       true
     ),
     egressProbeHost: parseEgressProbeHost(env.KUBERNETES_EGRESS_PROBE_HOST),
+    workspaceGateway: parseWorkspaceGateway(env),
   });
+}
+
+const GATEWAY_DOMAIN_PATTERN = /^(?=.{1,200}$)([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/;
+
+/** The tools gateway when both of its settings are present; one without the other is a mistake. */
+export function parseWorkspaceGateway(
+  env: Pick<Env, "SANDBOX_GATEWAY_DOMAIN" | "SANDBOX_GATEWAY_SECRET">
+): WorkspaceGatewayConfig | undefined {
+  const domain = env.SANDBOX_GATEWAY_DOMAIN?.trim().toLowerCase();
+  const secret = env.SANDBOX_GATEWAY_SECRET?.trim();
+  if (!domain && !secret) return undefined;
+  if (!domain || !secret) {
+    throw new Error("SANDBOX_GATEWAY_DOMAIN and SANDBOX_GATEWAY_SECRET must be set together");
+  }
+  if (!GATEWAY_DOMAIN_PATTERN.test(domain)) {
+    throw new Error(`SANDBOX_GATEWAY_DOMAIN is not a domain name: ${domain}`);
+  }
+  if (secret.length < 32) throw new Error("SANDBOX_GATEWAY_SECRET must be at least 32 characters");
+  return { domain, secret };
 }
 
 /**

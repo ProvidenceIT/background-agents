@@ -59,6 +59,8 @@ import {
 } from "../kubernetes-manifests";
 import {
   buildSandboxEnvVars,
+  deriveCodeServerPassword,
+  deriveVncPassword,
   DEFERRED_START_ENV_VAR,
   IMAGE_BUILD_MODE_ENV_VAR,
   scmCloneIdentity,
@@ -84,6 +86,7 @@ import {
   type StopResult,
 } from "../provider";
 import { resolveSandboxPortPlan } from "./port-resolution";
+import { workspaceGatewayHost, type WorkspaceGatewayConfig } from "../workspace-gateway";
 
 const log = createLogger("kubernetes-provider");
 
@@ -147,6 +150,11 @@ export interface KubernetesProviderConfig {
   egressProbeHost?: string;
   /** Deployment-wide env for every sandbox (`KUBERNETES_SANDBOX_ENV`); user secrets override it. */
   sandboxEnv?: Record<string, string>;
+  /**
+   * Browser access to code-server, the terminal, the desktop and tunnel ports
+   * through the control plane's tools gateway. Unset: the tools stay off.
+   */
+  workspaceGateway?: WorkspaceGatewayConfig;
   /** Injected in tests. */
   pollIntervalMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -272,8 +280,9 @@ export class KubernetesSandboxProvider implements SandboxProvider {
       const claim = await this.ensureWorkspaceClaim(config, names);
       created = { claim };
       await this.replaceEnvSecret(names, claim, this.buildEnv(config));
+      const tools = await this.workspaceTools(config, names);
       const pod = await this.ensurePod(
-        this.podSpec(config, names, claim, generationCreatedAtMs, {}),
+        this.podSpec(config, names, claim, generationCreatedAtMs, tools.env),
         config.sandboxId,
         generationCreatedAtMs
       );
@@ -285,6 +294,7 @@ export class KubernetesSandboxProvider implements SandboxProvider {
         providerObjectId: names.base,
         createdAt: Date.now(),
         lifetime: finiteLifetime(generationCreatedAtMs, config.timeoutSeconds),
+        ...tools.access,
       };
     } catch (error) {
       const classified = classifyKubernetesError("Failed to create Kubernetes sandbox", error);
@@ -357,6 +367,7 @@ export class KubernetesSandboxProvider implements SandboxProvider {
         );
       }
 
+      const tools = await this.workspaceTools(config, names);
       const pod = await this.ensurePod(
         this.podSpec(
           {
@@ -369,7 +380,7 @@ export class KubernetesSandboxProvider implements SandboxProvider {
           names,
           claim,
           generationCreatedAtMs,
-          { RESTORED_FROM_SNAPSHOT: "true" }
+          { RESTORED_FROM_SNAPSHOT: "true", ...tools.env }
         ),
         config.sandboxId,
         generationCreatedAtMs
@@ -380,6 +391,7 @@ export class KubernetesSandboxProvider implements SandboxProvider {
         success: true,
         providerObjectId: names.base,
         lifetime: finiteLifetime(generationCreatedAtMs, config.timeoutSeconds),
+        ...tools.access,
       };
     } catch (error) {
       const classified = classifyKubernetesError("Failed to resume Kubernetes sandbox", error);
@@ -645,9 +657,70 @@ export class KubernetesSandboxProvider implements SandboxProvider {
     });
   }
 
+  /**
+   * The tools this generation runs, as pod env (which overrides the frozen
+   * Secret, so each resume follows the session's current choices; an empty
+   * value turns a tool off) and the gateway links the control plane stores.
+   */
+  private async workspaceTools(
+    config: Pick<
+      CreateSandboxConfig,
+      "sandboxId" | "codeServerEnabled" | "vncEnabled" | "sandboxSettings"
+    >,
+    names: SandboxObjectNames
+  ): Promise<{
+    env: Record<string, string>;
+    access: Pick<
+      CreateSandboxResult,
+      "codeServerUrl" | "codeServerPassword" | "ttydUrl" | "vncAccess" | "tunnelUrls"
+    >;
+  }> {
+    const gateway = this.config.workspaceGateway;
+    if (!gateway) return { env: {}, access: {} };
+    const plan = resolveSandboxPortPlan(
+      {
+        codeServer: config.codeServerEnabled === true,
+        terminal: config.sandboxSettings?.terminalEnabled === true,
+        vnc: config.vncEnabled === true,
+      },
+      config.sandboxSettings
+    );
+    const url = (tool: Parameters<typeof workspaceGatewayHost>[1]) =>
+      `https://${workspaceGatewayHost(gateway.domain, tool, names.hash)}/`;
+    const env: Record<string, string> = {
+      CODE_SERVER_PASSWORD: "",
+      TERMINAL_ENABLED: "",
+      VNC_PASSWORD: "",
+    };
+    const access: Awaited<ReturnType<typeof this.workspaceTools>>["access"] = {};
+    if (plan.codeServerPort !== undefined) {
+      const password = await deriveCodeServerPassword(config.sandboxId, gateway.secret);
+      Object.assign(env, {
+        CODE_SERVER_PORT: String(plan.codeServerPort),
+        CODE_SERVER_PASSWORD: password,
+      });
+      Object.assign(access, { codeServerUrl: url("code"), codeServerPassword: password });
+    }
+    if (plan.terminalPort !== undefined) {
+      Object.assign(env, { TERMINAL_ENABLED: "true", TTYD_PROXY_PORT: String(plan.terminalPort) });
+      access.ttydUrl = url("term");
+    }
+    if (plan.vncPort !== undefined) {
+      const password = await deriveVncPassword(config.sandboxId, gateway.secret);
+      Object.assign(env, { VNC_PASSWORD: password, NOVNC_PORT: String(plan.vncPort) });
+      access.vncAccess = { url: url("vnc"), password };
+    }
+    if (plan.extraTunnelPorts.length) {
+      access.tunnelUrls = Object.fromEntries(
+        plan.extraTunnelPorts.map((port) => [String(port), url({ port })])
+      );
+    }
+    return { env, access };
+  }
+
   private buildEnv(config: CreateSandboxConfig): Record<string, string> {
-    // No code-server, terminal or VNC: each needs ingress into the pod, which
-    // this provider does not create. The runtime is told they are off.
+    // The tools are off in the frozen Secret; workspaceTools() turns the ones
+    // a generation runs on in its pod env.
     const portPlan = resolveSandboxPortPlan(
       { codeServer: false, terminal: false, vnc: false },
       config.sandboxSettings

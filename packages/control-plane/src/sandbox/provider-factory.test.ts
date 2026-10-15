@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createTestEnv } from "../router.test-support";
 import type { Env } from "../types";
-import { createSandboxProviderFromEnv, parseSandboxEnv } from "./provider-factory";
+import {
+  createSandboxProviderFromEnv,
+  parseSandboxEnv,
+  parseWorkspaceGateway,
+} from "./provider-factory";
 
 function createEnv(overrides: Partial<Env>): Env {
   return createTestEnv({ TOKEN_ENCRYPTION_KEY: "test-token-key", ...overrides });
@@ -213,5 +217,40 @@ describe("createSandboxProviderFromEnv", () => {
         ).toBe("kubernetes");
       }
     });
+  });
+});
+
+describe("parseWorkspaceGateway", () => {
+  const secret = "s".repeat(32);
+
+  it("reads the domain and secret together, or nothing", () => {
+    expect(
+      parseWorkspaceGateway({
+        SANDBOX_GATEWAY_DOMAIN: " SBX.Example.com ",
+        SANDBOX_GATEWAY_SECRET: secret,
+      })
+    ).toEqual({
+      domain: "sbx.example.com",
+      secret,
+    });
+    expect(parseWorkspaceGateway({})).toBeUndefined();
+  });
+
+  it("refuses half a configuration, a bad domain and a short secret", () => {
+    expect(() => parseWorkspaceGateway({ SANDBOX_GATEWAY_DOMAIN: "sbx.example.com" })).toThrow(
+      "must be set together"
+    );
+    expect(() =>
+      parseWorkspaceGateway({
+        SANDBOX_GATEWAY_DOMAIN: "https://x.com",
+        SANDBOX_GATEWAY_SECRET: secret,
+      })
+    ).toThrow("not a domain name");
+    expect(() =>
+      parseWorkspaceGateway({
+        SANDBOX_GATEWAY_DOMAIN: "sbx.example.com",
+        SANDBOX_GATEWAY_SECRET: "short",
+      })
+    ).toThrow("at least 32");
   });
 });

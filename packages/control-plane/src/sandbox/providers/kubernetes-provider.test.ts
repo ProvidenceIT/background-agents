@@ -1062,6 +1062,65 @@ describe("subscription auth homes", () => {
   });
 });
 
+describe("workspace tools gateway", () => {
+  const gateway = { workspaceGateway: { domain: "sbx.test", secret: "gateway-secret" } };
+  const allTools = {
+    ...baseCreateConfig,
+    codeServerEnabled: true,
+    vncEnabled: true,
+    sandboxSettings: { terminalEnabled: true, tunnelPorts: [3000] },
+  };
+
+  it("starts the requested tools and returns their gateway links", async () => {
+    const { api, provider } = setup(gateway);
+    const result = await provider.createSandbox(allTools);
+    const env = podEnv(api, G1);
+    expect(env).toMatchObject({
+      CODE_SERVER_PORT: "8080",
+      TERMINAL_ENABLED: "true",
+      TTYD_PROXY_PORT: "7680",
+      NOVNC_PORT: "6080",
+    });
+    expect(env.CODE_SERVER_PASSWORD).toMatch(/^[0-9a-f]{32}$/);
+    expect(env.VNC_PASSWORD).toMatch(/^[A-Za-z0-9]{8}$/);
+    expect(result).toMatchObject({
+      codeServerUrl: `https://code-${names.hash}.sbx.test/`,
+      codeServerPassword: env.CODE_SERVER_PASSWORD,
+      ttydUrl: `https://term-${names.hash}.sbx.test/`,
+      vncAccess: { url: `https://vnc-${names.hash}.sbx.test/`, password: env.VNC_PASSWORD },
+      tunnelUrls: { "3000": `https://p3000-${names.hash}.sbx.test/` },
+    });
+  });
+
+  it("turns the tools off on a resume that no longer asks for them", async () => {
+    const { api, provider } = setup(gateway);
+    await provider.createSandbox(allTools);
+    const result = await provider.resumeSandbox({
+      providerObjectId: names.base,
+      sessionId: "sess-1",
+      sandboxId: baseCreateConfig.sandboxId,
+      timeoutSeconds: 1800,
+      generationCreatedAtMs: G2,
+    });
+    expect(podEnv(api, G2)).toMatchObject({
+      CODE_SERVER_PASSWORD: "",
+      TERMINAL_ENABLED: "",
+      VNC_PASSWORD: "",
+    });
+    expect(result).toMatchObject({ success: true });
+    expect(result).not.toHaveProperty("ttydUrl");
+    expect(result).not.toHaveProperty("codeServerUrl");
+  });
+
+  it("leaves the tools off without a gateway", async () => {
+    const { api, provider } = setup();
+    const result = await provider.createSandbox(allTools);
+    expect(podEnv(api, G1)).toEqual({ SANDBOX_TIMEOUT_SECONDS: "3600" });
+    expect(secretEnv(api).TERMINAL_ENABLED).toBe("");
+    expect(result).not.toHaveProperty("ttydUrl");
+  });
+});
+
 describe("podStartVerdict", () => {
   const pod = (status: Record<string, unknown>, metadata: Record<string, unknown> = {}) => ({
     metadata: { name: "p", ...metadata },

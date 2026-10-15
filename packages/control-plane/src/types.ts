@@ -116,6 +116,8 @@ export interface EnvConfig {
   KUBERNETES_SANDBOX_CONTROL_PLANE_URL?: string; // In-cluster https URL sandboxes use instead of WORKER_URL
   KUBERNETES_SANDBOX_CA_CERT?: string; // PEM CA sandboxes trust in addition to the system store
   KUBERNETES_SANDBOX_ENV?: string; // JSON object of deployment-wide sandbox env (model keys); user secrets win
+  SANDBOX_GATEWAY_DOMAIN?: string; // Parent domain of the workspace tool hosts (<tool>-<hash>.<domain>); unset = tools off
+  SANDBOX_GATEWAY_SECRET?: string; // Signs tool links and derives tool passwords; required with SANDBOX_GATEWAY_DOMAIN
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)
