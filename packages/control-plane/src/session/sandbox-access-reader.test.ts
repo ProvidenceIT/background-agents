@@ -39,7 +39,7 @@ async function read(row: Partial<SandboxRow>) {
 describe("SessionAccessReader with the tools gateway", () => {
   it("hands out gateway links with a token for that sandbox and leaves other links alone", async () => {
     const body = await read({
-      ttyd_url: `https://term-${HASH}.sbx.test/`,
+      ttyd_url: `https://p7680-${HASH}.sbx.test/`,
       ttyd_token: await encryptToken("jwt", KEY),
       tunnel_urls: JSON.stringify({
         "3000": `https://p3000-${HASH}.sbx.test/`,
@@ -47,7 +47,7 @@ describe("SessionAccessReader with the tools gateway", () => {
       }),
     });
 
-    const match = /^https:\/\/term-0123456789abcdef0123\.sbx\.test\/__sf\/([^/]+)\/$/.exec(
+    const match = /^https:\/\/p7680-0123456789abcdef0123\.sbx\.test\/__sf\/([^/]+)\/$/.exec(
       body.ttyd!.url
     );
     expect(body.ttyd!.token).toBe("jwt");

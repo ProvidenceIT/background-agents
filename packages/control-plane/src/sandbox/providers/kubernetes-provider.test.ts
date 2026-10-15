@@ -1084,10 +1084,10 @@ describe("workspace tools gateway", () => {
     expect(env.CODE_SERVER_PASSWORD).toMatch(/^[0-9a-f]{32}$/);
     expect(env.VNC_PASSWORD).toMatch(/^[A-Za-z0-9]{8}$/);
     expect(result).toMatchObject({
-      codeServerUrl: `https://code-${names.hash}.sbx.test/`,
+      codeServerUrl: `https://p8080-${names.hash}.sbx.test/`,
       codeServerPassword: env.CODE_SERVER_PASSWORD,
-      ttydUrl: `https://term-${names.hash}.sbx.test/`,
-      vncAccess: { url: `https://vnc-${names.hash}.sbx.test/`, password: env.VNC_PASSWORD },
+      ttydUrl: `https://p7680-${names.hash}.sbx.test/`,
+      vncAccess: { url: `https://p6080-${names.hash}.sbx.test/`, password: env.VNC_PASSWORD },
       tunnelUrls: { "3000": `https://p3000-${names.hash}.sbx.test/` },
     });
   });

@@ -685,8 +685,8 @@ export class KubernetesSandboxProvider implements SandboxProvider {
       },
       config.sandboxSettings
     );
-    const url = (tool: Parameters<typeof workspaceGatewayHost>[1]) =>
-      `https://${workspaceGatewayHost(gateway.domain, tool, names.hash)}/`;
+    const url = (port: number) =>
+      `https://${workspaceGatewayHost(gateway.domain, port, names.hash)}/`;
     const env: Record<string, string> = {
       CODE_SERVER_PASSWORD: "",
       TERMINAL_ENABLED: "",
@@ -699,20 +699,23 @@ export class KubernetesSandboxProvider implements SandboxProvider {
         CODE_SERVER_PORT: String(plan.codeServerPort),
         CODE_SERVER_PASSWORD: password,
       });
-      Object.assign(access, { codeServerUrl: url("code"), codeServerPassword: password });
+      Object.assign(access, {
+        codeServerUrl: url(plan.codeServerPort),
+        codeServerPassword: password,
+      });
     }
     if (plan.terminalPort !== undefined) {
       Object.assign(env, { TERMINAL_ENABLED: "true", TTYD_PROXY_PORT: String(plan.terminalPort) });
-      access.ttydUrl = url("term");
+      access.ttydUrl = url(plan.terminalPort);
     }
     if (plan.vncPort !== undefined) {
       const password = await deriveVncPassword(config.sandboxId, gateway.secret);
       Object.assign(env, { VNC_PASSWORD: password, NOVNC_PORT: String(plan.vncPort) });
-      access.vncAccess = { url: url("vnc"), password };
+      access.vncAccess = { url: url(plan.vncPort), password };
     }
     if (plan.extraTunnelPorts.length) {
       access.tunnelUrls = Object.fromEntries(
-        plan.extraTunnelPorts.map((port) => [String(port), url({ port })])
+        plan.extraTunnelPorts.map((port) => [String(port), url(port)])
       );
     }
     return { env, access };

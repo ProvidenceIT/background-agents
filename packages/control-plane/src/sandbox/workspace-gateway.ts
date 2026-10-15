@@ -1,6 +1,6 @@
 /**
  * Workspace tools gateway: browser access to a Kubernetes sandbox's code-server,
- * terminal, desktop and tunnel ports through `<tool>-<hash>.<domain>`, where
+ * terminal, desktop and tunnel ports through `p<port>-<hash>.<domain>`, where
  * `hash` is the sandbox's object hash (its pod label). Links carry a signed
  * token in a `/__sf/<token>/` path prefix that the gateway trades for a cookie.
  */
@@ -19,38 +19,27 @@ export interface WorkspaceGatewayConfig {
   secret: string;
 }
 
-/** A tool host label: one of the fixed tools, or `p<port>` for a tunnel. */
-export type WorkspaceTool = "code" | "term" | "vnc" | { port: number };
-
 const HASH_PATTERN = /^[0-9a-f]{20}$/;
-const HOST_LABEL_PATTERN = /^(code|term|vnc|p(\d{1,5}))-([0-9a-f]{20})$/;
+const HOST_LABEL_PATTERN = /^p(\d{1,5})-([0-9a-f]{20})$/;
 
-function toolLabel(tool: WorkspaceTool): string {
-  return typeof tool === "string" ? tool : `p${tool.port}`;
+export function workspaceGatewayHost(domain: string, port: number, hash: string): string {
+  return `p${port}-${hash}.${domain}`;
 }
 
-export function workspaceGatewayHost(domain: string, tool: WorkspaceTool, hash: string): string {
-  return `${toolLabel(tool)}-${hash}.${domain}`;
-}
-
-/** The tool and sandbox hash a request's Host names, or null when it is not a tool host. */
+/** The sandbox port and hash a request's Host names, or null when it is not a tool host. */
 export function parseWorkspaceGatewayHost(
   domain: string,
   host: string | undefined
-): { tool: WorkspaceTool; hash: string } | null {
+): { port: number; hash: string } | null {
   if (!host) return null;
   const hostname = host.toLowerCase().replace(/:\d+$/, "");
   const suffix = `.${domain.toLowerCase()}`;
   if (!hostname.endsWith(suffix)) return null;
   const match = HOST_LABEL_PATTERN.exec(hostname.slice(0, -suffix.length));
   if (!match) return null;
-  const [, label, port, hash] = match;
-  if (port !== undefined) {
-    const value = Number(port);
-    if (value < 1 || value > 65535) return null;
-    return { tool: { port: value }, hash: hash! };
-  }
-  return { tool: label as "code" | "term" | "vnc", hash: hash! };
+  const port = Number(match[1]);
+  if (port < 1 || port > 65535) return null;
+  return { port, hash: match[2]! };
 }
 
 function tokenPayload(hash: string, expiresAtMs: number): string {

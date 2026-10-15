@@ -14,26 +14,19 @@ const DOMAIN = "sbx.example.com";
 
 describe("workspace gateway hosts", () => {
   it("names and parses each tool host", () => {
-    expect(workspaceGatewayHost(DOMAIN, "term", HASH)).toBe(`term-${HASH}.sbx.example.com`);
-    expect(workspaceGatewayHost(DOMAIN, { port: 3000 }, HASH)).toBe(
-      `p3000-${HASH}.sbx.example.com`
-    );
-    expect(parseWorkspaceGatewayHost(DOMAIN, `CODE-${HASH}.sbx.example.com:443`)).toEqual({
-      tool: "code",
-      hash: HASH,
-    });
-    expect(parseWorkspaceGatewayHost(DOMAIN, `p3000-${HASH}.sbx.example.com`)).toEqual({
-      tool: { port: 3000 },
+    expect(workspaceGatewayHost(DOMAIN, 3000, HASH)).toBe(`p3000-${HASH}.sbx.example.com`);
+    expect(parseWorkspaceGatewayHost(DOMAIN, `P8080-${HASH}.sbx.example.com:443`)).toEqual({
+      port: 8080,
       hash: HASH,
     });
   });
 
   it("rejects hosts outside the domain, unknown tools and impossible ports", () => {
-    expect(parseWorkspaceGatewayHost(DOMAIN, `code-${HASH}.evil.com`)).toBeNull();
-    expect(parseWorkspaceGatewayHost(DOMAIN, `code-${HASH}.xsbx.example.com`)).toBeNull();
-    expect(parseWorkspaceGatewayHost(DOMAIN, `shell-${HASH}.sbx.example.com`)).toBeNull();
+    expect(parseWorkspaceGatewayHost(DOMAIN, `p80-${HASH}.evil.com`)).toBeNull();
+    expect(parseWorkspaceGatewayHost(DOMAIN, `p80-${HASH}.xsbx.example.com`)).toBeNull();
+    expect(parseWorkspaceGatewayHost(DOMAIN, `code-${HASH}.sbx.example.com`)).toBeNull();
     expect(parseWorkspaceGatewayHost(DOMAIN, `p70000-${HASH}.sbx.example.com`)).toBeNull();
-    expect(parseWorkspaceGatewayHost(DOMAIN, `code-${HASH}.sbx.example.com`)).not.toBeNull();
+    expect(parseWorkspaceGatewayHost(DOMAIN, `p80-${HASH}.sbx.example.com`)).not.toBeNull();
   });
 });
 
@@ -67,9 +60,9 @@ describe("workspace gateway tokens", () => {
   });
 
   it("puts the token in the path prefix and reads a URL's sandbox", () => {
-    const url = `https://vnc-${HASH}.sbx.example.com/`;
+    const url = `https://p6080-${HASH}.sbx.example.com/`;
     expect(withWorkspaceGatewayToken(url, "t0k")).toBe(
-      `https://vnc-${HASH}.sbx.example.com/__sf/t0k/`
+      `https://p6080-${HASH}.sbx.example.com/__sf/t0k/`
     );
     expect(workspaceGatewayUrlHash(DOMAIN, url)).toBe(HASH);
     expect(workspaceGatewayUrlHash(DOMAIN, "https://modal.run/x")).toBeNull();
