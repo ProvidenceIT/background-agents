@@ -27,7 +27,7 @@ import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shu
 import { generateId, hashToken } from "../auth/crypto";
 import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
-import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
+import { createSandboxProviderFromEnv, parseWorkspaceGateway } from "../sandbox/provider-factory";
 import { providerResumesAfterStop, type SandboxProvider } from "../sandbox/provider";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { createImageBuildLookup } from "../image-builds/lookup";
@@ -977,6 +977,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     repoSecretsEncryptionKey,
     sandboxDashboardSettings,
     log,
+    workspaceGateway: parseWorkspaceGateway(env),
   });
 
   const connectionAuthenticator = new SessionConnectionAuthenticator({

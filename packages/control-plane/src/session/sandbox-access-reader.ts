@@ -5,6 +5,12 @@ import type { SandboxStateReader } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
 import { resolveSandboxDashboardUrl, type SandboxDashboardSettings } from "./sandbox-access";
 import { safeParseTunnelUrls } from "./tunnel-urls";
+import {
+  signWorkspaceGatewayToken,
+  withWorkspaceGatewayToken,
+  workspaceGatewayUrlHash,
+  type WorkspaceGatewayConfig,
+} from "../sandbox/workspace-gateway";
 
 export interface SessionAccessReaderDeps {
   sessionCoreRepository: Pick<SessionCoreRepository, "getSession">;
@@ -12,6 +18,9 @@ export interface SessionAccessReaderDeps {
   repoSecretsEncryptionKey: string;
   sandboxDashboardSettings: SandboxDashboardSettings;
   log: Logger;
+  /** Tool links on the gateway's domain are handed out with a token for this viewer. */
+  workspaceGateway?: WorkspaceGatewayConfig;
+  now?: () => number;
 }
 
 /**
@@ -54,17 +63,30 @@ export class SessionAccessReader {
     ) {
       return Response.json({ error: "Sandbox access changed; retry" }, { status: 409, headers });
     }
+    const link = await this.gatewayLinker();
+    const tunnelUrls = current.tunnel_urls
+      ? safeParseTunnelUrls(current.tunnel_urls, this.deps.log)
+      : null;
     return Response.json(
       {
         codeServer:
           current.code_server_url && codeServerPassword
-            ? { url: current.code_server_url, password: codeServerPassword }
+            ? { url: await link(current.code_server_url), password: codeServerPassword }
             : null,
         vnc:
-          current.vnc_url && vncPassword ? { url: current.vnc_url, password: vncPassword } : null,
-        ttyd: current.ttyd_url && ttydToken ? { url: current.ttyd_url, token: ttydToken } : null,
-        tunnelUrls: current.tunnel_urls
-          ? safeParseTunnelUrls(current.tunnel_urls, this.deps.log)
+          current.vnc_url && vncPassword
+            ? { url: await link(current.vnc_url), password: vncPassword }
+            : null,
+        ttyd:
+          current.ttyd_url && ttydToken
+            ? { url: await link(current.ttyd_url), token: ttydToken }
+            : null,
+        tunnelUrls: tunnelUrls
+          ? Object.fromEntries(
+              await Promise.all(
+                Object.entries(tunnelUrls).map(async ([port, url]) => [port, await link(url)])
+              )
+            )
           : null,
         sandboxDashboardUrl: resolveSandboxDashboardUrl(
           this.deps.sandboxDashboardSettings,
@@ -73,5 +95,20 @@ export class SessionAccessReader {
       },
       { headers }
     );
+  }
+
+  /** Adds a fresh token to links on the gateway's domain; other links pass through. */
+  private async gatewayLinker(): Promise<(url: string) => Promise<string>> {
+    const gateway = this.deps.workspaceGateway;
+    if (!gateway) return async (url) => url;
+    const nowMs = (this.deps.now ?? Date.now)();
+    const tokens = new Map<string, Promise<string>>();
+    return async (url) => {
+      const hash = workspaceGatewayUrlHash(gateway.domain, url);
+      if (!hash) return url;
+      if (!tokens.has(hash))
+        tokens.set(hash, signWorkspaceGatewayToken(gateway.secret, hash, nowMs));
+      return withWorkspaceGatewayToken(url, await tokens.get(hash)!);
+    };
   }
 }
