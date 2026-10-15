@@ -59,6 +59,7 @@ describe("MessageService", () => {
     });
 
     const result = await service.enqueuePrompt({
+      turn: { triggerKind: "prompt", channel: "prompt", requestId: "req-1" },
       content: "hello",
       authorId: "user-1",
       source: "web",
@@ -66,6 +67,7 @@ describe("MessageService", () => {
 
     expect(result).toEqual({ messageId: "msg-1", status: "queued" });
     expect(messageQueue.enqueuePromptFromApi).toHaveBeenCalledWith({
+      turn: { triggerKind: "prompt", channel: "prompt", requestId: "req-1" },
       content: "hello",
       authorId: "user-1",
       source: "web",

@@ -22,11 +22,7 @@ import {
 } from "../routing/identity-enforcement";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { SessionIndexStore } from "../db/session-index";
-import {
-  BOT_TURN_TRIGGER_KINDS,
-  enforceAuthHomeTurn,
-  turnTriggerKind,
-} from "../auth-homes/session-binding";
+import { BOT_TURN_TRIGGER_KINDS, turnTriggerKind } from "../auth-homes/turn-admission";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
@@ -165,21 +161,14 @@ export async function handleSessionPrompt(
     }
   }
 
-  // A session bound to an auth home serves this turn only for an actor
-  // eligible for that home under the current sharing policy.
-  const authHomeRefusal = await enforceAuthHomeTurn({
-    db: ctx.db,
-    requestId: ctx.request_id,
-    sessionId,
-    session: ctx.sessionAdmission?.row,
-    actorUserId: canonicalUserId ?? null,
-    triggerKind: turnTriggerKind(ctx.principal, body.triggerKind),
-    model: body.model,
-    channel: "prompt",
-  });
-  if (authHomeRefusal) return authHomeRefusal;
-
   const promptRequest = {
+    // The session's prompt queue admits the turn on its subscription home,
+    // as this actor (`canonicalUserId`) and trigger kind (ADR 0005).
+    turn: {
+      triggerKind: turnTriggerKind(ctx.principal, body.triggerKind),
+      channel: "prompt",
+      requestId: ctx.request_id,
+    },
     content: body.content,
     authorId,
     canonicalUserId,

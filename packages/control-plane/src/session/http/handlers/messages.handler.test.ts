@@ -3,6 +3,7 @@ import type { Logger } from "../../../logger";
 import { MessagesHandler } from "./messages.handler";
 import { SandboxPromptBlockedError } from "../../message-queue";
 import { UsageQuotaExceededError } from "../../../authorization/usage-quotas";
+import { AuthHomeTurnRefusedError } from "../../../auth-homes/turn-admission";
 import type { MessageService } from "../../services/message.service";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 
@@ -32,6 +33,8 @@ function createHandler() {
   };
 }
 
+const TURN = { triggerKind: "prompt", channel: "prompt", requestId: "req-1" };
+
 describe("MessagesHandler", () => {
   it("returns a recoverable 409 when sandbox safety blocks prompt admission", async () => {
     const { handler, messageService, log } = createHandler();
@@ -42,7 +45,12 @@ describe("MessagesHandler", () => {
     const response = await handler.enqueuePrompt(
       new Request("http://internal/internal/prompt", {
         method: "POST",
-        body: JSON.stringify({ content: "Continue", authorId: "user-1", source: "web" }),
+        body: JSON.stringify({
+          turn: TURN,
+          content: "Continue",
+          authorId: "user-1",
+          source: "web",
+        }),
       }),
       log
     );
@@ -53,6 +61,49 @@ describe("MessagesHandler", () => {
       error: "Start a new session to continue.",
     });
   });
+  it("answers a turn its subscription home refuses with the refusal the bots recognise", async () => {
+    const { handler, messageService, log } = createHandler();
+    vi.mocked(messageService.enqueuePrompt).mockRejectedValue(
+      new AuthHomeTurnRefusedError({
+        reason: "no_eligible_home",
+        provider: "anthropic",
+        message: "There is no eligible subscription home for anthropic",
+      })
+    );
+
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        body: JSON.stringify({
+          turn: TURN,
+          content: "Continue",
+          authorId: "user-1",
+          source: "web",
+        }),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "no_eligible_home",
+      reason: "no_eligible_home",
+    });
+  });
+
+  it("refuses a prompt that does not say how its turn is admitted", async () => {
+    const { handler, messageService, log } = createHandler();
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        body: JSON.stringify({ content: "Continue", authorId: "user-1", source: "web" }),
+      }),
+      log
+    );
+    expect(response.status).toBe(400);
+    expect(messageService.enqueuePrompt).not.toHaveBeenCalled();
+  });
+
   it("returns 429 USAGE_QUOTA_EXCEEDED when a workspace usage quota refuses the prompt", async () => {
     const { handler, messageService, log } = createHandler();
     vi.mocked(messageService.enqueuePrompt).mockRejectedValue(
@@ -80,7 +131,12 @@ describe("MessagesHandler", () => {
     const response = await handler.enqueuePrompt(
       new Request("http://internal/internal/prompt", {
         method: "POST",
-        body: JSON.stringify({ content: "Continue", authorId: "user-1", source: "web" }),
+        body: JSON.stringify({
+          turn: TURN,
+          content: "Continue",
+          authorId: "user-1",
+          source: "web",
+        }),
       }),
       log
     );
@@ -108,6 +164,7 @@ describe("MessagesHandler", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          turn: TURN,
           content: "hello",
           authorId: "user-1",
           source: "web",
@@ -119,6 +176,7 @@ describe("MessagesHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ messageId: "msg-1", status: "queued" });
     expect(messageService.enqueuePrompt).toHaveBeenCalledWith({
+      turn: TURN,
       content: "hello",
       authorId: "user-1",
       source: "web",
@@ -133,6 +191,7 @@ describe("MessagesHandler", () => {
     });
 
     const body = {
+      turn: TURN,
       content: "hello",
       authorId: "github:123",
       source: "github",
@@ -168,7 +227,7 @@ describe("MessagesHandler", () => {
       new Request("http://internal/internal/prompt", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content: "hello", authorId: "user-1" }),
+        body: JSON.stringify({ turn: TURN, content: "hello", authorId: "user-1" }),
       }),
       log
     );
@@ -181,7 +240,12 @@ describe("MessagesHandler", () => {
   it.each([
     [
       "oversized content",
-      { content: "x".repeat(MAX_WEB_PROMPT_CHARS + 1), authorId: "user-1", source: "web" },
+      {
+        turn: TURN,
+        content: "x".repeat(MAX_WEB_PROMPT_CHARS + 1),
+        authorId: "user-1",
+        source: "web",
+      },
       {
         error: `content exceeds ${MAX_WEB_PROMPT_CHARS} characters (got ${MAX_WEB_PROMPT_CHARS + 1})`,
         code: "prompt_too_long",
@@ -189,10 +253,14 @@ describe("MessagesHandler", () => {
     ],
     [
       "blank content",
-      { content: "  \n", authorId: "user-1", source: "web" },
+      { turn: TURN, content: "  \n", authorId: "user-1", source: "web" },
       { error: "content is required" },
     ],
-    ["invalid source", { content: "hello", authorId: "user-1", source: "unknown" }, null],
+    [
+      "invalid source",
+      { turn: TURN, content: "hello", authorId: "user-1", source: "unknown" },
+      null,
+    ],
   ])("reports %s at the internal boundary", async (_case, body, expected) => {
     const { handler, messageService, log } = createHandler();
     const response = await handler.enqueuePrompt(
@@ -218,6 +286,7 @@ describe("MessagesHandler", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          turn: TURN,
           content: "hello",
           authorId: "user-1",
           source: "web",

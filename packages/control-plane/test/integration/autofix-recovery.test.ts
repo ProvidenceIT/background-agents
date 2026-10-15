@@ -21,7 +21,7 @@ import {
 } from "../../src/session/sandbox-shutdown-repository";
 import type { SandboxCommand } from "../../src/session/types";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, seedSandboxAuth } from "./helpers";
+import { initNamedSession, seedSandboxAuth, PROMPT_TURN } from "./helpers";
 import { runInSessionDO, type SessionDOInternals } from "./session-do-access";
 
 beforeEach(async () => {
@@ -505,7 +505,12 @@ describe("Autofix feedback across sandbox recovery", () => {
     const stub = await recoverySession();
     await runInSessionDO(stub, async (instance, state) => {
       const h = recoveryHarness(instance, state);
-      const prompt = { content: "New user work", authorId: "user-1", source: "web" as const };
+      const prompt = {
+        turn: PROMPT_TURN,
+        content: "New user work",
+        authorId: "user-1",
+        source: "web" as const,
+      };
       await expect(h.messageQueue.enqueuePromptFromApi(prompt)).rejects.toBeInstanceOf(
         SandboxPromptBlockedError
       );

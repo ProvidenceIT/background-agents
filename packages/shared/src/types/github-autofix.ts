@@ -151,6 +151,7 @@ export const githubAutofixSessionResponseSchema = z.discriminatedUnion("kind", [
       "budget_exhausted",
       "queue_full",
       "attempt_limit",
+      "auth_home_refused",
     ]),
   }),
   z.object({

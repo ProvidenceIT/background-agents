@@ -3,7 +3,12 @@ import {
   getValidHarnessOrDefault,
 } from "@open-inspect/shared/harnesses";
 import { UsageQuotaExceededError } from "../authorization/usage-quotas";
-import { AuthHomeTurnRefusedError } from "../auth-homes/session-binding";
+import {
+  ADMIT_EVERY_TURN,
+  AuthHomeTurnRefusedError,
+  type TurnAdmissionGate,
+  type TurnRequest,
+} from "../auth-homes/turn-admission";
 import { generateId, hashToken } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
@@ -151,29 +156,6 @@ function resolveParticipantGitIdentity(
     : { mode: "agent-only" };
 }
 
-/**
- * Workspace usage-quota admission for one prompting user; throws
- * `UsageQuotaExceededError` to refuse. The session budget below is per
- * session; this is the per-user, per-team and workspace period limit.
- */
-export interface UsageQuotaGate {
-  admitPrompt(userId: string): Promise<unknown>;
-}
-
-const NO_USAGE_QUOTA_GATE: UsageQuotaGate = { admitPrompt: async () => undefined };
-
-/**
- * The per-turn subscription-home gate for a prompt that arrives over the
- * session's own socket; throws `AuthHomeTurnRefusedError` to refuse. A
- * socket outlives the policy it was minted under, so every prompt on it is
- * checked again and audited, exactly like an HTTP prompt.
- */
-export interface AuthHomeTurnGate {
-  admitPrompt(userId: string, model: string | undefined): Promise<void>;
-}
-
-const NO_AUTH_HOME_TURN_GATE: AuthHomeTurnGate = { admitPrompt: async () => undefined };
-
 /** The identity a participant's usage is metered under. */
 function meteredUserId(participant: Pick<ParticipantRow, "user_id" | "canonical_user_id">) {
   return participant.canonical_user_id ?? participant.user_id;
@@ -203,8 +185,11 @@ export class SessionMessageQueue {
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
     private readonly getSandboxPromptBlockReason: () => string | null,
-    private readonly usageQuotas: UsageQuotaGate = NO_USAGE_QUOTA_GATE,
-    private readonly authHomeTurns: AuthHomeTurnGate = NO_AUTH_HOME_TURN_GATE
+    /**
+     * Every turn is admitted through it: the subscription-home gate, the
+     * usage quota, and the audit of a turn a home served (ADR 0005).
+     */
+    private readonly turns: TurnAdmissionGate = ADMIT_EVERY_TURN
   ) {}
 
   async enqueueAutofix(
@@ -214,39 +199,66 @@ export class SessionMessageQueue {
     const recoveryHold = this.getSandboxPromptBlockReason() !== null;
     const userId = `github:${command.author.id}`;
     const now = Date.now();
-    const admission = this.messageRepository.admitAutofixMessage({
-      message: {
-        id: generateId(),
-        authorId: () => {
-          let participant = this.participantService.getByUserId(userId);
-          if (!participant) {
-            participant = this.participantService.create(userId, command.author.login);
-          }
-          this.participantRepository.updateParticipantCoalesce(participant.id, {
-            scmUserId: command.author.id,
-            scmLogin: command.author.login,
-            scmName: command.author.login,
-          });
-          return participant.id;
+    const admitMessage = () =>
+      this.messageRepository.admitAutofixMessage({
+        message: {
+          id: generateId(),
+          authorId: () => {
+            let participant = this.participantService.getByUserId(userId);
+            if (!participant) {
+              participant = this.participantService.create(userId, command.author.login);
+            }
+            this.participantRepository.updateParticipantCoalesce(participant.id, {
+              scmUserId: command.author.id,
+              scmLogin: command.author.login,
+              scmName: command.author.login,
+            });
+            return participant.id;
+          },
+          content: command.prompt,
+          source: "github",
+          status: "pending",
+          createdAt: now,
         },
-        content: command.prompt,
-        source: "github",
-        status: "pending",
-        createdAt: now,
-      },
-      feedbackKey: command.feedbackKey,
-      pullRequestKey: `github:${command.pullRequest.repositoryId}:${command.pullRequest.number}`,
-      originContext: JSON.stringify(command.origin),
-      attemptLimit: command.attemptLimit,
-      windowStart: now - AUTOFIX_ATTEMPT_WINDOW_MS,
-      sessionClosed: !session || session.status === "archived" || session.status === "cancelled",
-    });
+        feedbackKey: command.feedbackKey,
+        pullRequestKey: `github:${command.pullRequest.repositoryId}:${command.pullRequest.number}`,
+        originContext: JSON.stringify(command.origin),
+        attemptLimit: command.attemptLimit,
+        windowStart: now - AUTOFIX_ATTEMPT_WINDOW_MS,
+        sessionClosed: !session || session.status === "archived" || session.status === "cancelled",
+      });
     const logFields = {
       feedback_key: command.feedbackKey,
       pull_request_number: command.pullRequest.number,
       artifact_id: command.pullRequest.artifactId,
       recovery_hold: recoveryHold,
     };
+    let admission: EnqueueAutofixResponse;
+    try {
+      // Feedback already queued answers as a duplicate whatever the home's
+      // policy now says; a new fix is a turn the session owner's home pays
+      // for, admitted like any other.
+      admission = this.messageRepository.getAutofixMessageId(command.feedbackKey)
+        ? admitMessage()
+        : await this.turns.admit(
+            {
+              home: {
+                actor: "session_owner",
+                triggerKind: "pr_event",
+                model: null,
+                channel: "autofix",
+                requestId: `autofix:${command.feedbackKey}`,
+              },
+            },
+            async () => {
+              const value = admitMessage();
+              return { value, added: value.kind === "enqueued" };
+            }
+          );
+    } catch (error) {
+      if (!(error instanceof AuthHomeTurnRefusedError)) throw error;
+      admission = { kind: "rejected", reason: "auth_home_refused" };
+    }
     if (admission.kind === "rejected") {
       this.log.info("autofix.rejected", {
         event: "autofix.rejected",
@@ -298,7 +310,6 @@ export class SessionMessageQueue {
     try {
       this.assertPromptableSession();
       this.assertSandboxAcceptingPrompts();
-      await this.authHomeTurns.admitPrompt(client.userId, data.model);
       let participant = this.participantRepository.getParticipantById(client.participantId);
       participant ??= this.participantService.getByUserId(client.userId);
       if (!participant) {
@@ -306,17 +317,35 @@ export class SessionMessageQueue {
         this.assertQueueCapacity();
         participant = this.participantService.create(client.userId, client.name);
       }
-      await this.usageQuotas.admitPrompt(meteredUserId(participant));
-      enqueued = await this.enqueuePromptCore({
-        participant,
-        userId: client.userId,
-        content: data.content,
-        source: "web",
-        model: data.model,
-        reasoningEffort: data.reasoningEffort,
-        attachments: data.attachments,
-        clientRequestId: data.clientRequestId,
-      });
+      const author = participant;
+      enqueued = await this.turns.admit(
+        {
+          // A socket outlives the policy it was minted under, so every
+          // prompt on it is admitted again. Its user is the canonical one
+          // when the connection resolved it.
+          home: {
+            actor: { userId: client.userId },
+            triggerKind: "prompt",
+            model: data.model ?? null,
+            channel: "ws_prompt",
+            requestId: generateId(),
+          },
+          meteredUserId: meteredUserId(author),
+        },
+        async () => {
+          const value = await this.enqueuePromptCore({
+            participant: author,
+            userId: client.userId,
+            content: data.content,
+            source: "web",
+            model: data.model,
+            reasoningEffort: data.reasoningEffort,
+            attachments: data.attachments,
+            clientRequestId: data.clientRequestId,
+          });
+          return { value, added: value.replayed !== true };
+        }
+      );
     } catch (error) {
       if (error instanceof SessionAttachmentError) {
         this.wsManager.send(ws, {
@@ -812,17 +841,33 @@ export class SessionMessageQueue {
       participant = this.participantRepository.getParticipantById(participant.id) ?? participant;
     }
 
-    await this.usageQuotas.admitPrompt(meteredUserId(participant));
-    const enqueued = await this.enqueuePromptCore({
-      participant,
-      userId: data.authorId,
-      content: data.content,
-      source: data.source,
-      model: data.model,
-      reasoningEffort: data.reasoningEffort,
-      attachments: data.attachments,
-      callbackContext: data.callbackContext,
-      clientRequestId: data.clientRequestId,
+    const author = participant;
+    const turn: TurnRequest = {
+      home:
+        "admitted" in data.turn
+          ? "admitted_at_create"
+          : {
+              actor: { userId: data.canonicalUserId ?? null },
+              triggerKind: data.turn.triggerKind,
+              model: data.model ?? null,
+              channel: data.turn.channel,
+              requestId: data.turn.requestId,
+            },
+      meteredUserId: meteredUserId(author),
+    };
+    const enqueued = await this.turns.admit(turn, async () => {
+      const value = await this.enqueuePromptCore({
+        participant: author,
+        userId: data.authorId,
+        content: data.content,
+        source: data.source,
+        model: data.model,
+        reasoningEffort: data.reasoningEffort,
+        attachments: data.attachments,
+        callbackContext: data.callbackContext,
+        clientRequestId: data.clientRequestId,
+      });
+      return { value, added: value.replayed !== true };
     });
 
     await this.processMessageQueue();

@@ -9,6 +9,7 @@ import {
   seedMessage,
   seedSandboxAuth,
   waitForSandboxStatus,
+  PROMPT_TURN,
 } from "./helpers";
 import { runInSessionDO } from "./session-do-access";
 
@@ -111,7 +112,12 @@ describe("POST /internal/sandbox-event", () => {
     const promptRes = await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "Read file", authorId: "user-1", source: "web" }),
+      body: JSON.stringify({
+        turn: PROMPT_TURN,
+        content: "Read file",
+        authorId: "user-1",
+        source: "web",
+      }),
     });
     const { messageId } = await promptRes.json<{ messageId: string }>();
 
@@ -145,7 +151,12 @@ describe("POST /internal/sandbox-event", () => {
     const promptResponse = await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "Review code", authorId: "user-1", source: "web" }),
+      body: JSON.stringify({
+        turn: PROMPT_TURN,
+        content: "Review code",
+        authorId: "user-1",
+        source: "web",
+      }),
     });
     const { messageId } = await promptResponse.json<{ messageId: string }>();
 

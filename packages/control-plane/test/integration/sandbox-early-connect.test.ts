@@ -7,6 +7,7 @@ import {
   initNamedSession,
   openClientWs,
   openSandboxWs,
+  PROMPT_TURN,
   queryDO,
   seedSandboxAuth,
   waitForSandboxStatus,
@@ -21,7 +22,7 @@ async function enqueuePrompt(stub: DurableObjectStub, content: string): Promise<
   const response = await stub.fetch("http://internal/internal/prompt", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content, authorId: "user-1", source: "web" }),
+    body: JSON.stringify({ turn: PROMPT_TURN, content, authorId: "user-1", source: "web" }),
   });
   expect(response.status).toBe(200);
   return (await response.json<{ messageId: string }>()).messageId;

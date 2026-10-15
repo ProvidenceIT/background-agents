@@ -33,7 +33,7 @@ vi.mock("../session/identity", async (importOriginal) => ({
   resolveGitHubEnrichmentForRequest: vi.fn(async () => null),
 }));
 
-describe("POST /sessions/:id/prompt on an auth-home session", () => {
+describe("POST /sessions/:id/prompt", () => {
   let fixture: Awaited<ReturnType<typeof createHouseholdFixture>>;
   let forwarded: number;
   let forwardedBodies: Record<string, unknown>[];
@@ -48,7 +48,8 @@ describe("POST /sessions/:id/prompt on an auth-home session", () => {
   function prompt(
     userId: string,
     body: Record<string, unknown> = {},
-    principal: SessionRouteContext["principal"] = { kind: "user", userId }
+    principal: SessionRouteContext["principal"] = { kind: "user", userId },
+    queueResponse?: Response
   ) {
     const ctx: SessionRouteContext = {
       db: fixture.db,
@@ -61,7 +62,7 @@ describe("POST /sessions/:id/prompt on an auth-home session", () => {
         fetch: async (_sessionId, _path, init) => {
           forwarded += 1;
           forwardedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-          return Response.json({ messageId: "message-1", status: "queued" });
+          return queueResponse ?? Response.json({ messageId: "message-1", status: "queued" });
         },
       },
     };
@@ -77,48 +78,37 @@ describe("POST /sessions/:id/prompt on an auth-home session", () => {
     );
   }
 
-  it("serves a colleague's prompt from the owner's shared home under household and audits it", async () => {
+  it("forwards the turn to the session's prompt queue, which admits it on the home", async () => {
+    // Under owner_only the colleague may not spend the owner's home, but the
+    // route does not decide that: the queue does (ADR 0005).
+    await fixture.setPolicy("owner_only");
     const response = await prompt(HOUSEHOLD.colleague);
     expect(response.status).toBe(200);
-    expect(forwarded).toBe(1);
-    expect(await fixture.auditRows("credential.auth_home_prompt")).toEqual([
-      {
-        actor: HOUSEHOLD.colleague,
-        metadata: expect.objectContaining({
-          home_owner: HOUSEHOLD.owner,
-          actor: HOUSEHOLD.colleague,
-          trigger_kind: "prompt",
-        }),
-      },
+    expect(forwardedBodies).toEqual([
+      expect.objectContaining({
+        turn: { triggerKind: "prompt", channel: "prompt", requestId: `req-${HOUSEHOLD.colleague}` },
+        canonicalUserId: HOUSEHOLD.colleague,
+      }),
     ]);
-  });
-
-  it("refuses the colleague under owner_only with no_eligible_home and writes no prompt audit", async () => {
-    await fixture.setPolicy("owner_only");
-    const response = await prompt(HOUSEHOLD.colleague);
-    expect(response.status).toBe(403);
-    expect(await response.json()).toMatchObject({ code: "no_eligible_home" });
-    expect(forwarded).toBe(0);
     expect(await fixture.auditRows("credential.auth_home_prompt")).toEqual([]);
-
-    // The owner's own turn is unaffected by the policy.
-    expect((await prompt(HOUSEHOLD.owner)).status).toBe(200);
   });
 
-  it("refuses an unenrolled user under both policies", async () => {
-    expect((await prompt(HOUSEHOLD.unenrolled)).status).toBe(403);
-    await fixture.setPolicy("owner_only");
-    const refused = await prompt(HOUSEHOLD.unenrolled);
-    expect(refused.status).toBe(403);
-    expect(await refused.json()).toMatchObject({ code: "no_eligible_home" });
-    expect(forwarded).toBe(0);
+  it("passes the queue's refusal back unchanged", async () => {
+    const refusal = Response.json(
+      {
+        error: "refused",
+        message: "refused",
+        code: "no_eligible_home",
+        reason: "no_eligible_home",
+      },
+      { status: 403 }
+    );
+    const response = await prompt(HOUSEHOLD.colleague, {}, undefined, refusal);
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "no_eligible_home" });
   });
 
-  it("gates a bot's turn on the kind it names, which only a bot may name", async () => {
-    await fixture.db
-      .prepare("UPDATE user_auth_homes SET kinds_enabled = ? WHERE id = ?")
-      .bind(JSON.stringify(["prompt", "mention"]), HOUSEHOLD.homeId)
-      .run();
+  it("forwards the trigger kind a bot names, which only a bot may name", async () => {
     const bot: SessionRouteContext["principal"] = {
       kind: "service",
       service: "slack-bot",
@@ -130,27 +120,15 @@ describe("POST /sessions/:id/prompt on an auth-home session", () => {
       },
     };
 
-    const labelled = await prompt(HOUSEHOLD.owner, { triggerKind: "issue_label" }, bot);
-    expect(labelled.status).toBe(403);
-    expect(await labelled.json()).toMatchObject({ reason: "kind_disabled" });
-    expect((await prompt(HOUSEHOLD.owner, { triggerKind: "mention" }, bot)).status).toBe(200);
-    expect(await fixture.auditRows("credential.auth_home_prompt")).toEqual([
-      expect.objectContaining({ metadata: expect.objectContaining({ trigger_kind: "mention" }) }),
-    ]);
+    expect((await prompt(HOUSEHOLD.owner, { triggerKind: "issue_label" }, bot)).status).toBe(200);
+    expect((await prompt(HOUSEHOLD.owner, {}, bot)).status).toBe(200);
+    expect(
+      forwardedBodies.map((body) => (body.turn as { triggerKind: string }).triggerKind)
+    ).toEqual(["issue_label", "mention"]);
 
     expect((await prompt(HOUSEHOLD.owner, { triggerKind: "schedule" }, bot)).status).toBe(400);
     expect((await prompt(HOUSEHOLD.owner, { triggerKind: "mention" })).status).toBe(400);
-    expect(forwarded).toBe(1);
-  });
-
-  it("refuses switching the turn to a provider the session's home does not carry", async () => {
-    const response = await prompt(HOUSEHOLD.owner, { model: "openai/gpt-5.5" });
-    expect(response.status).toBe(403);
-    expect(await response.json()).toMatchObject({
-      code: "no_eligible_home",
-      message: expect.stringContaining("no eligible subscription home for openai"),
-    });
-    expect(forwarded).toBe(0);
+    expect(forwarded).toBe(2);
   });
 
   it("namespaces a service's clientRequestId and refuses one from a person", async () => {

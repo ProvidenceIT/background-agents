@@ -657,3 +657,10 @@ export async function seedSandboxAuthHash(
     );
   });
 }
+
+/** A prompt route's turn, as the Worker passes it to the session's prompt queue (ADR 0005). */
+export const PROMPT_TURN = {
+  triggerKind: "prompt",
+  channel: "prompt",
+  requestId: "req-integration",
+} as const;

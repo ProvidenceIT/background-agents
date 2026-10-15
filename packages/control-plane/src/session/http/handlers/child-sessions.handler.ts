@@ -1,4 +1,9 @@
 import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
+import {
+  AuthHomeTurnRefusedError,
+  authHomeTurnRefusalResponse,
+} from "../../../auth-homes/turn-admission";
+import { generateId } from "../../../auth/crypto";
 import { childFollowUpPromptRequestSchema } from "@open-inspect/shared/types/session-api";
 import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
 import { z } from "zod";
@@ -153,6 +158,8 @@ export class ChildSessionsHandler {
     try {
       return Response.json(
         await this.messageService.enqueuePrompt({
+          // A later turn on the child, by the parent's prompt author.
+          turn: { triggerKind: "child", channel: "child_prompt", requestId: generateId() },
           content: parsed.data.content,
           authorId: parsed.data.author.userId,
           canonicalUserId: parsed.data.author.canonicalUserId ?? undefined,
@@ -178,6 +185,7 @@ export class ChildSessionsHandler {
       if (error instanceof PromptQueueFullError) {
         return Response.json({ error: "Child prompt queue is full" }, { status: 429 });
       }
+      if (error instanceof AuthHomeTurnRefusedError) return authHomeTurnRefusalResponse(error);
       throw error;
     }
   }
