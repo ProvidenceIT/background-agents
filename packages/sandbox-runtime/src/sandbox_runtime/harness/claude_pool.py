@@ -40,6 +40,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
     from pathlib import Path
 
 POOL_DIR = "pool"
@@ -66,6 +67,16 @@ class Window:
     id: str
     percent_remaining: int
     resets_at: float | None
+
+
+@dataclass(frozen=True)
+class Ranked:
+    """What :func:`rank_pick` chose, without a file: the caller maps the slot to its own."""
+
+    slot: str
+    # ``ranked``, ``spread`` (no fresh ranking) or ``exhausted`` (every slot is).
+    reason: str
+    percent_remaining: int | None
 
 
 @dataclass(frozen=True)
@@ -111,8 +122,13 @@ def model_window(argv: list[str]) -> str | None:
 
 def read_headroom(claude_dir: Path) -> tuple[float | None, dict[str, list[Window]]]:
     """``(captured_at, windows by slot)``; ``(None, {})`` when unreadable."""
+    return read_headroom_file(claude_dir / POOL_DIR / HEADROOM_FILE)
+
+
+def read_headroom_file(path: Path) -> tuple[float | None, dict[str, list[Window]]]:
+    """A pushed headroom snapshot as ``(captured_at, windows by slot)``; ``(None, {})`` when unreadable."""
     try:
-        raw = json.loads((claude_dir / POOL_DIR / HEADROOM_FILE).read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ValueError):
         return None, {}
     if not isinstance(raw, dict):
@@ -128,6 +144,11 @@ def read_headroom(claude_dir: Path) -> tuple[float | None, dict[str, list[Window
     return captured_at, readings
 
 
+def is_fresh(captured_at: float | None, now: float) -> bool:
+    """Whether a snapshot taken at ``captured_at`` may be ranked at ``now``."""
+    return captured_at is not None and 0 <= now - captured_at <= FRESH_SECONDS
+
+
 def pick_slot(
     claude_dir: Path,
     argv: list[str],
@@ -140,13 +161,51 @@ def pick_slot(
     if not slots:
         return None
     now = time.time() if now is None else now
-    rng = rng or random.Random()
     captured_at, readings = read_headroom(claude_dir)
-    fresh = captured_at is not None and 0 <= now - captured_at <= FRESH_SECONDS
-    wanted = (*ACCOUNT_WINDOWS, *filter(None, [model_window(argv)]))
+    ranked = rank_pick(
+        slots,
+        readings,
+        captured_at,
+        account_windows=ACCOUNT_WINDOWS,
+        extra_windows=tuple(filter(None, [model_window(argv)])),
+        now=now,
+        rng=rng or random.Random(),
+    )
+    if ranked is None:
+        return None
+    return Pick(ranked.slot, slots[ranked.slot], ranked.reason, ranked.percent_remaining)
+
+
+def rank_pick(
+    slots: Iterable[str],
+    readings: Mapping[str, list[Window]],
+    captured_at: float | None,
+    *,
+    account_windows: tuple[str, ...] | None,
+    extra_windows: tuple[str, ...] = (),
+    blocked_until: Mapping[str, float] | None = None,
+    now: float,
+    rng: random.Random,
+) -> Ranked | None:
+    """Rules 1 to 4 over ``slots``; ``None`` only when there is no slot at all.
+
+    ``account_windows`` names the windows every model draws on (``None``: any
+    window the snapshot has, as for Codex, whose rows carry one ``weekly``
+    window), and ``extra_windows`` the model windows that bound the choice
+    too. ``blocked_until`` rules a slot out until the given time, on top of
+    the snapshot (the caller's own exhaustion marks).
+    """
+    names = list(slots)
+    if not names:
+        return None
+    blocks = blocked_until or {}
+    fresh = is_fresh(captured_at, now)
+
+    def counts(window: Window) -> bool:
+        return account_windows is None or window.id in account_windows
 
     def relevant(slot: str) -> list[Window]:
-        return [w for w in readings.get(slot, []) if w.id in wanted]
+        return [w for w in readings.get(slot, []) if counts(w) or w.id in extra_windows]
 
     def exhausted_until(slot: str) -> float | None:
         ends = [
@@ -156,31 +215,34 @@ def pick_slot(
             and w.resets_at is not None
             and w.resets_at > now
         ]
+        block = blocks.get(slot)
+        if block is not None and block > now:
+            ends.append(block)
         return max(ends) if ends else None
 
-    open_slots = [slot for slot in slots if exhausted_until(slot) is None]
+    open_slots = [slot for slot in names if exhausted_until(slot) is None]
     if not open_slots:
-        slot = min(slots, key=lambda s: (exhausted_until(s) or now, s))
-        return Pick(slot, slots[slot], "exhausted", 0)
+        slot = min(names, key=lambda s: (exhausted_until(s) or now, s))
+        return Ranked(slot, "exhausted", 0)
 
     if fresh:
         scores = {
             slot: min(w.percent_remaining for w in relevant(slot))
             for slot in open_slots
-            if any(w.id in ACCOUNT_WINDOWS for w in relevant(slot))
+            if any(counts(w) for w in relevant(slot))
         }
         ranked = {slot: score for slot, score in scores.items() if score > EXHAUSTED_PERCENT}
         if ranked:
             best = max(ranked.values())
             near = sorted(slot for slot, score in ranked.items() if score >= best - SPREAD_PERCENT)
             slot = rng.choice(near)
-            return Pick(slot, slots[slot], "ranked", ranked[slot])
+            return Ranked(slot, "ranked", ranked[slot])
         unread = [slot for slot in open_slots if slot not in scores]
         if unread:
             open_slots = unread
 
     slot = rng.choice(sorted(open_slots))
-    return Pick(slot, slots[slot], "spread", None)
+    return Ranked(slot, "spread", None)
 
 
 def _non_empty(path: Path) -> bool:
