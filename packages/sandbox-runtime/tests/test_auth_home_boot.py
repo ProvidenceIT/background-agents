@@ -95,3 +95,88 @@ def test_the_ready_event_without_a_home_is_unchanged(tmp_path: Path) -> None:
     with patch.dict(os.environ, environ, clear=True):
         event = bridge._build_ready_event()
     assert "auth_home" not in event
+
+
+def _codex_pool_home(tmp_path: Path) -> Path:
+    home = tmp_path / "sf-auth-codex"
+    (home / "codex").mkdir(parents=True)
+    for slot in ("codex-1", "codex-2", "codex-3"):
+        (home / "codex-pool" / slot).mkdir(parents=True)
+        (home / "codex-pool" / slot / "auth.json").write_text('{"tokens": "codex-placeholder"}')
+    return home
+
+
+def test_a_codex_pool_reports_slots_blocks_and_headroom_age_without_opening_a_login(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import builtins
+    import io
+    import json
+    import time
+    from datetime import UTC, datetime
+
+    from sandbox_runtime.harness import codex_pool
+
+    home = _codex_pool_home(tmp_path)
+    pool = home / "codex-pool"
+    now = time.time()
+    codex_pool.mark_exhausted(pool, "codex-1", now + 3600, now=now)
+    codex_pool.mark_auth_refused(pool, "codex-2", now=now)
+    (pool / "headroom.json").write_text(
+        json.dumps(
+            {
+                "capturedAt": datetime.fromtimestamp(now - 120, UTC).isoformat(),
+                "slots": {
+                    "codex-3": {
+                        "windows": [
+                            {
+                                "id": "weekly",
+                                "percentRemaining": 1,
+                                "resetsAt": datetime.fromtimestamp(now + 60, UTC).isoformat(),
+                            }
+                        ]
+                    }
+                },
+            }
+        )
+    )
+    (home / "codex" / "auth.json").symlink_to("../codex-pool/codex-1/auth.json")
+
+    opened: list[str] = []
+    real_open = io.open
+
+    def spy(file: Any, *args: Any, **kwargs: Any) -> Any:
+        opened.append(str(file))
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(io, "open", spy)
+    monkeypatch.setattr(builtins, "open", spy)
+    report = auth_home_boot_report({"SF_AUTH_HOME": str(home), "SF_AUTH_HOME_PROVIDERS": "openai"})
+
+    assert report is not None
+    assert report["codex_pool_slots"] == 3
+    assert report["codex_pool_blocked"] == {
+        "codex-1": "exhausted",
+        "codex-2": "auth_refused",
+        "codex-3": "headroom",
+    }
+    assert 119 <= report["codex_pool_headroom_age_s"] <= 180
+    assert report["codex_pool_legacy_file"] is False
+    assert opened, "the spy must see the state and headroom reads"
+    assert not [path for path in opened if path.endswith("auth.json")]
+    assert "codex-placeholder" not in repr(report)
+
+
+def test_a_legacy_codex_login_beside_a_pool_is_reported(tmp_path: Path) -> None:
+    home = _codex_pool_home(tmp_path)
+    (home / "codex" / "auth.json").write_text('{"tokens": "legacy"}')
+    report = auth_home_boot_report({"SF_AUTH_HOME": str(home)})
+    assert report is not None
+    assert report["codex_pool_legacy_file"] is True
+    assert report["codex_pool_headroom_age_s"] is None
+
+
+def test_a_home_without_a_codex_pool_reports_no_pool_keys(tmp_path: Path) -> None:
+    report = auth_home_boot_report({"SF_AUTH_HOME": str(_home(tmp_path))})
+    assert report is not None
+    assert not [key for key in report if key.startswith("codex_pool")]
