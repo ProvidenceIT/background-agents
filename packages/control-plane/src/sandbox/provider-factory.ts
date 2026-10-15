@@ -264,7 +264,8 @@ function createKubernetesProviderFromEnv(env: Env): KubernetesSandboxProvider {
   });
 }
 
-const GATEWAY_DOMAIN_PATTERN = /^(?=.{1,200}$)([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/;
+const GATEWAY_DOMAIN_PATTERN =
+  /^(?=.{1,200}(?::|$))(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::(\d{1,5}))?$/;
 
 /** The tools gateway when both of its settings are present; one without the other is a mistake. */
 export function parseWorkspaceGateway(
@@ -276,11 +277,17 @@ export function parseWorkspaceGateway(
   if (!domain || !secret) {
     throw new Error("SANDBOX_GATEWAY_DOMAIN and SANDBOX_GATEWAY_SECRET must be set together");
   }
-  if (!GATEWAY_DOMAIN_PATTERN.test(domain)) {
-    throw new Error(`SANDBOX_GATEWAY_DOMAIN is not a domain name: ${domain}`);
+  const match = GATEWAY_DOMAIN_PATTERN.exec(domain);
+  const publicPort = match?.[1] === undefined ? undefined : Number(match[1]);
+  if (!match || (publicPort !== undefined && (publicPort < 1 || publicPort > 65535))) {
+    throw new Error(`SANDBOX_GATEWAY_DOMAIN is not a domain name with an optional port: ${domain}`);
   }
   if (secret.length < 32) throw new Error("SANDBOX_GATEWAY_SECRET must be at least 32 characters");
-  return { domain, secret };
+  return {
+    domain: domain.replace(/:\d+$/, ""),
+    ...(publicPort && publicPort !== 443 ? { publicPort } : {}),
+    secret,
+  };
 }
 
 /**

@@ -1092,6 +1092,14 @@ describe("workspace tools gateway", () => {
     });
   });
 
+  it("puts a non-default public port in the links", async () => {
+    const { provider } = setup({
+      workspaceGateway: { domain: "sbx.test", publicPort: 10445, secret: "gateway-secret" },
+    });
+    const result = await provider.createSandbox(allTools);
+    expect(result).toMatchObject({ ttydUrl: `https://p7680-${names.hash}.sbx.test:10445/` });
+  });
+
   it("turns the tools off on a resume that no longer asks for them", async () => {
     const { api, provider } = setup(gateway);
     await provider.createSandbox(allTools);

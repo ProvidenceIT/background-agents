@@ -234,6 +234,12 @@ describe("parseWorkspaceGateway", () => {
       secret,
     });
     expect(parseWorkspaceGateway({})).toBeUndefined();
+    expect(
+      parseWorkspaceGateway({
+        SANDBOX_GATEWAY_DOMAIN: "sbx.example.com:10445",
+        SANDBOX_GATEWAY_SECRET: secret,
+      })
+    ).toEqual({ domain: "sbx.example.com", publicPort: 10445, secret });
   });
 
   it("refuses half a configuration, a bad domain and a short secret", () => {

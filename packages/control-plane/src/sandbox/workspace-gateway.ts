@@ -16,7 +16,19 @@ export const WORKSPACE_GATEWAY_TOKEN_PREFIX = "/__sf/";
 export interface WorkspaceGatewayConfig {
   /** Parent domain of the tool hosts, e.g. `sbx.example.com`. */
   domain: string;
+  /** Port browsers use when it is not 443 (the TLS front end's, not the gateway's). */
+  publicPort?: number;
   secret: string;
+}
+
+/** The browser URL of a tool: its host, the public port when there is one, and `/`. */
+export function workspaceGatewayUrl(
+  gateway: Pick<WorkspaceGatewayConfig, "domain" | "publicPort">,
+  port: number,
+  hash: string
+): string {
+  const suffix = gateway.publicPort ? `:${gateway.publicPort}` : "";
+  return `https://${workspaceGatewayHost(gateway.domain, port, hash)}${suffix}/`;
 }
 
 const HASH_PATTERN = /^[0-9a-f]{20}$/;

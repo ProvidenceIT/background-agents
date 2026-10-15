@@ -86,7 +86,7 @@ import {
   type StopResult,
 } from "../provider";
 import { resolveSandboxPortPlan } from "./port-resolution";
-import { workspaceGatewayHost, type WorkspaceGatewayConfig } from "../workspace-gateway";
+import { workspaceGatewayUrl, type WorkspaceGatewayConfig } from "../workspace-gateway";
 
 const log = createLogger("kubernetes-provider");
 
@@ -685,8 +685,7 @@ export class KubernetesSandboxProvider implements SandboxProvider {
       },
       config.sandboxSettings
     );
-    const url = (port: number) =>
-      `https://${workspaceGatewayHost(gateway.domain, port, names.hash)}/`;
+    const url = (port: number) => workspaceGatewayUrl(gateway, port, names.hash);
     const env: Record<string, string> = {
       CODE_SERVER_PASSWORD: "",
       TERMINAL_ENABLED: "",
