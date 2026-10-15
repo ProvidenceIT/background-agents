@@ -1,4 +1,4 @@
-import { toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
+import { PLAN_TOOL_NAMES, toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import {
   eventTimelineCursorFromRow,
@@ -147,6 +147,21 @@ export class EventRepository {
     createdAt: number
   ): void {
     this.upsertEventByMessageId("execution_complete", messageId, event, createdAt);
+  }
+
+  /** Top-level tool calls to PLAN_TOOL_NAMES across the whole session, oldest first. */
+  listPlanToolCalls(): EventRow[] {
+    return this.sql
+      .exec(
+        `SELECT * FROM events
+         WHERE type = 'tool_call'
+           AND lower(json_extract(data, '$.tool')) IN (${PLAN_TOOL_NAMES.map(() => "?").join(", ")})
+           AND NOT coalesce(json_extract(data, '$.isSubtask'), 0)
+         ORDER BY created_at ASC, timeline_sequence ASC`,
+        ...PLAN_TOOL_NAMES
+      )
+      .toArray()
+      .map(parseEventRow);
   }
 
   listEventPage(options: ListEventPageOptions): EventPage {

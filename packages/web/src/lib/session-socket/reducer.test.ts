@@ -274,6 +274,42 @@ describe("sessionSocketReducer", () => {
     expect(state.promptQueue).toEqual(initial.promptQueue);
   });
 
+  describe("planEvents", () => {
+    const planTimeline = {
+      events: [],
+      hasMore: true,
+      cursor: { timestamp: 1, id: "evt-1" },
+      planEvents: [
+        {
+          eventId: "tool_call:agent-1",
+          timelineSequence: 1,
+          event: {
+            type: "tool_call" as const,
+            tool: "task",
+            args: { description: "Review SQL" },
+            callId: "agent-1",
+            status: "completed",
+            messageId: "msg-1",
+            sandboxId: "sb-1",
+            timestamp: 1,
+          },
+        },
+      ],
+    };
+
+    it("keeps the plan calls from the snapshot and subscribe out of the conversation", () => {
+      for (const state of [
+        createSessionSocketState(createSnapshot({ timeline: planTimeline })),
+        subscribedState({ timeline: planTimeline }),
+      ]) {
+        expect(state.events).toEqual([]);
+        expect(state.planEvents).toEqual([
+          expect.objectContaining({ tool: "task", callId: "agent-1", status: "completed" }),
+        ]);
+      }
+    });
+  });
+
   describe("sandboxError", () => {
     it("hydrates the spawn error from the snapshot and from subscribed", () => {
       const reason =

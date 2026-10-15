@@ -343,6 +343,13 @@ export function toolCallIdentityTuple(
   return [event.messageId, scope, event.callId];
 }
 
+/**
+ * Tools whose calls make up the agent's plan: its checklist (TodoWrite, or
+ * Claude Code's TaskCreate/TaskUpdate) and the subagents it launches (task).
+ * Lowercase; harnesses differ in case.
+ */
+export const PLAN_TOOL_NAMES = ["todowrite", "taskcreate", "taskupdate", "task"] as const;
+
 export function toolCallIdentityKey(event: ToolCallIdentityEvent): string {
   return JSON.stringify(toolCallIdentityTuple(event));
 }
