@@ -1,5 +1,5 @@
-"""The Codex login pool: which slot an attempt runs on, its marks, and the auth link."""
 # ruff: noqa: RUF001  (Codex writes its messages with U+2019 apostrophes)
+"""The Codex login pool: which slot an attempt runs on, its marks, and the auth link."""
 
 import json
 import os
