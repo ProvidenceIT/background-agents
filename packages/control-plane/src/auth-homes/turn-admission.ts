@@ -9,17 +9,39 @@
  *
  * An access check (opening the session's socket, entering its sandbox) uses
  * the same eligibility rule without recording a served turn.
+ *
+ * A new session (create, child spawn, scheduled run) is admitted by
+ * `admitNewSession`, before a session exists: it binds the home, checks the
+ * harness against the auth the session will actually run on, and records
+ * the binding (and, for a session whose first prompt is part of its
+ * creation, that first turn) once the session is created.
  */
 
-import type { AuthHomeRefusalReason, TriggerKind } from "@open-inspect/shared/types/auth-homes";
+import { checkHarnessCompatibility, type HarnessId } from "@open-inspect/shared/harnesses";
+import type {
+  AuthHomeRefusalReason,
+  AuthHomeSelection,
+  TriggerKind,
+} from "@open-inspect/shared/types/auth-homes";
 import { authHomeRefusalMessage } from "@open-inspect/shared/types/auth-homes";
+import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import { SessionIndexStore, type SessionEntry } from "../db/session-index";
 import type { SqlDatabase } from "../db/sql-database";
 import type { RequestContext } from "../http/request-context";
 import { createLogger } from "../logger";
-import { bindAuthHomePromptAudit } from "./audit";
+import {
+  bindAuthHomeMountedAudit,
+  bindAuthHomePromptAudit,
+  bindUnattendedBlockedAudit,
+} from "./audit";
 import { authHomesInForce, checkTurnEligibility } from "./resolver";
-import { authHomeRefusalResponse, providerForModel } from "./session-binding";
+import {
+  applyAuthHomeToProviderAuth,
+  authHomeRefusalResponse,
+  bindSessionAuthHome,
+  homeKeepsSessionsPrivate,
+  providerForModel,
+} from "./session-binding";
 import { UserAuthHomeStore } from "./store";
 
 const logger = createLogger("auth-homes:turn-admission");
@@ -278,4 +300,155 @@ export class TurnAdmission implements TurnAdmissionGate {
       });
     }
   }
+}
+
+export interface NewSessionRequest {
+  db: SqlDatabase;
+  /** Correlates the audit rows (the request, or the automation run). */
+  requestId: string;
+  /** The trigger actor whose activity the session is; the home is resolved for them. */
+  actorUserId: string | null;
+  /**
+   * Who performed the write when that is not the trigger actor: null for the
+   * scheduler, which records a service row. Defaults to the trigger actor.
+   */
+  principalUserId?: string | null;
+  model: string;
+  triggerKind: TriggerKind;
+  harness: HarnessId;
+  /** The auth the installation resolved for each provider, before any home. */
+  providerAuth: readonly SessionModelProviderAuthInput[];
+  /** Asked only when the provider's home rules depend on repository visibility. */
+  repoPrivate: () => Promise<boolean | null>;
+  workItemAuthorUserId?: string | null;
+  automationConsentAt?: number | null;
+  /** Named on a refused run's audit row. */
+  automationId?: string | null;
+  /**
+   * The channel of a first prompt that is part of the session's creation
+   * (child spawn, scheduled run): a turn served from the home, recorded with
+   * the binding and admitted at the queue as `admitted_at_create`.
+   */
+  firstTurnChannel?: "child_spawn" | "scheduled_run";
+}
+
+/** Why a new session may not start; nothing was created. */
+export type NewSessionRefusal =
+  | { kind: "auth_home"; reason: AuthHomeRefusalReason; provider: string; message: string }
+  | { kind: "harness"; message: string };
+
+/** The HTTP response for a refused new session. */
+export function newSessionRefusalResponse(refusal: NewSessionRefusal): Response {
+  return refusal.kind === "auth_home"
+    ? authHomeRefusalResponse(refusal.reason, refusal.provider)
+    : Response.json({ error: refusal.message }, { status: 400 });
+}
+
+export interface AdmittedNewSession {
+  kind: "admitted";
+  /** The auth the session runs on: the home's providers bound to it, the rest as resolved. */
+  providerAuth: SessionModelProviderAuthInput[];
+  /** The session's home binding, as stored on it. */
+  authHomeId: string | null;
+  authHomeSelection: AuthHomeSelection | null;
+  /**
+   * The visibility the session gets: what was asked for, unless its home keeps
+   * its sessions private (`authHomeKeepsSessionsPrivate`), since nobody else
+   * may take a turn on it.
+   */
+  visibility<V extends string>(requested: V): V | "private";
+  /** Record the binding once the session exists (a no-op without a home). */
+  recordCreated(sessionId: string): Promise<void>;
+}
+
+/**
+ * Admit a new session: resolve the home that serves it (or refuse, writing
+ * `credential.unattended_blocked`), and check the harness against the auth it
+ * will run on. Nothing is written for an admitted session until
+ * `recordCreated`.
+ */
+export async function admitNewSession(
+  request: NewSessionRequest
+): Promise<AdmittedNewSession | { kind: "refused"; refusal: NewSessionRefusal }> {
+  const binding = await bindSessionAuthHome(request.db, {
+    actorUserId: request.actorUserId,
+    model: request.model,
+    triggerKind: request.triggerKind,
+    repoPrivate: request.repoPrivate,
+    workItemAuthorUserId: request.workItemAuthorUserId,
+    automationConsentAt: request.automationConsentAt,
+    harness: request.harness,
+  });
+  const audit = {
+    db: request.db,
+    requestId: request.requestId,
+    actorUserId: request.actorUserId,
+    ...(request.principalUserId !== undefined ? { principalUserId: request.principalUserId } : {}),
+    provider: binding.kind === "not_in_force" ? providerForModel(request.model) : binding.provider,
+    triggerKind: request.triggerKind,
+  };
+  if (binding.kind === "refused") {
+    await bindUnattendedBlockedAudit({
+      ...audit,
+      sessionId: null,
+      reason: binding.resolution.reason,
+      homeId: binding.resolution.homeId,
+      homeOwnerUserId: binding.resolution.homeOwnerUserId,
+      workItemAuthorUserId: request.workItemAuthorUserId,
+      automationId: request.automationId,
+    }).run();
+    return {
+      kind: "refused",
+      refusal: {
+        kind: "auth_home",
+        reason: binding.resolution.reason,
+        provider: binding.provider,
+        message: authHomeRefusalMessage(binding.resolution.reason, binding.provider),
+      },
+    };
+  }
+
+  const served = binding.kind === "served" ? binding : null;
+  const providerAuth = served
+    ? applyAuthHomeToProviderAuth(request.providerAuth, served)
+    : [...request.providerAuth];
+  // Checked against the auth the session will actually run on: a home
+  // replaces the installation's mode for the providers it carries, and Codex
+  // runs OpenAI on nothing else.
+  const incompatibility = checkHarnessCompatibility(
+    request.harness,
+    request.model,
+    Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
+  );
+  if (incompatibility) {
+    return { kind: "refused", refusal: { kind: "harness", message: incompatibility.message } };
+  }
+  const keepsPrivate = served ? await homeKeepsSessionsPrivate(request.db, served.home) : false;
+
+  return {
+    kind: "admitted",
+    providerAuth,
+    authHomeId: served?.home.id ?? null,
+    authHomeSelection: served?.resolution.kind ?? null,
+    visibility: (requested) => (keepsPrivate ? "private" : requested),
+    async recordCreated(sessionId) {
+      if (!served) return;
+      const home = {
+        ...audit,
+        sessionId,
+        homeId: served.home.id,
+        homeOwnerUserId: served.resolution.homeOwnerUserId,
+        selection: served.resolution.kind,
+      };
+      const mounted = bindAuthHomeMountedAudit({
+        ...home,
+        workItemAuthorUserId: request.workItemAuthorUserId ?? null,
+      });
+      await request.db.batch(
+        request.firstTurnChannel
+          ? [mounted, bindAuthHomePromptAudit({ ...home, channel: request.firstTurnChannel })]
+          : [mounted]
+      );
+    },
+  };
 }

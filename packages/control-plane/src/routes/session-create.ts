@@ -40,13 +40,7 @@ import { createSessionMemorySelector } from "../memory/session-memory-selector-f
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
-import {
-  applyAuthHomeToProviderAuth,
-  authHomeRefusalResponse,
-  authHomeSessionVisibility,
-  bindSessionAuthHome,
-} from "../auth-homes/session-binding";
-import { bindAuthHomeMountedAudit, bindUnattendedBlockedAudit } from "../auth-homes/audit";
+import { admitNewSession, newSessionRefusalResponse } from "../auth-homes/turn-admission";
 import { repositoriesArePrivate } from "../auth-homes/repo-visibility";
 import { resolveSessionTrigger } from "../auth-homes/session-trigger";
 import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
@@ -400,41 +394,18 @@ export async function handleCreateSession(
     if (e instanceof ProviderAccountSelectionPolicyError) return error(e.message, e.status);
     throw e;
   }
-  const authHome = await bindSessionAuthHome(ctx.db, {
+  const admission = await admitNewSession({
+    db: ctx.db,
+    requestId: ctx.request_id,
     actorUserId: resolvedUserId,
     model,
     triggerKind: trigger.triggerKind,
+    harness,
+    providerAuth,
     repoPrivate: () => repositoriesArePrivate(createRouteSourceControlProvider(env), scopeMembers),
     workItemAuthorUserId: trigger.workItemAuthorUserId,
-    harness,
   });
-  if (authHome.kind === "refused") {
-    await bindUnattendedBlockedAudit({
-      db: ctx.db,
-      requestId: ctx.request_id,
-      actorUserId: resolvedUserId,
-      sessionId: null,
-      provider: authHome.provider,
-      triggerKind: trigger.triggerKind,
-      reason: authHome.resolution.reason,
-      homeId: authHome.resolution.homeId,
-      homeOwnerUserId: authHome.resolution.homeOwnerUserId,
-      workItemAuthorUserId: trigger.workItemAuthorUserId,
-    }).run();
-    return authHomeRefusalResponse(authHome.resolution.reason, authHome.provider);
-  }
-  if (authHome.kind === "served") {
-    providerAuth = applyAuthHomeToProviderAuth(providerAuth, authHome);
-  }
-  // Checked against the auth the session will actually run on: a home the
-  // resolver bound replaces the installation's mode for the providers it
-  // carries, and Codex runs OpenAI on nothing else.
-  const harnessAuthIncompatibility = checkHarnessCompatibility(
-    harness,
-    model,
-    Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
-  );
-  if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
+  if (admission.kind === "refused") return newSessionRefusalResponse(admission.refusal);
 
   let managedSkillsManifest;
   try {
@@ -462,7 +433,7 @@ export async function handleCreateSession(
   const input: SessionInitInput = {
     memory: resolvedPin(memorySelection),
     ownerTeamId: teamId,
-    visibility: await authHomeSessionVisibility(ctx.db, authHome, visibility),
+    visibility: admission.visibility(visibility),
     sessionId,
     repoOwner,
     repoName,
@@ -487,12 +458,12 @@ export async function handleCreateSession(
     sandboxSettings,
     spawnSource,
     managedSkills: resolvedPin(managedSkillsManifest),
-    providerAuth,
+    providerAuth: admission.providerAuth,
     triggerActorUserId: resolvedUserId,
     triggerKind: trigger.triggerKind,
     workItemAuthorUserId: trigger.workItemAuthorUserId,
-    authHomeId: authHome.kind === "served" ? authHome.home.id : null,
-    authHomeSelection: authHome.kind === "served" ? authHome.resolution.kind : null,
+    authHomeId: admission.authHomeId,
+    authHomeSelection: admission.authHomeSelection,
     externalRef: ref,
   };
 
@@ -512,20 +483,7 @@ export async function handleCreateSession(
     });
     return error("Failed to create session", 500);
   }
-  if (authHome.kind === "served") {
-    await bindAuthHomeMountedAudit({
-      db: ctx.db,
-      requestId: ctx.request_id,
-      actorUserId: resolvedUserId,
-      sessionId,
-      provider: authHome.provider,
-      triggerKind: trigger.triggerKind,
-      homeId: authHome.home.id,
-      homeOwnerUserId: authHome.resolution.homeOwnerUserId,
-      selection: authHome.resolution.kind,
-      workItemAuthorUserId: trigger.workItemAuthorUserId,
-    }).run();
-  }
+  await admission.recordCreated(sessionId);
 
   const result: CreateSessionResponse = {
     sessionId,

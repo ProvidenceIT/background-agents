@@ -19,9 +19,7 @@ import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import type { Team } from "@open-inspect/shared/types/teams";
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import type * as SessionAdmissionModule from "../authorization/session-admission";
-import type * as SessionBindingModule from "../auth-homes/session-binding";
-import type * as AuthHomeAuditModule from "../auth-homes/audit";
-import type * as ResolverModule from "../auth-homes/resolver";
+import type * as TurnAdmissionModule from "../auth-homes/turn-admission";
 import type * as GitHubEventAdmissionModule from "../automation/github-event-admission";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, resolve } from "node:path";
@@ -131,38 +129,17 @@ vi.mock("../session/skill-resolution", () => ({
 }));
 
 /**
- * Auth-home reads and audit writes go to a real migrated database when a test
- * provides one; every other test keeps the empty mock database, where no home
+ * New-session admission (auth-home reads and audit writes) goes to a real
+ * migrated database when a test provides one; every other test keeps the empty mock database, where no home
  * is registered and the legacy paths apply.
  */
 const authHomeDb = vi.hoisted(() => ({ current: null as SqlDatabase | null }));
-vi.mock("../auth-homes/session-binding", async (importOriginal) => {
-  const actual = await importOriginal<typeof SessionBindingModule>();
+vi.mock("../auth-homes/turn-admission", async (importOriginal) => {
+  const actual = await importOriginal<typeof TurnAdmissionModule>();
   return {
     ...actual,
-    bindSessionAuthHome: (
-      db: SqlDatabase,
-      input: Parameters<typeof actual.bindSessionAuthHome>[1]
-    ) => actual.bindSessionAuthHome(authHomeDb.current ?? db, input),
-  };
-});
-vi.mock("../auth-homes/resolver", async (importOriginal) => {
-  const actual = await importOriginal<typeof ResolverModule>();
-  return {
-    ...actual,
-    authHomesInForce: (db: SqlDatabase) => actual.authHomesInForce(authHomeDb.current ?? db),
-  };
-});
-vi.mock("../auth-homes/audit", async (importOriginal) => {
-  const actual = await importOriginal<typeof AuthHomeAuditModule>();
-  return {
-    ...actual,
-    bindAuthHomeMountedAudit: (input: Parameters<typeof actual.bindAuthHomeMountedAudit>[0]) =>
-      actual.bindAuthHomeMountedAudit({ ...input, db: authHomeDb.current ?? input.db }),
-    bindUnattendedBlockedAudit: (input: Parameters<typeof actual.bindUnattendedBlockedAudit>[0]) =>
-      actual.bindUnattendedBlockedAudit({ ...input, db: authHomeDb.current ?? input.db }),
-    bindAuthHomePromptAudit: (input: Parameters<typeof actual.bindAuthHomePromptAudit>[0]) =>
-      actual.bindAuthHomePromptAudit({ ...input, db: authHomeDb.current ?? input.db }),
+    admitNewSession: (request: Parameters<typeof actual.admitNewSession>[0]) =>
+      actual.admitNewSession({ ...request, db: authHomeDb.current ?? request.db }),
   };
 });
 

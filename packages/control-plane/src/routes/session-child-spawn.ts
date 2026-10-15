@@ -47,17 +47,7 @@ import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 import { inheritedPin } from "../session/pinned";
 import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
-import {
-  applyAuthHomeToProviderAuth,
-  authHomeRefusalResponse,
-  authHomeSessionVisibility,
-  bindSessionAuthHome,
-} from "../auth-homes/session-binding";
-import {
-  bindAuthHomeMountedAudit,
-  bindAuthHomePromptAudit,
-  bindUnattendedBlockedAudit,
-} from "../auth-homes/audit";
+import { admitNewSession, newSessionRefusalResponse } from "../auth-homes/turn-admission";
 import { repositoriesArePrivate } from "../auth-homes/repo-visibility";
 
 const logger = createLogger("router:session-child-spawn");
@@ -281,25 +271,22 @@ export async function handleSpawnChild(
     });
     return error("Parent provider auth unavailable", 503);
   }
-  // The child inherits the parent's auth modes but may run a different model,
-  // so the auth half of the harness rule is checked against the child's model.
-  const harnessAuthIncompatibility = checkHarnessCompatibility(
-    harness,
-    model,
-    Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
-  );
-  if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
-
   const childId = generateId();
   // A child is its parent's trigger actor's activity: the resolver runs again
   // for that actor, and repository visibility is checked again.
   const triggerActorUserId =
     parentSession?.triggerActorUserId ?? parentSession?.userId ?? childOwnerUserId;
-  const authHome = await bindSessionAuthHome(ctx.db, {
+  // The child inherits the parent's auth modes but may run a different model,
+  // so the auth half of the harness rule is checked (by admission) against the
+  // child's model and the home it binds.
+  const admission = await admitNewSession({
+    db: ctx.db,
+    requestId: ctx.request_id,
     actorUserId: triggerActorUserId,
     model,
     triggerKind: "child",
     harness,
+    providerAuth: providerAuth.map((auth) => ({ ...auth, inheritedFromSessionId: parentId })),
     repoPrivate: () =>
       repositoriesArePrivate(
         createRouteSourceControlProvider(env),
@@ -308,25 +295,11 @@ export async function handleSpawnChild(
           repoName: repository.name,
         }))
       ),
+    workItemAuthorUserId: parentSession?.workItemAuthorUserId ?? null,
+    // The child's first prompt below is a turn served from the home too.
+    firstTurnChannel: "child_spawn",
   });
-  if (authHome.kind === "refused") {
-    await bindUnattendedBlockedAudit({
-      db: ctx.db,
-      requestId: ctx.request_id,
-      actorUserId: triggerActorUserId,
-      sessionId: null,
-      provider: authHome.provider,
-      triggerKind: "child",
-      reason: authHome.resolution.reason,
-      homeId: authHome.resolution.homeId,
-      homeOwnerUserId: authHome.resolution.homeOwnerUserId,
-    }).run();
-    return authHomeRefusalResponse(authHome.resolution.reason, authHome.provider);
-  }
-  const inheritedProviderAuth = providerAuth.map((auth) => ({
-    ...auth,
-    inheritedFromSessionId: parentId,
-  }));
+  if (admission.kind === "refused") return newSessionRefusalResponse(admission.refusal);
 
   const childDepth = parentDepth + 1;
 
@@ -353,11 +326,7 @@ export async function handleSpawnChild(
 
   const input: SessionInitInput = {
     ownerTeamId: teamId,
-    visibility: await authHomeSessionVisibility(
-      ctx.db,
-      authHome,
-      parentSession?.visibility ?? "workspace"
-    ),
+    visibility: admission.visibility(parentSession?.visibility ?? "workspace"),
     sessionId: childId,
     repoOwner: spawnContext.repoOwner,
     repoName: spawnContext.repoName,
@@ -389,15 +358,12 @@ export async function handleSpawnChild(
     automationRunId: parentSession?.automationRunId ?? null,
     managedSkills: inheritedPin(parentId),
     memory: inheritedPin(parentId),
-    providerAuth:
-      authHome.kind === "served"
-        ? applyAuthHomeToProviderAuth(inheritedProviderAuth, authHome)
-        : inheritedProviderAuth,
+    providerAuth: admission.providerAuth,
     triggerActorUserId,
     triggerKind: "child",
     workItemAuthorUserId: parentSession?.workItemAuthorUserId ?? null,
-    authHomeId: authHome.kind === "served" ? authHome.home.id : null,
-    authHomeSelection: authHome.kind === "served" ? authHome.resolution.kind : null,
+    authHomeId: admission.authHomeId,
+    authHomeSelection: admission.authHomeSelection,
   };
 
   const admissionLease = await sessionStore.acquireChildAdmissionLease(
@@ -422,27 +388,7 @@ export async function handleSpawnChild(
     return error("Failed to create child session", 500);
   }
   await sessionStore.releaseChildAdmissionLease(admissionLease);
-  if (authHome.kind === "served") {
-    const served = {
-      db: ctx.db,
-      requestId: ctx.request_id,
-      actorUserId: triggerActorUserId,
-      sessionId: childId,
-      provider: authHome.provider,
-      triggerKind: "child",
-      homeId: authHome.home.id,
-      homeOwnerUserId: authHome.resolution.homeOwnerUserId,
-      selection: authHome.resolution.kind,
-    } as const;
-    // The child's first prompt below is a turn served from the home too.
-    await ctx.db.batch([
-      bindAuthHomeMountedAudit({
-        ...served,
-        workItemAuthorUserId: parentSession?.workItemAuthorUserId ?? null,
-      }),
-      bindAuthHomePromptAudit({ ...served, channel: "child_spawn" }),
-    ]);
-  }
+  await admission.recordCreated(childId);
 
   let promptResponse: Response;
   try {

@@ -6,10 +6,13 @@ import { applyMigrations } from "../node/migrate";
 import { createNodeSqlDatabase } from "../node/sqlite-database";
 import { HOUSEHOLD, seedHousehold, type HouseholdFixture } from "./auth-homes.test-support";
 import {
+  admitNewSession,
   AuthHomeTurnRefusedError,
   checkAuthHomeAccess,
+  newSessionRefusalResponse,
   TurnAdmission,
   type HomeTurn,
+  type NewSessionRequest,
   type TurnAdmissionDeps,
   type TurnRequest,
 } from "./turn-admission";
@@ -214,5 +217,114 @@ describe("checkAuthHomeAccess", () => {
     await expect(refused?.json()).resolves.toMatchObject({ code: "no_eligible_home" });
     await expect(access(HOUSEHOLD.owner)).resolves.toBeNull();
     expect(await fixture.auditRows("credential.auth_home_prompt")).toEqual([]);
+  });
+});
+
+describe("admitNewSession", () => {
+  let fixture: HouseholdFixture & { close(): void };
+
+  beforeEach(async () => {
+    const sqlite = new DatabaseSync(":memory:");
+    applyMigrations(
+      sqlite,
+      resolve(dirname(fileURLToPath(import.meta.url)), "../../../../terraform/d1/migrations")
+    );
+    const db = createNodeSqlDatabase(sqlite);
+    fixture = { ...(await seedHousehold(db)), close: () => db.close() };
+  });
+  afterEach(() => fixture.close());
+
+  const admitSession = (overrides: Partial<NewSessionRequest> = {}) =>
+    admitNewSession({
+      db: fixture.db,
+      requestId: "req-create",
+      actorUserId: HOUSEHOLD.owner,
+      model: "anthropic/claude-sonnet-4-6",
+      triggerKind: "prompt",
+      harness: "opencode",
+      providerAuth: [
+        { provider: "anthropic", authMode: "api_key", selectionSource: "installation_default" },
+        { provider: "openai", authMode: "api_key", selectionSource: "installation_default" },
+      ],
+      repoPrivate: async () => true,
+      ...overrides,
+    });
+
+  it("binds the owner's home, its providers' auth, and records the binding once created", async () => {
+    const admission = await admitSession();
+    if (admission.kind !== "admitted") throw new Error("expected admission");
+    expect(admission).toMatchObject({ authHomeId: HOUSEHOLD.homeId, authHomeSelection: "own" });
+    expect(admission.providerAuth).toEqual([
+      { provider: "anthropic", authMode: "auth_home", selectionSource: "auth_home_own" },
+      { provider: "openai", authMode: "api_key", selectionSource: "installation_default" },
+    ]);
+    // H1 is shared under household: others may take a turn, so it may be listed to them.
+    expect(admission.visibility("workspace")).toBe("workspace");
+    expect(await fixture.auditRows("credential.auth_home_mounted")).toEqual([]);
+
+    await admission.recordCreated("session-new");
+    expect(await fixture.auditRows("credential.auth_home_mounted")).toEqual([
+      {
+        actor: HOUSEHOLD.owner,
+        metadata: expect.objectContaining({ session: "session-new", selection: "own" }),
+      },
+    ]);
+    expect(await fixture.auditRows("credential.auth_home_prompt")).toEqual([]);
+  });
+
+  it("records a first turn that is part of the creation together with the binding", async () => {
+    const admission = await admitSession({ triggerKind: "child", firstTurnChannel: "child_spawn" });
+    if (admission.kind !== "admitted") throw new Error("expected admission");
+    await admission.recordCreated("session-child");
+    expect(await fixture.auditRows("credential.auth_home_prompt")).toEqual([
+      {
+        actor: HOUSEHOLD.owner,
+        metadata: expect.objectContaining({ channel: "child_spawn", trigger_kind: "child" }),
+      },
+    ]);
+  });
+
+  it("keeps a session private when its home keeps its sessions private", async () => {
+    await fixture.setPolicy("owner_only");
+    const admission = await admitSession();
+    if (admission.kind !== "admitted") throw new Error("expected admission");
+    expect(admission.visibility("workspace")).toBe("private");
+  });
+
+  it("refuses an actor no home may serve, records the block, and answers 403", async () => {
+    const admission = await admitSession({ actorUserId: HOUSEHOLD.unenrolled });
+    expect(admission).toMatchObject({
+      kind: "refused",
+      refusal: { kind: "auth_home", reason: "no_eligible_home", provider: "anthropic" },
+    });
+    if (admission.kind !== "refused") throw new Error("expected refusal");
+    const response = newSessionRefusalResponse(admission.refusal);
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "no_eligible_home" });
+    expect(await fixture.auditRows("credential.unattended_blocked")).toEqual([
+      expect.objectContaining({
+        metadata: expect.objectContaining({ reason: "no_eligible_home" }),
+      }),
+    ]);
+  });
+
+  it("refuses a harness that cannot run the model, answering 400", async () => {
+    const admission = await admitSession({ harness: "codex" });
+    expect(admission).toMatchObject({ kind: "refused", refusal: { kind: "harness" } });
+    if (admission.kind !== "refused") throw new Error("expected refusal");
+    expect(newSessionRefusalResponse(admission.refusal).status).toBe(400);
+  });
+
+  it("leaves the installation's auth alone when no home is registered", async () => {
+    await fixture.db.prepare("DELETE FROM user_auth_homes").run();
+    const admission = await admitSession({ actorUserId: HOUSEHOLD.unenrolled });
+    if (admission.kind !== "admitted") throw new Error("expected admission");
+    expect(admission).toMatchObject({ authHomeId: null, authHomeSelection: null });
+    expect(admission.providerAuth).toEqual([
+      { provider: "anthropic", authMode: "api_key", selectionSource: "installation_default" },
+      { provider: "openai", authMode: "api_key", selectionSource: "installation_default" },
+    ]);
+    await admission.recordCreated("session-plain");
+    expect(await fixture.auditRows("credential.auth_home_mounted")).toEqual([]);
   });
 });

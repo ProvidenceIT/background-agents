@@ -116,21 +116,8 @@ import {
 } from "../session/identity";
 import { resolveScmProviderFromEnv } from "../source-control/config";
 import { createSourceControlProviderFromEnv } from "../source-control";
-import {
-  authHomeRefusalMessage,
-  NO_ELIGIBLE_HOME,
-  type AuthHomeRefusalReason,
-} from "@open-inspect/shared/types/auth-homes";
-import {
-  applyAuthHomeToProviderAuth,
-  authHomeSessionVisibility,
-  bindSessionAuthHome,
-} from "../auth-homes/session-binding";
-import {
-  bindAuthHomeMountedAudit,
-  bindAuthHomePromptAudit,
-  bindUnattendedBlockedAudit,
-} from "../auth-homes/audit";
+import { NO_ELIGIBLE_HOME } from "@open-inspect/shared/types/auth-homes";
+import { admitNewSession, type NewSessionRefusal } from "../auth-homes/turn-admission";
 import { repositoriesArePrivate } from "../auth-homes/repo-visibility";
 
 /** Max automations to process per tick (backpressure). */
@@ -322,14 +309,15 @@ interface StartInvocationParams {
   workItemAuthorUserId?: string | null;
 }
 
-/** No auth home may serve the run; the run fails with the refusal, nothing is started. */
-class AutomationAuthHomeRefusedError extends Error {
-  constructor(
-    readonly reason: AuthHomeRefusalReason,
-    provider: string
-  ) {
-    super(authHomeRefusalMessage(reason, provider));
-    this.name = "AutomationAuthHomeRefusedError";
+/**
+ * The run may not start a session (no auth home may serve it, or its harness
+ * cannot run on the auth it would get); the run fails with the refusal,
+ * nothing is started.
+ */
+class AutomationRunRefusedError extends Error {
+  constructor(readonly refusal: NewSessionRefusal) {
+    super(refusal.message);
+    this.name = "AutomationRunRefusedError";
   }
 }
 
@@ -1943,46 +1931,35 @@ export class Scheduler {
     // The run is its owner's background activity: the home is resolved for
     // the owner, gated by the owner's consent on this automation.
     const triggerActorUserId = automation.user_id ?? executionPrincipal.platformUserId;
-    const authHome = await bindSessionAuthHome(this.db, {
+    const harness = getValidHarnessOrDefault(automation.harness);
+    const sessionAdmission = await admitNewSession({
+      db: this.db,
+      requestId: run.id,
       actorUserId: triggerActorUserId,
+      principalUserId: null,
       model: automation.model,
       triggerKind: "schedule",
+      harness,
+      providerAuth,
       repoPrivate: () =>
         repositoriesArePrivate(createSourceControlProviderFromEnv(this.env), scopeMembers),
       workItemAuthorUserId,
       automationConsentAt: automation.background_consent_at ?? null,
-      harness: getValidHarnessOrDefault(automation.harness),
+      automationId: automation.id,
+      // The run's prompt is the first turn served from the home.
+      firstTurnChannel: "scheduled_run",
     });
-    if (authHome.kind === "refused") {
-      await bindUnattendedBlockedAudit({
-        db: this.db,
-        requestId: run.id,
-        actorUserId: triggerActorUserId,
-        principalUserId: null,
-        sessionId: null,
-        provider: authHome.provider,
-        triggerKind: "schedule",
-        reason: authHome.resolution.reason,
-        homeId: authHome.resolution.homeId,
-        homeOwnerUserId: authHome.resolution.homeOwnerUserId,
-        workItemAuthorUserId,
-        automationId: automation.id,
-      }).run();
-      throw new AutomationAuthHomeRefusedError(authHome.resolution.reason, authHome.provider);
-    }
+    if (sessionAdmission.kind === "refused")
+      throw new AutomationRunRefusedError(sessionAdmission.refusal);
 
     const sessionInput: SessionInitInput = {
       memory: resolvedPin(memorySelection),
       ownerTeamId: automation.owner_team_id,
-      visibility: await authHomeSessionVisibility(
-        this.db,
-        authHome,
-        team?.defaultVisibility ?? "workspace"
-      ),
+      visibility: sessionAdmission.visibility(team?.defaultVisibility ?? "workspace"),
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,
-      harness: getValidHarnessOrDefault(automation.harness),
+      harness,
       model: automation.model,
       reasoningEffort: automation.reasoning_effort,
       participantUserId: executionPrincipal.participantUserId,
@@ -2000,35 +1977,16 @@ export class Scheduler {
       automationId: automation.id,
       automationRunId: run.id,
       managedSkills: resolvedPin(managedSkillsManifest),
-      providerAuth:
-        authHome.kind === "served"
-          ? applyAuthHomeToProviderAuth(providerAuth, authHome)
-          : providerAuth,
+      providerAuth: sessionAdmission.providerAuth,
       triggerActorUserId,
       triggerKind: "schedule",
       workItemAuthorUserId,
-      authHomeId: authHome.kind === "served" ? authHome.home.id : null,
-      authHomeSelection: authHome.kind === "served" ? authHome.resolution.kind : null,
+      authHomeId: sessionAdmission.authHomeId,
+      authHomeSelection: sessionAdmission.authHomeSelection,
     };
 
     await initializeSession(this.env, sessionInput, ctx);
-    if (authHome.kind === "served") {
-      const served = {
-        db: this.db,
-        requestId: run.id,
-        actorUserId: triggerActorUserId,
-        principalUserId: null,
-        sessionId,
-        provider: authHome.provider,
-        triggerKind: "schedule",
-        homeId: authHome.home.id,
-        homeOwnerUserId: authHome.resolution.homeOwnerUserId,
-        selection: authHome.resolution.kind,
-      } as const;
-      // The run's prompt is the first turn served from the home.
-      await bindAuthHomeMountedAudit({ ...served, workItemAuthorUserId }).run();
-      await bindAuthHomePromptAudit({ ...served, channel: "scheduled_run" }).run();
-    }
+    await sessionAdmission.recordCreated(sessionId);
   }
 
   private async sendPromptToSession(
