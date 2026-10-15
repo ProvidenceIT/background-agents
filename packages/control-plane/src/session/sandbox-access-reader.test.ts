@@ -25,7 +25,11 @@ async function read(row: Partial<SandboxRow>) {
     sessionCoreRepository: { getSession: () => ({}) as never },
     sandboxRepository: { getSandbox: () => sandbox } as never,
     repoSecretsEncryptionKey: KEY,
-    sandboxDashboardSettings: { sandboxProvider: "kubernetes" },
+    sandboxDashboardSettings: {
+      sandboxProvider: "kubernetes",
+      modalWorkspace: undefined,
+      modalEnvironment: undefined,
+    },
     log: { warn: vi.fn() } as never,
     workspaceGateway: { domain: "sbx.test", secret: "gateway-secret" },
     now: () => 1_000,

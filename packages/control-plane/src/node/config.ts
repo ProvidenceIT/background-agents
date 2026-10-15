@@ -223,7 +223,7 @@ export interface NodeHostSettings {
   /** `AUDIT_EXPORT_FILE`: append every committed audit event to this file, one JSON line each. */
   auditExportFile: string | undefined;
   /** `SANDBOX_GATEWAY_PORT`: where the workspace tools gateway listens; none when unset. */
-  gatewayPort: number | undefined;
+  gatewayPort?: number;
 }
 
 const DEFAULT_HOST = "0.0.0.0";
