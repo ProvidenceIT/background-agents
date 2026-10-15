@@ -117,12 +117,18 @@ spec:
               value: kubernetes
             - name: KUBERNETES_NAMESPACE
               value: open-inspect-sandboxes
+            # Workspace tools gateway; it starts only when SANDBOX_GATEWAY_DOMAIN and
+            # SANDBOX_GATEWAY_SECRET are in the env Secret (docs/KUBERNETES_SANDBOX_PROVIDER.md).
+            - name: SANDBOX_GATEWAY_PORT
+              value: "8790"
             # Node's fetch trusts the cluster CA for the API server.
             - name: NODE_EXTRA_CA_CERTS
               value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
           ports:
             - name: http
               containerPort: 8787
+            - name: tools-gateway
+              containerPort: 8790
           readinessProbe:
             httpGet:
               path: /healthz
@@ -239,3 +245,6 @@ spec:
     - name: sandbox-tls
       port: 8443
       targetPort: sandbox-tls
+    - name: tools-gateway
+      port: 8790
+      targetPort: tools-gateway

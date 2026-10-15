@@ -93,3 +93,28 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+---
+# The only way in: the control plane's workspace tools gateway reaching a sandbox's
+# code-server, terminal, desktop and tunnel ports. A selector, never an ipBlock.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-ingress-from-tools-gateway
+  namespace: open-inspect-sandboxes
+spec:
+  podSelector:
+    matchLabels:
+      openinspect.dev/role: sandbox
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: open-inspect
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: open-inspect-control-plane
+      ports:
+        - protocol: TCP
+          port: 1024
+          endPort: 65535

@@ -50,10 +50,27 @@ container, running as the sandbox user, creates the subPaths and copies image-ow
 are not persisted; the runtime user cannot install them anyway, so system dependencies belong in the
 image.
 
+### Workspace tools
+
+code-server, the web terminal, the VNC desktop and tunnel ports are served by the control plane's
+tools gateway when `SANDBOX_GATEWAY_DOMAIN` and `SANDBOX_GATEWAY_SECRET` are set (otherwise they
+stay off). Each tool is a host `p<port>-<hash>.<domain>`, where `hash` is the sandbox's object hash:
+
+- Wildcard DNS for `*.<domain>` and a wildcard TLS certificate in front of the control plane's
+  `tools-gateway` port (8790, `SANDBOX_GATEWAY_PORT`). The gateway speaks plain HTTP behind it.
+- `GET /sessions/:id/sandbox-access`, which needs sandbox access to the session, returns each link
+  as `https://<host>/__sf/<token>/`. The token is an HMAC over the sandbox hash and an expiry
+  (`WORKSPACE_GATEWAY_TOKEN_TTL_MS`). The gateway swaps it for a host-only, partitioned cookie and
+  redirects to the path without the prefix, then proxies HTTP and WebSocket traffic to that port of
+  the sandbox's running pod (found by its sandbox label). The tools keep their own passwords and
+  terminal token.
+- The `sandbox-ingress-from-tools-gateway` NetworkPolicy lets only the control-plane pod into
+  sandbox pods, on unprivileged ports.
+- The pod env, not the frozen Secret, says which tools run, so each resume follows the session's
+  current code-server, VNC and terminal settings.
+
 ### Not supported
 
-- **code-server, the web terminal and VNC.** Each needs ingress into the pod; the provider returns
-  no access URLs and tells the runtime they are off.
 - **Docker inside the sandbox.** It would need a privileged pod.
 - **Prebuilt (repository and environment) images.** Planned as a follow-up: a build pod fills a
   volume that new sessions start from (a CSI VolumeSnapshot where the storage supports one, a copy

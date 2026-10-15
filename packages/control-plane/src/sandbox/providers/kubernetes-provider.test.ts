@@ -1185,6 +1185,32 @@ describe("evaluateEgressPolicies", () => {
     expect(evaluateEgressPolicies(defaultNetworkPolicies())).toBeNull();
   });
 
+  it("accepts the tools gateway's ingress policy beside default-deny", () => {
+    const gatewayIngress = {
+      metadata: { name: "sandbox-ingress-from-tools-gateway" },
+      spec: {
+        podSelector: { matchLabels: { [LABELS.role]: "sandbox" } },
+        policyTypes: ["Ingress"],
+        ingress: [
+          {
+            from: [
+              {
+                namespaceSelector: {
+                  matchLabels: { "kubernetes.io/metadata.name": "open-inspect" },
+                },
+                podSelector: {
+                  matchLabels: { "app.kubernetes.io/name": "open-inspect-control-plane" },
+                },
+              },
+            ],
+            ports: [{ protocol: "TCP", port: 1024, endPort: 65535 }],
+          },
+        ],
+      },
+    } as unknown as KubernetesNetworkPolicy;
+    expect(evaluateEgressPolicies([...defaultNetworkPolicies(), gatewayIngress])).toBeNull();
+  });
+
   it("rejects a default 'deny' that allows everything", () => {
     const allowAll = { ...deny, spec: { ...deny.spec, egress: [{}] } };
     expect(evaluateEgressPolicies([allowAll])).toMatch(/no default-deny/);
