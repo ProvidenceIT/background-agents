@@ -1,12 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
+import { fingerprintWebPrompt, SessionMessageQueue } from "./message-queue";
 import {
-  fingerprintWebPrompt,
-  SessionMessageQueue,
-  type AuthHomeTurnGate,
-  type UsageQuotaGate,
-} from "./message-queue";
-import { AuthHomeTurnRefusedError } from "../auth-homes/session-binding";
+  AuthHomeTurnRefusedError,
+  type TurnAdmissionGate,
+  type TurnRequest,
+} from "../auth-homes/turn-admission";
 import { UsageQuotaExceededError } from "../authorization/usage-quotas";
 import { AttachmentClaimConflictError } from "./session-attachment-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
@@ -143,11 +142,31 @@ it("creates a canonical SHA-256 web prompt fingerprint", async () => {
   ).resolves.toBe(fingerprint);
 });
 
+/** A prompt route's turn, as the Worker passes it through. */
+const PROMPT_TURN = { triggerKind: "prompt", channel: "prompt", requestId: "req-api" } as const;
+
+/** Admits every turn and records what it was asked to admit. */
+function admitEveryTurn() {
+  const admit = vi.fn(
+    async (_request: TurnRequest, enqueue: () => Promise<{ value: unknown; added: boolean }>) =>
+      (await enqueue()).value
+  );
+  return { admit } as unknown as TurnAdmissionGate & { admit: typeof admit };
+}
+
+/** Refuses every turn with `error`, before enqueueing. */
+function refuseEveryTurn(error: Error) {
+  return {
+    admit: vi.fn(async () => {
+      throw error;
+    }),
+  };
+}
+
 function buildQueue(
   mayDispatch: () => boolean = () => true,
   getSandboxPromptBlockReason: () => string | null = () => null,
-  usageQuotas: UsageQuotaGate = { admitPrompt: vi.fn(async () => undefined) },
-  authHomeTurns: AuthHomeTurnGate = { admitPrompt: vi.fn(async () => undefined) }
+  turns: TurnAdmissionGate = admitEveryTurn()
 ) {
   // Mutable so tests can pin that the deadline honors the value current at
   // dispatch time — the thunk exists because settings can be persisted after
@@ -314,14 +333,12 @@ function buildQueue(
     () => executionTimeoutMs,
     mayDispatch,
     getSandboxPromptBlockReason,
-    usageQuotas,
-    authHomeTurns
+    turns
   );
 
   return {
     queue,
-    usageQuotas,
-    authHomeTurns,
+    turns,
     executionStop,
     repository,
     attachmentRepository,
@@ -359,7 +376,12 @@ describe("SessionMessageQueue", () => {
       clientRequestId: "request-1",
     });
     await expect(
-      h.queue.enqueuePromptFromApi({ content: "Continue", authorId: "user-1", source: "agent" })
+      h.queue.enqueuePromptFromApi({
+        turn: PROMPT_TURN,
+        content: "Continue",
+        authorId: "user-1",
+        source: "agent",
+      })
     ).rejects.toMatchObject({ name: "SandboxPromptBlockedError" });
 
     expect(h.wsManager.send).toHaveBeenCalledWith(
@@ -568,6 +590,79 @@ describe("SessionMessageQueue", () => {
       }
     }
   );
+
+  describe("Autofix turn admission", () => {
+    const command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }> = {
+      type: "enqueue_feedback",
+      feedbackKey: "github:review:1234",
+      pullRequest: { repositoryId: "99", number: 42, artifactId: "artifact-1" },
+      prompt: "Address the submitted review feedback.",
+      author: { id: "7", login: "alice" },
+      origin: {
+        kind: "review",
+        authorType: "human",
+        feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+        feedback: {
+          version: 1,
+          kind: "review",
+          url: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+          body: "Review body",
+          comments: [],
+        },
+      },
+      attemptLimit: 10,
+    };
+
+    it("admits a new fix as a pull-request turn on the session owner's home", async () => {
+      const h = buildQueue();
+      await h.queue.enqueueAutofix(command);
+      expect(h.turns.admit).toHaveBeenCalledWith(
+        {
+          home: {
+            actor: "session_owner",
+            triggerKind: "pr_event",
+            model: null,
+            channel: "autofix",
+            requestId: "autofix:github:review:1234",
+          },
+        },
+        expect.any(Function)
+      );
+    });
+
+    it("rejects the feedback, enqueueing nothing, when the home refuses it", async () => {
+      const h = buildQueue(
+        undefined,
+        undefined,
+        refuseEveryTurn(
+          new AuthHomeTurnRefusedError({
+            reason: "kind_disabled",
+            provider: "anthropic",
+            message: "refused",
+          })
+        )
+      );
+      await expect(h.queue.enqueueAutofix(command)).resolves.toEqual({
+        kind: "rejected",
+        reason: "auth_home_refused",
+      });
+      expect(h.repository.admitAutofixMessage).not.toHaveBeenCalled();
+    });
+
+    it("answers feedback already queued as a duplicate without asking the home again", async () => {
+      const h = buildQueue(undefined, undefined, refuseEveryTurn(new Error("not asked")));
+      h.repository.getAutofixMessageId.mockReturnValue("msg-existing");
+      h.repository.admitAutofixMessage.mockReturnValue({
+        kind: "duplicate",
+        messageId: "msg-existing",
+      });
+      await expect(h.queue.enqueueAutofix(command)).resolves.toEqual({
+        kind: "duplicate",
+        messageId: "msg-existing",
+      });
+      expect(h.turns.admit).not.toHaveBeenCalled();
+    });
+  });
 
   it("passes closed-session state into atomic Autofix admission", async () => {
     const h = buildQueue();
@@ -2353,37 +2448,68 @@ describe("SessionMessageQueue", () => {
       });
 
     it("refuses an API prompt for the metered user before any message or sandbox work", async () => {
-      const admitPrompt = vi.fn(async () => {
-        throw exceeded();
-      });
-      const h = buildQueue(undefined, undefined, { admitPrompt });
+      const turns = refuseEveryTurn(exceeded());
+      const h = buildQueue(undefined, undefined, turns);
       h.participantService.getByUserId.mockReturnValue(
         createParticipant({ user_id: "github:7", canonical_user_id: "alice" })
       );
 
       await expect(
-        h.queue.enqueuePromptFromApi({ content: "Continue", authorId: "github:7", source: "web" })
+        h.queue.enqueuePromptFromApi({
+          turn: PROMPT_TURN,
+          content: "Continue",
+          authorId: "github:7",
+          source: "web",
+        })
       ).rejects.toMatchObject({
         name: "UsageQuotaExceededError",
         message:
           "Usage quota reached: you used 3 of 3 turns today. The window resets at the next UTC day boundary.",
       });
 
-      expect(admitPrompt).toHaveBeenCalledWith("alice");
+      expect(turns.admit).toHaveBeenCalledWith(
+        {
+          home: {
+            actor: { userId: null },
+            triggerKind: "prompt",
+            model: null,
+            channel: "prompt",
+            requestId: "req-api",
+          },
+          meteredUserId: "alice",
+        },
+        expect.any(Function)
+      );
       expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
       expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
     });
 
-    it("gates every socket prompt on the session's subscription home and enqueues nothing when refused", async () => {
+    it("admits a first prompt its session's creation already admitted without a home check", async () => {
+      const h = buildQueue();
+      h.participantService.getByUserId.mockReturnValue(
+        createParticipant({ user_id: "github:7", canonical_user_id: "alice" })
+      );
+      await h.queue.enqueuePromptFromApi({
+        turn: { admitted: "at_create" },
+        content: "Run the automation",
+        authorId: "github:7",
+        source: "automation",
+      });
+      expect(h.turns.admit).toHaveBeenCalledWith(
+        { home: "admitted_at_create", meteredUserId: "alice" },
+        expect.any(Function)
+      );
+      expect(h.repository.createMessageWithAttachments).toHaveBeenCalledOnce();
+    });
+
+    it("admits every socket prompt and enqueues nothing when its home refuses", async () => {
       const refusal = {
         reason: "no_eligible_home" as const,
         provider: "anthropic",
         message: "There is no eligible subscription home for anthropic",
       };
-      const admitPrompt = vi.fn(async () => {
-        throw new AuthHomeTurnRefusedError(refusal);
-      });
-      const h = buildQueue(undefined, undefined, undefined, { admitPrompt });
+      const turns = refuseEveryTurn(new AuthHomeTurnRefusedError(refusal));
+      const h = buildQueue(undefined, undefined, turns);
       const ws = {} as WebSocket;
 
       await h.queue.handlePromptMessage(ws, createClientInfo({ userId: "colleague" }), {
@@ -2392,24 +2518,31 @@ describe("SessionMessageQueue", () => {
         clientRequestId: "req-1",
       });
 
-      expect(admitPrompt).toHaveBeenCalledWith("colleague", "anthropic/claude-sonnet-4-6");
+      expect(turns.admit).toHaveBeenCalledWith(
+        {
+          home: {
+            actor: { userId: "colleague" },
+            triggerKind: "prompt",
+            model: "anthropic/claude-sonnet-4-6",
+            channel: "ws_prompt",
+            requestId: expect.any(String),
+          },
+          meteredUserId: expect.any(String),
+        },
+        expect.any(Function)
+      );
       expect(h.wsManager.send).toHaveBeenCalledWith(ws, {
         type: "error",
         code: "AUTH_HOME_REFUSED",
         message: refusal.message,
         clientRequestId: "req-1",
       });
-      expect(h.participantService.create).not.toHaveBeenCalled();
       expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
       expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
     });
 
     it("answers a socket prompt with USAGE_QUOTA_EXCEEDED and enqueues nothing", async () => {
-      const h = buildQueue(undefined, undefined, {
-        admitPrompt: async () => {
-          throw exceeded();
-        },
-      });
+      const h = buildQueue(undefined, undefined, refuseEveryTurn(exceeded()));
       const ws = {} as WebSocket;
 
       await h.queue.handlePromptMessage(ws, createClientInfo(), {
@@ -2428,18 +2561,27 @@ describe("SessionMessageQueue", () => {
       expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
     });
 
-    it("lets an admitted prompt through and meters it under the participant's canonical id", async () => {
-      const h = buildQueue();
-      h.participantService.getByUserId.mockReturnValue(
-        createParticipant({ user_id: "github:7", canonical_user_id: "alice" })
-      );
+    it("reports a replayed prompt as no new turn, so its home is not audited twice", async () => {
+      let added: boolean | undefined;
+      const turns = {
+        admit: async (
+          _r: TurnRequest,
+          enqueue: () => Promise<{ value: unknown; added: boolean }>
+        ) => {
+          const enqueued = await enqueue();
+          added = enqueued.added;
+          return enqueued.value;
+        },
+      } as unknown as TurnAdmissionGate;
+      const h = buildQueue(undefined, undefined, turns);
+      h.participantService.getByUserId.mockReturnValue(createParticipant({ user_id: "github:7" }));
       await h.queue.enqueuePromptFromApi({
+        turn: PROMPT_TURN,
         content: "Continue",
         authorId: "github:7",
         source: "web",
       });
-      expect(h.usageQuotas.admitPrompt).toHaveBeenCalledWith("alice");
-      expect(h.repository.createMessageWithAttachments).toHaveBeenCalledOnce();
+      expect(added).toBe(true);
     });
   });
 
@@ -2452,6 +2594,7 @@ describe("SessionMessageQueue", () => {
 
       await expect(
         h.queue.enqueuePromptFromApi({
+          turn: PROMPT_TURN,
           content: "Continue",
           authorId: "new-user",
           source: "agent",
@@ -2469,6 +2612,7 @@ describe("SessionMessageQueue", () => {
 
       await expect(
         h.queue.enqueuePromptFromApi({
+          turn: PROMPT_TURN,
           content: "Continue",
           authorId: "new-user",
           source: "agent",
@@ -2504,6 +2648,7 @@ describe("SessionMessageQueue", () => {
 
         await expect(
           h.queue.enqueuePromptFromApi({
+            turn: PROMPT_TURN,
             content: "Continue",
             authorId: "user-1",
             source: "agent",
@@ -2537,6 +2682,7 @@ describe("SessionMessageQueue", () => {
       h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
 
       await h.queue.enqueuePromptFromApi({
+        turn: PROMPT_TURN,
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
@@ -2556,6 +2702,7 @@ describe("SessionMessageQueue", () => {
       h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
 
       await h.queue.enqueuePromptFromApi({
+        turn: PROMPT_TURN,
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
@@ -2568,6 +2715,7 @@ describe("SessionMessageQueue", () => {
       const h = buildQueue();
 
       await h.queue.enqueuePromptFromApi({
+        turn: PROMPT_TURN,
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
@@ -2592,6 +2740,7 @@ describe("SessionMessageQueue", () => {
       const h = buildQueue();
 
       const result = await h.queue.enqueuePromptFromApi({
+        turn: PROMPT_TURN,
         content: "Fix bug",
         authorId: "microsoft:oid-1",
         source: "web",
@@ -2621,6 +2770,7 @@ describe("SessionMessageQueue", () => {
       );
 
       const result = await h.queue.enqueuePromptFromApi({
+        turn: PROMPT_TURN,
         content: "Fix bug",
         authorId: "microsoft:oid-1",
         source: "web",
@@ -2643,6 +2793,7 @@ describe("SessionMessageQueue", () => {
 
       await expect(
         h.queue.enqueuePromptFromApi({
+          turn: PROMPT_TURN,
           content: "Something else",
           authorId: "microsoft:oid-1",
           source: "web",
@@ -2656,6 +2807,7 @@ describe("SessionMessageQueue", () => {
       const h = buildQueue();
 
       await h.queue.enqueuePromptFromApi({
+        turn: PROMPT_TURN,
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",

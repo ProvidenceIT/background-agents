@@ -13,6 +13,7 @@ import {
   seedMessage,
   queryDO,
   waitForSandboxStatus,
+  PROMPT_TURN,
 } from "./helpers";
 
 const SANDBOX_TOKEN = "test-sandbox-auth-token-abc123";
@@ -702,7 +703,12 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     const enqueue = await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "Still here?", authorId: "user-1", source: "web" }),
+      body: JSON.stringify({
+        turn: PROMPT_TURN,
+        content: "Still here?",
+        authorId: "user-1",
+        source: "web",
+      }),
     });
     expect(enqueue.status).toBe(200);
     const delivered = await promptDelivery;

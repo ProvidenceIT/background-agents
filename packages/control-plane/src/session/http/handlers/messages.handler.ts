@@ -11,6 +11,10 @@ import { parseEventListCursor } from "../../event-cursor";
 import { parseMessageListCursor } from "../../message-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
 import { UsageQuotaExceededError } from "../../../authorization/usage-quotas";
+import {
+  AuthHomeTurnRefusedError,
+  authHomeTurnRefusalResponse,
+} from "../../../auth-homes/turn-admission";
 import { sessionTraceFormatSchema, sessionTraceIncludeSchema } from "../../contracts";
 import {
   BudgetExhaustedError,
@@ -54,6 +58,9 @@ export class MessagesHandler {
       }
       if (error instanceof BudgetExhaustedError) {
         return Response.json({ error: error.message, code: "BUDGET_EXHAUSTED" }, { status: 409 });
+      }
+      if (error instanceof AuthHomeTurnRefusedError) {
+        return authHomeTurnRefusalResponse(error);
       }
       if (error instanceof UsageQuotaExceededError) {
         const { quota, exceeded } = error.violation;

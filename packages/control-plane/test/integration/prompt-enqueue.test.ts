@@ -11,6 +11,7 @@ import {
   queryDO,
   seedSandboxAuth,
   serviceRequestHeaders,
+  PROMPT_TURN,
 } from "./helpers";
 import { hostContract } from "../conformance/session-core-conformance";
 
@@ -28,7 +29,10 @@ describe("POST /sessions/:id/prompt", () => {
     const caller = { userId: "a".repeat(32), role: "member" } as const;
     const sessionName = `public-prompt-author-${crypto.randomUUID()}`;
     const url = `https://cp.test/sessions/${sessionName}/prompt`;
-    const body = JSON.stringify({ content: "Fix the bug", authorId: "someone-else" });
+    const body = JSON.stringify({
+      content: "Fix the bug",
+      authorId: "someone-else",
+    });
     const headers = await serviceRequestHeaders(url, { method: "POST", body, as: caller });
     await initSession({ sessionName, userId: caller.userId });
     const platform = createCloudflareEnv(env);
@@ -55,7 +59,12 @@ describe("POST /internal/prompt", () => {
     const res = await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "Fix the login bug", authorId: "user-1", source: "web" }),
+      body: JSON.stringify({
+        turn: PROMPT_TURN,
+        content: "Fix the login bug",
+        authorId: "user-1",
+        source: "web",
+      }),
     });
 
     expect(res.status).toBe(200);
@@ -70,7 +79,12 @@ describe("POST /internal/prompt", () => {
     const res = await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "Add tests", authorId: "user-1", source: "web" }),
+      body: JSON.stringify({
+        turn: PROMPT_TURN,
+        content: "Add tests",
+        authorId: "user-1",
+        source: "web",
+      }),
     });
 
     const { messageId } = await res.json<{ messageId: string }>();
@@ -95,7 +109,7 @@ describe("POST /internal/prompt", () => {
       const response = await stub.fetch("http://internal/internal/prompt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, authorId: "user-1", source: "web" }),
+        body: JSON.stringify({ turn: PROMPT_TURN, content, authorId: "user-1", source: "web" }),
       });
       return (await response.json<{ messageId: string }>()).messageId;
     };
@@ -116,7 +130,12 @@ describe("POST /internal/prompt", () => {
     await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "Hello", authorId: "user-2", source: "web" }),
+      body: JSON.stringify({
+        turn: PROMPT_TURN,
+        content: "Hello",
+        authorId: "user-2",
+        source: "web",
+      }),
     });
 
     const participants = await queryDO<{ user_id: string; role: string }>(
@@ -142,6 +161,7 @@ describe("POST /internal/prompt", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        turn: PROMPT_TURN,
         content: "Refactor auth",
         authorId: "slack:U123",
         canonicalUserId: "canonical-bot",
@@ -174,7 +194,7 @@ describe("POST /internal/prompt", () => {
       const response = await stub.fetch("http://internal/internal/prompt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, authorId: "user-1", source: "web" }),
+        body: JSON.stringify({ turn: PROMPT_TURN, content, authorId: "user-1", source: "web" }),
       });
       return (await response.json<{ messageId: string }>()).messageId;
     };
@@ -238,7 +258,7 @@ describe("POST /internal/prompt", () => {
       stub.fetch("http://internal/internal/prompt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, authorId: "user-1", source: "web" }),
+        body: JSON.stringify({ turn: PROMPT_TURN, content, authorId: "user-1", source: "web" }),
       });
     const responses = await Promise.all([enqueue("Concurrent A"), enqueue("Concurrent B")]);
     expect(responses.map((response) => response.status)).toEqual([200, 200]);
@@ -274,6 +294,7 @@ describe("POST /internal/prompt", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        turn: PROMPT_TURN,
         content: "See attachment",
         authorId: "user-1",
         source: "web",
@@ -313,6 +334,7 @@ describe("POST /internal/prompt", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        turn: PROMPT_TURN,
         content: "Deploy to staging",
         authorId: "user-1",
         source: "slack",

@@ -1,7 +1,7 @@
 import { beforeEach, describe, it, expect } from "vitest";
 import { sessionTraceExportSchema } from "../../src/session/contracts";
 import { cleanD1Tables } from "./cleanup";
-import { initSession, queryDO, seedEvents, seedMessage } from "./helpers";
+import { initSession, queryDO, seedEvents, seedMessage, PROMPT_TURN } from "./helpers";
 
 async function seedStepUsage(
   stub: DurableObjectStub,
@@ -328,14 +328,24 @@ describe("GET /internal/messages", () => {
     const res1 = await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "First prompt", authorId: "user-1", source: "web" }),
+      body: JSON.stringify({
+        turn: PROMPT_TURN,
+        content: "First prompt",
+        authorId: "user-1",
+        source: "web",
+      }),
     });
     const { messageId: msgId1 } = await res1.json<{ messageId: string }>();
 
     const res2 = await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "Second prompt", authorId: "user-1", source: "web" }),
+      body: JSON.stringify({
+        turn: PROMPT_TURN,
+        content: "Second prompt",
+        authorId: "user-1",
+        source: "web",
+      }),
     });
     const { messageId: msgId2 } = await res2.json<{ messageId: string }>();
 

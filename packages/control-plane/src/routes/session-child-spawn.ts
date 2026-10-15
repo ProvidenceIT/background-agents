@@ -447,6 +447,8 @@ export async function handleSpawnChild(
   let promptResponse: Response;
   try {
     const promptRequest = {
+      // Bound and audited above, with the child's creation.
+      turn: { admitted: "at_create" },
       content: body.prompt,
       authorId: spawnContext.promptAuthor.userId,
       canonicalUserId: spawnContext.promptAuthor.canonicalUserId ?? undefined,
