@@ -14,7 +14,10 @@ import { resolveSandboxBackendName } from "./provider-name";
  * On providers that support it, `sandboxTimeoutMs` is also the sandbox's TTL,
  * so a session cannot outlive it. Unsupported legacy values are ignored. When
  * it is unset, the deployment-wide `EXECUTION_TIMEOUT_MS` applies, and failing
- * that the default sandbox lifetime.
+ * that the default sandbox lifetime. The launch context resolves the sandbox
+ * TTL from the same precedence (`SandboxLaunchContext.resolveSandboxSettings`),
+ * so on those providers the sandbox lives exactly as long as this budget
+ * instead of expiring under a prompt the budget still allows.
  *
  * Both the session's own watchdog and the scheduler's lost-run sweep read the
  * budget through here. They resolve it from different places — the session
@@ -40,8 +43,10 @@ export function resolveExecutionBudgetMs(sandboxSettings: SandboxSettings, env: 
  * automation run's sweep deadline, so a malformed value must fall through to
  * the default rather than become a NaN or instant deadline, and a value with
  * trailing garbage (`"1000ms"`) is rejected rather than partially honoured.
+ * The sandbox launch context parses the variable through here too, so a value
+ * the budget ignores never becomes a sandbox lifetime either.
  */
-function parseConfiguredExecutionTimeoutMs(raw: string | undefined): number | undefined {
+export function parseConfiguredExecutionTimeoutMs(raw: string | undefined): number | undefined {
   if (raw === undefined || raw.trim() === "") return undefined;
   const value = Number(raw);
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
