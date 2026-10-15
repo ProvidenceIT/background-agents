@@ -95,10 +95,48 @@ BASE_CONFIG_OVERRIDES: Final = (
 # pool's CODEX_HOME, or it would be a second writer of the slot's rotating
 # refresh token. It gets an empty ``~/.codex`` and fails safely instead.
 POOL_CONFIG_OVERRIDES: Final = ('shell_environment_policy.exclude=["CODEX_HOME"]',)
+# Pool mode only, in the harness's config directory: the pid (and start time) of
+# the Codex child that may be running, so a restarted bridge never switches the
+# link under a child an earlier bridge left behind (W3).
+CHILD_RECORD_FILE: Final = "sf-codex-child.json"
 
 
 class _InactivityTimeout(Exception):
     """Codex printed nothing for longer than the inactivity budget."""
+
+
+@dataclass
+class _PoolTurn:
+    """What one pool turn has done so far, across its attempts."""
+
+    # Rebased onto a new thread once already (never twice in a turn).
+    rebased: bool = False
+    # The thread that carries this turn's partial work, if any attempt made progress.
+    progress_thread: str | None = None
+
+
+def _child_alive(record: Mapping[str, object]) -> bool:
+    """Whether a listed child (``{pid, start}``) is still that same running process."""
+    pid = record.get("pid")
+    if not isinstance(pid, int):
+        return False
+    current = _process_start_time(pid)
+    start = record.get("start")
+    return current is not None and (start is None or current == start)
+
+
+def _process_start_time(pid: int) -> str | None:
+    """Field 22 of ``/proc/<pid>/stat`` (start time in clock ticks); ``None`` when gone."""
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    fields = raw.rpartition(")")[2].split()
+    # After the command name: state is field 3, so start time is index 22 - 3. A
+    # zombie (or a dead task) holds no file open and writes nothing.
+    if len(fields) <= 19 or fields[0] in ("Z", "X", "x"):
+        return None
+    return fields[19]
 
 
 def bare_openai_model(model: str | None, default: str = DEFAULT_CODEX_MODEL) -> str:
@@ -197,6 +235,11 @@ class CodexHarness:
         if slots and not self._pool_mode:
             # The owner moves the old login into a slot (`--adopt-legacy`); never overwritten.
             self.log.warn("codex.pool.legacy_file", link=link.value, pool_slots=len(slots))
+        for slot, reason in codex_pool.unusable_slots(self._pool_root).items():
+            # Names only: an empty file is a login a killed refresh truncated.
+            self.log.warn("codex.pool.slot_unusable", slot=slot, reason=reason)
+        if self._pool_mode and self._earlier_child_alive():
+            self._mark_pool_dirty("earlier_child_alive")
         if self.config.tools is not None:
             self._tool_config_path = write_tool_config(self.config.tools, self.config.config_dir)
         self.log.info(
@@ -208,7 +251,9 @@ class CodexHarness:
         )
 
     async def close(self) -> None:
-        await self._terminate(self.limits.prompt_cleanup_timeout_seconds)
+        process = self._process
+        if await self._terminate(self.limits.prompt_cleanup_timeout_seconds) and process:
+            self._clear_child_record(process.pid)
 
     async def resume_session(self, persisted_id: str) -> bool:
         if self.codex_home is None or not rollout_exists(self.codex_home, persisted_id):
@@ -315,6 +360,8 @@ class CodexHarness:
             if self._pool_mode and process is not None and process.returncode is None:
                 # W3: a child that may still run keeps its slot's login; never switch under it.
                 self._mark_pool_dirty("child_not_confirmed_gone")
+            if self._pool_mode and process is not None and process.returncode is not None:
+                self._clear_child_record(process.pid)
             self._process = None
             self._in_failover = False
             for path in images:
@@ -347,6 +394,8 @@ class CodexHarness:
                 ) from error
             self._process = process
             self._in_failover = False
+            if self._pool_mode:
+                self._write_child_record(process.pid)
             stderr_task = asyncio.create_task(self._drain_stderr(process, stderr_tail))
             assert process.stdin is not None and process.stdout is not None
             process.stdin.write(text.encode("utf-8"))
@@ -393,6 +442,47 @@ class CodexHarness:
     ) -> TurnOutcome:
         """Attempts on pool slots until one settles the turn (see notes/sf-codex-pool.md).
 
+        However the turn ends (outcome, cancel, deadline), the thread it leaves
+        is remembered with the slot that ran it last, and a rebased thread that
+        neither succeeded nor did any work is dropped again: the conversation
+        keeps its own thread, and the next turn rebases afresh with the handoff.
+        """
+        turn_thread = self.session_id
+        turn = _PoolTurn()
+        outcome: TurnOutcome | None = None
+        try:
+            outcome = await self._pool_attempts(prompt, model, images, state, emit, turn)
+            return outcome
+        finally:
+            if state.progress:
+                turn.progress_thread = self.session_id
+            succeeded = outcome is not None and outcome.success
+            if (
+                not succeeded
+                and turn_thread is not None
+                and self.session_id != turn_thread
+                and (self.session_id is None or self.session_id != turn.progress_thread)
+            ):
+                self.log.info(
+                    "codex.pool.rebase_dropped",
+                    agent_session_id=turn_thread,
+                    dropped=self.session_id,
+                )
+                self.session_id = turn_thread
+            else:
+                self._remember_thread()
+
+    async def _pool_attempts(
+        self,
+        prompt: HarnessPrompt,
+        model: str,
+        images: list[Path],
+        state: CodexTurnState,
+        emit: EventSink,
+        turn: _PoolTurn,
+    ) -> TurnOutcome:
+        """The attempt loop of ``_run_pool_turn``.
+
         A usage limit or a refused login marks the slot and moves the same turn
         to the next open slot; a thread another account made is rebased once
         onto a new thread. Anything else settles the turn as a single attempt
@@ -400,9 +490,11 @@ class CodexHarness:
         """
         home, root = self.codex_home, self._pool_root
         assert home is not None
+        if not self._pool_dirty and self._earlier_child_alive():
+            self._mark_pool_dirty("earlier_child_alive")
         text = prompt.text
         tried: list[str] = []
-        progressed = False
+        # Pins the next attempt to the slot a rebase happened on.
         rebase_slot: str | None = None
         failed_over_from: tuple[str, FailureKind] | None = None
         announced = False
@@ -426,6 +518,7 @@ class CodexHarness:
                     thread_id=self.session_id,
                     tried=tried,
                     first_attempt=attempt == 0,
+                    codex_dir=home,
                 )
             if pick is None:
                 if last is None and self._pool_dirty:
@@ -482,6 +575,8 @@ class CodexHarness:
             kind = state.failure_kind
             process = self._process
             exited = process is None or process.returncode is not None
+            if state.progress:
+                turn.progress_thread = self.session_id
             if (
                 outcome.success
                 or outcome.cancelled
@@ -496,14 +591,13 @@ class CodexHarness:
             self._process = None
             self._in_failover = True
             detail = state.failure_detail or outcome.error or ""
-            if state.progress:
-                progressed = True
             if kind is FailureKind.FOREIGN_THREAD:
-                if session_before is None or state.progress or rebase_slot is not None:
+                if session_before is None or state.progress or turn.rebased:
                     return await self._release(state, emit, outcome)
                 rollout = rollout_path(home, session_before)
                 text = codex_pool.build_handoff_prompt(rollout, text)
                 self.session_id = None
+                turn.rebased = True
                 rebase_slot = pick.slot
                 self.log.warn("codex.pool.rebase", slot=pick.slot, agent_session_id=session_before)
                 await emit(
@@ -525,10 +619,15 @@ class CodexHarness:
             now = time.time()
             if kind is FailureKind.USAGE_LIMIT:
                 _, readings = read_headroom_file(root / codex_pool.HEADROOM_FILE)
-                until = codex_pool.reset_for(detail, readings.get(pick.slot, []), now)
+                until, source = codex_pool.exhaustion_mark(detail, readings.get(pick.slot, []), now)
                 with contextlib.suppress(OSError):
-                    codex_pool.mark_exhausted(root, pick.slot, until, now=now)
-                self.log.warn("codex.pool.exhausted", slot=pick.slot, until=codex_pool.iso(until))
+                    codex_pool.mark_exhausted(root, pick.slot, until, now=now, source=source)
+                self.log.warn(
+                    "codex.pool.exhausted",
+                    slot=pick.slot,
+                    until=codex_pool.iso(until),
+                    source=source,
+                )
             else:
                 with contextlib.suppress(OSError):
                     codex_pool.mark_auth_refused(root, pick.slot, now=now)
@@ -548,11 +647,12 @@ class CodexHarness:
             if failed_over_from is None:
                 failed_over_from = (pick.slot, kind)
             last = (outcome, kind, detail, list(state.held))
-            if progressed and self.session_id:
-                # Never replay a prompt whose work has partly happened.
+            if self.session_id and self.session_id == turn.progress_thread:
+                # Never replay a prompt whose work has partly happened in this thread.
                 text = CONTINUE_PROMPT
             elif session_before is None:
-                # The failed attempt's new thread is dropped; the retry starts a fresh one.
+                # The failed attempt's new thread is dropped; the retry starts a fresh one
+                # with the same text (the prompt, or the rebase's handoff).
                 self.session_id = None
             state.reset_for_retry()
         assert last is not None
@@ -566,7 +666,6 @@ class CodexHarness:
         last: tuple[TurnOutcome, FailureKind, str, list[BridgeEvent]],
     ) -> TurnOutcome:
         outcome, kind, detail, held = last
-        self._remember_thread()
         if kind is not FailureKind.USAGE_LIMIT:
             for event in held:
                 await emit(event)
@@ -584,7 +683,6 @@ class CodexHarness:
         self, state: CodexTurnState, emit: EventSink, outcome: TurnOutcome
     ) -> TurnOutcome:
         """Emit what the attempt held back and settle the turn with its outcome."""
-        self._remember_thread()
         held, state.held = state.held, []
         for event in held:
             await emit(event)
@@ -595,6 +693,54 @@ class CodexHarness:
         if self.session_id and self._slot:
             with contextlib.suppress(OSError):
                 codex_pool.record_thread_slot(self._pool_root, self.session_id, self._slot)
+
+    def _write_child_record(self, pid: int) -> None:
+        """Add a Codex child that may run, by pid and start time (W3 across bridge restarts).
+
+        Every child stays listed until it is confirmed gone, so a later child
+        never hides an earlier one that outlived its turn.
+        """
+        children = [c for c in self._child_records() or [] if _child_alive(c)]
+        children.append({"pid": pid, "start": _process_start_time(pid)})
+        try:
+            self.config.config_dir.mkdir(parents=True, exist_ok=True)
+            (self.config.config_dir / CHILD_RECORD_FILE).write_text(json.dumps(children))
+        except OSError as error:
+            self.log.warn("codex.pool.child_record_failed", error=str(error))
+
+    def _clear_child_record(self, pid: int) -> None:
+        """Drop ``pid`` (confirmed gone) and every listed child that has ended since."""
+        records = self._child_records()
+        if records is None:
+            return
+        children = [c for c in records if c.get("pid") != pid and _child_alive(c)]
+        path = self.config.config_dir / CHILD_RECORD_FILE
+        with contextlib.suppress(OSError):
+            if children:
+                path.write_text(json.dumps(children))
+            else:
+                path.unlink(missing_ok=True)
+
+    def _child_records(self) -> list[dict[str, object]] | None:
+        """The listed children; ``None`` when the list cannot be read."""
+        try:
+            raw = json.loads((self.config.config_dir / CHILD_RECORD_FILE).read_text())
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError):
+            return None
+        if not isinstance(raw, list):
+            return None
+        return [c for c in raw if isinstance(c, dict)]
+
+    def _earlier_child_alive(self) -> bool:
+        """Whether a listed Codex child, other than this harness's own live one, still runs."""
+        records = self._child_records()
+        if records is None:
+            return True  # unreadable: assume the worst, the link must not move
+        own = self._process
+        own_pid = own.pid if own is not None and own.returncode is None else None
+        return any(c.get("pid") != own_pid and _child_alive(c) for c in records)
 
     def _mark_pool_dirty(self, reason: str) -> None:
         if not self._pool_dirty:

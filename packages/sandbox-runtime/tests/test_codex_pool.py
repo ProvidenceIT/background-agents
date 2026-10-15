@@ -146,6 +146,32 @@ class TestPick:
         # A thread whose slot is exhausted moves.
         assert _pick(home, thread_id="thread-b").slot == "codex-3"
 
+    def test_a_thread_from_before_the_pool_keeps_to_the_adopted_slot(self, tmp_path: Path):
+        home = _home(tmp_path, SLOTS)
+        pool = home / "codex-pool"
+        _headroom(home, {"codex-1": (60, None), "codex-2": (80, None), "codex-3": (100, None)})
+        (pool / "legacy-slot").write_text("codex-2\n")
+        pick = _pick(home, thread_id="pre-pool-thread")
+        assert (pick.slot, pick.reason) == ("codex-2", "sticky")
+        # A thread the pool knows keeps its own slot; a new thread is ranked.
+        record_thread_slot(pool, "known", "codex-1")
+        assert _pick(home, thread_id="known").slot == "codex-1"
+        assert _pick(home).slot == "codex-3"
+        # An exhausted adopted slot does not hold the thread.
+        mark_exhausted(pool, "codex-2", NOW + 600, now=NOW - 1)
+        assert _pick(home, thread_id="pre-pool-thread").slot == "codex-3"
+
+    def test_without_a_legacy_slot_an_unknown_thread_keeps_to_the_linked_slot(self, tmp_path: Path):
+        home = _home(tmp_path, SLOTS)
+        pool = home / "codex-pool"
+        _headroom(home, {"codex-1": (60, None), "codex-2": (80, None), "codex-3": (100, None)})
+        point_auth(home / "codex", pool, "codex-1")
+        assert _pick(home, thread_id="lost").slot == "codex-3"  # no codex_dir: ranked
+        pick = _pick(home, thread_id="lost", codex_dir=home / "codex")
+        assert (pick.slot, pick.reason) == ("codex-1", "sticky")
+        (pool / "legacy-slot").write_text("../x\n")  # not a slot name: ignored
+        assert _pick(home, thread_id="lost", codex_dir=home / "codex").slot == "codex-1"
+
     def test_a_low_fresh_reading_ends_stickiness(self, tmp_path: Path):
         home = _home(tmp_path, SLOTS)
         _headroom(home, {"codex-2": (5, None), "codex-3": (90, None)})
@@ -159,15 +185,33 @@ class TestPick:
         mark_exhausted(pool, "codex-2", NOW - 1, now=NOW - 3600)
         assert {_pick(home, seed).slot for seed in range(30)} == {"codex-2", "codex-3"}
 
-    def test_a_fresh_reading_after_the_mark_clears_it(self, tmp_path: Path):
+    def test_a_fresh_reading_after_a_headroom_mark_clears_it(self, tmp_path: Path):
         home = _home(tmp_path, ["codex-1"])
         pool = home / "codex-pool"
-        mark_exhausted(pool, "codex-1", NOW + 86400, now=NOW - 600)
+        mark_exhausted(pool, "codex-1", NOW + 86400, now=NOW - 600, source="headroom")
         _headroom(home, {"codex-1": (90, None)}, age=60)
         assert _pick(home).reason == "ranked"
         # A reading from before the mark does not.
         _headroom(home, {"codex-1": (90, None)}, age=900)
         assert _pick(home).reason == "exhausted"
+
+    @pytest.mark.parametrize("source", ["retry_at", "default", "not_included", None])
+    def test_a_weekly_reading_never_clears_a_mark_from_another_limit(
+        self, tmp_path: Path, source: str | None
+    ):
+        """A 5-hour limit ("try again at 3:40 PM") is invisible to the weekly-only snapshot."""
+        home = _home(tmp_path, ["codex-1", "codex-2"])
+        pool = home / "codex-pool"
+        if source is None:
+            mark_exhausted(pool, "codex-2", NOW + 3600, now=NOW - 61)
+        else:
+            mark_exhausted(pool, "codex-2", NOW + 3600, now=NOW - 61, source=source)
+        _headroom(home, {"codex-1": (80, None), "codex-2": (88, None)}, age=1)
+        assert {_pick(home, seed).slot for seed in range(30)} == {"codex-1"}
+        assert codex_pool.block_reasons(pool, now=NOW) == {"codex-2": "exhausted"}
+        # It still ends on its own time.
+        late = pick_codex_slot(pool, now=NOW + 3601, rng=random.Random(0), tried=["codex-1"])
+        assert late is not None and late.slot == "codex-2"
 
     def test_an_auth_refusal_holds_until_the_login_changes(self, tmp_path: Path):
         home = _home(tmp_path, ["codex-1", "codex-2"])
@@ -188,6 +232,26 @@ class TestPick:
         assert (pick.slot, pick.reason) == ("codex-2", "exhausted")
         assert _pick(home, first_attempt=False) is None
         assert _pick(home, tried=["codex-1", "codex-2"]) is None
+
+
+class TestUnusableSlots:
+    def test_a_slot_without_a_usable_login_is_reported_by_name(self, tmp_path: Path):
+        home = _home(tmp_path, ["codex-1"])
+        pool = home / "codex-pool"
+        (pool / "codex-2").mkdir()
+        (pool / "codex-2" / "auth.json").write_text("")  # a refresh killed mid-write
+        (pool / "codex-3").mkdir()  # an enrolment not finished
+        (pool / "codex-4").mkdir()
+        (pool / "codex-4" / "auth.json").mkdir()
+        (pool / ".hidden").mkdir()
+        (pool / "state.json").write_text("{}")
+        assert codex_pool.unusable_slots(pool) == {
+            "codex-2": "empty_login",
+            "codex-3": "missing_login",
+            "codex-4": "not_a_file",
+        }
+        assert codex_pool.block_reasons(pool, now=NOW) == codex_pool.unusable_slots(pool)
+        assert list(pool_slots(pool)) == ["codex-1"]
 
 
 class TestState:
@@ -350,6 +414,23 @@ class TestRetryAt:
     def test_no_time(self):
         assert parse_retry_at("Try again later.", NOW) is None
         assert parse_retry_at("try again at Foo 99th, 2026 5:11 AM", NOW) is None
+
+    def test_the_mark_names_its_source(self):
+        exhausted = [Window("weekly", 0, _ts(INCIDENT_RESET))]
+        text = "You’ve hit your usage limit. Try again at 3:40 PM."
+        assert codex_pool.exhaustion_mark(text, exhausted, NOW) == (
+            _ts(INCIDENT_RESET),
+            "headroom",
+        )
+        assert codex_pool.exhaustion_mark(text, [Window("weekly", 88, None)], NOW) == (
+            _ts("2026-10-15T15:40:00Z"),
+            "retry_at",
+        )
+        assert codex_pool.exhaustion_mark("You’ve hit your usage limit.", [], NOW) == (
+            NOW + 1800,
+            "default",
+        )
+        assert codex_pool.exhaustion_mark("usage_not_included", [], NOW)[1] == "not_included"
 
     def test_reset_for_prefers_the_snapshot_then_the_text_then_a_default(self):
         exhausted = [Window("weekly", 0, _ts(INCIDENT_RESET))]

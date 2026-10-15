@@ -176,6 +176,21 @@ def test_a_legacy_codex_login_beside_a_pool_is_reported(tmp_path: Path) -> None:
     assert report["codex_pool_headroom_age_s"] is None
 
 
+def test_a_codex_slot_with_an_empty_or_missing_login_is_reported(tmp_path: Path) -> None:
+    home = _codex_pool_home(tmp_path)
+    (home / "codex-pool" / "codex-2" / "auth.json").write_text("")
+    (home / "codex-pool" / "codex-3" / "auth.json").unlink()
+    report = auth_home_boot_report({"SF_AUTH_HOME": str(home)})
+    assert report is not None
+    assert report["codex_pool_slots"] == 1
+    assert report["codex_pool_blocked"] == {"codex-2": "empty_login", "codex-3": "missing_login"}
+    (home / "codex-pool" / "codex-1" / "auth.json").write_text("")
+    report = auth_home_boot_report({"SF_AUTH_HOME": str(home)})
+    assert report is not None
+    assert report["codex_pool_slots"] == 0
+    assert set(report["codex_pool_blocked"].values()) == {"empty_login", "missing_login"}
+
+
 def test_a_home_without_a_codex_pool_reports_no_pool_keys(tmp_path: Path) -> None:
     report = auth_home_boot_report({"SF_AUTH_HOME": str(_home(tmp_path))})
     assert report is not None

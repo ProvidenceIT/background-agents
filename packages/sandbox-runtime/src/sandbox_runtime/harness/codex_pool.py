@@ -14,18 +14,24 @@ The owner's PC pushes the slots' headroom (percentages only) to
 ``codex-pool/headroom.json`` in the format the Claude pool uses. The seated
 harness keeps its own marks in ``codex-pool/state.json``: when a slot hit its
 usage limit or was refused, and which slot ran each thread. ``force-slot``
-(one slot name) pins every pick, for tests and emergencies.
+(one slot name) pins every pick, for tests and emergencies. ``legacy-slot``
+(one slot name, written by the owner's ``--adopt-legacy``) names the account
+that made every thread from before the pool.
 
 Pick rules, before every attempt (see notes/sf-codex-pool.md):
 
 1. Slots are regular, non-empty ``auth.json`` files with a safe name; slots
    already tried in this turn are left out.
 2. ``force-slot`` naming an untried slot wins.
-3. Blocked: an ``exhaustedUntil`` still ahead (cleared by a fresh snapshot
-   taken after the mark that shows headroom again), an ``authRefused`` mark
-   while the file is unchanged, and an exhausted headroom window with a
-   reset still ahead.
-4. Sticky: the thread's last slot, while open and not known to be low.
+3. Blocked: an ``exhaustedUntil`` still ahead, an ``authRefused`` mark while
+   the file is unchanged, and an exhausted headroom window with a reset still
+   ahead. Only a mark taken from the snapshot's own window is cleared early,
+   by a fresh snapshot taken after the mark that shows headroom again: the
+   snapshot carries the weekly window only, so it says nothing about a
+   shorter limit Codex reported.
+4. Sticky: the thread's last slot, while open and not known to be low. A
+   thread the pool has no record of (made before the pool) keeps to
+   ``legacy-slot``, or else to the slot ``codex/auth.json`` links to now.
 5. Ranked or spread as for Claude, over any window id.
 6. Nothing open: the earliest reset on a turn's first attempt (so Codex
    reports the real limit), ``None`` on a retry.
@@ -60,6 +66,7 @@ AUTH_FILE: Final = "auth.json"
 HEADROOM_FILE: Final = "headroom.json"
 STATE_FILE: Final = "state.json"
 FORCE_FILE: Final = "force-slot"
+LEGACY_SLOT_FILE: Final = "legacy-slot"
 # The record of the last pick, in the harness's config directory (never the home).
 PICK_FILE: Final = "sf-codex-pool-pick.json"
 # The temporary link next to codex/auth.json that is renamed over it.
@@ -73,6 +80,13 @@ DEFAULT_EXHAUSTION_SECONDS: Final = 30 * 60
 NOT_INCLUDED_SECONDS: Final = 24 * 3600
 # No limit Codex reports is longer than a week; a parse that says so is wrong.
 MAX_EXHAUSTION_SECONDS: Final = 8 * 24 * 3600
+
+# Where an exhaustion mark's time came from (``state.json`` ``source``). Only a
+# ``headroom`` mark is about the window the snapshot shows.
+MARK_FROM_HEADROOM: Final = "headroom"
+MARK_FROM_RETRY_AT: Final = "retry_at"
+MARK_FROM_DEFAULT: Final = "default"
+MARK_NOT_INCLUDED: Final = "not_included"
 
 # Codex writes "You\u2019ve hit your usage limit"; markers use an ASCII apostrophe.
 _RIGHT_QUOTE: Final = "\u2019"
@@ -168,6 +182,36 @@ def pool_slots(root: Path) -> dict[str, Path]:
     return slots
 
 
+def unusable_slots(root: Path) -> dict[str, str]:
+    """Slot directories that hold no usable login, ``{slot: reason}`` (lstat only).
+
+    ``missing_login`` (no file yet, or an enrolment in progress), ``empty_login``
+    (a refresh killed between Codex's truncate and its write leaves this, and
+    the login is then lost) or ``not_a_file``. The owner re-enrols such a slot.
+    """
+    found: dict[str, str] = {}
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        return found
+    for entry in entries:
+        if not _SLOT_NAME.match(entry.name) or not entry.is_dir():
+            continue
+        try:
+            info = (entry / AUTH_FILE).lstat()
+        except FileNotFoundError:
+            found[entry.name] = "missing_login"
+            continue
+        except OSError:
+            found[entry.name] = "not_a_file"
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            found[entry.name] = "not_a_file"
+        elif info.st_size == 0:
+            found[entry.name] = "empty_login"
+    return found
+
+
 def link_state(codex_dir: Path, root: Path) -> LinkState:
     """Whether ``codex/auth.json`` is missing, a link into the pool, a file, or a link elsewhere."""
     auth = codex_dir / AUTH_FILE
@@ -228,8 +272,17 @@ def point_auth(codex_dir: Path, root: Path, slot: str) -> bool:
 
 
 def read_force(root: Path) -> str | None:
+    return _read_slot_name(root / FORCE_FILE)
+
+
+def read_legacy_slot(root: Path) -> str | None:
+    """The slot the home's pre-pool login was moved into (``--adopt-legacy``), if recorded."""
+    return _read_slot_name(root / LEGACY_SLOT_FILE)
+
+
+def _read_slot_name(path: Path) -> str | None:
     try:
-        name = (root / FORCE_FILE).read_text(encoding="utf-8").strip()
+        name = path.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):
         return None
     return name if _SLOT_NAME.match(name) else None
@@ -279,11 +332,15 @@ def write_state(root: Path, state: Mapping[str, Any]) -> None:
         raise
 
 
-def mark_exhausted(root: Path, slot: str, until: float, *, now: float) -> None:
+def mark_exhausted(
+    root: Path, slot: str, until: float, *, now: float, source: str = MARK_FROM_DEFAULT
+) -> None:
+    """Block ``slot`` until ``until``; ``source`` says where that time came from."""
     state = read_state(root)
     entry = state["slots"].setdefault(slot, {})
     entry["exhaustedUntil"] = iso(until)
     entry["markedAt"] = iso(now)
+    entry["source"] = source
     write_state(root, state)
 
 
@@ -323,8 +380,13 @@ def pick_codex_slot(
     first_attempt: bool = True,
     now: float | None = None,
     rng: random.Random | None = None,
+    codex_dir: Path | None = None,
 ) -> CodexPick | None:
-    """The slot the next attempt runs on, or ``None`` when no untried slot can run it."""
+    """The slot the next attempt runs on, or ``None`` when no untried slot can run it.
+
+    ``codex_dir`` (``CODEX_HOME``) lets a thread the pool has no record of keep
+    to the slot ``codex/auth.json`` links to when no ``legacy-slot`` is set.
+    """
     tried_set = set(tried)
     slots = {name: path for name, path in pool_slots(root).items() if name not in tried_set}
     if not slots:
@@ -339,7 +401,7 @@ def pick_codex_slot(
     captured_at, readings = claude_pool.read_headroom_file(root / HEADROOM_FILE)
     blocks = blocked_until(root, slots, captured_at, readings, now)
 
-    sticky = read_state(root)["threads"].get(thread_id) if thread_id else None
+    sticky = _thread_slot(root, thread_id, codex_dir)
     if sticky in slots and _open(sticky, blocks, readings, now):
         score = _fresh_score(readings.get(sticky, []), captured_at, now)
         if score is None or score > EXHAUSTED_PERCENT:
@@ -357,6 +419,19 @@ def pick_codex_slot(
     if ranked is None or (ranked.reason == "exhausted" and not first_attempt):
         return None
     return CodexPick(ranked.slot, slots[ranked.slot], ranked.reason, ranked.percent_remaining)
+
+
+def _thread_slot(root: Path, thread_id: str | None, codex_dir: Path | None) -> str | None:
+    """The slot a thread belongs on: its last slot, else the pre-pool account's."""
+    if not thread_id:
+        return None
+    known = read_state(root)["threads"].get(thread_id)
+    if known is not None:
+        return known
+    legacy = read_legacy_slot(root)
+    if legacy is not None:
+        return legacy
+    return linked_slot(codex_dir, root) if codex_dir is not None else None
 
 
 def blocked_until(
@@ -384,12 +459,13 @@ def blocked_until(
         marked = _timestamp(entry.get("markedAt"))
         score = _fresh_score(readings.get(slot, []), captured_at, now)
         if (
-            score is not None
+            entry.get("source") == MARK_FROM_HEADROOM
+            and score is not None
             and score > EXHAUSTED_PERCENT
             and captured_at is not None
             and (marked is None or captured_at > marked)
         ):
-            continue  # a reading taken after the mark shows the reset happened
+            continue  # a reading of the same window, taken after the mark, shows the reset
         blocks[slot] = until
     return blocks
 
@@ -405,6 +481,7 @@ def block_reasons(root: Path, *, now: float | None = None) -> dict[str, str]:
     for slot in slots:
         if slot not in reasons and _headroom_exhausted_until(readings.get(slot, []), now):
             reasons[slot] = "headroom"
+    reasons.update(unusable_slots(root))
     return reasons
 
 
@@ -514,16 +591,25 @@ def parse_retry_at(text: str, now: float) -> float | None:
 
 def reset_for(detail: str, windows: list[Window], now: float) -> float:
     """Until when a slot that hit its limit with ``detail`` stays out."""
+    return exhaustion_mark(detail, windows, now)[0]
+
+
+def exhaustion_mark(detail: str, windows: list[Window], now: float) -> tuple[float, str]:
+    """``(until, source)`` for a slot that hit its limit with ``detail``.
+
+    The source is ``headroom`` only when the snapshot's own window is the one
+    that ran out; a later reading of that window may then clear the mark.
+    """
     lowered = (detail or "").lower().replace(_RIGHT_QUOTE, "'")
     if any(marker in lowered for marker in NOT_INCLUDED_MARKERS):
-        until = now + NOT_INCLUDED_SECONDS
+        until, source = now + NOT_INCLUDED_SECONDS, MARK_NOT_INCLUDED
+    elif (headroom := _headroom_exhausted_until(windows, now)) is not None:
+        until, source = headroom, MARK_FROM_HEADROOM
+    elif (retry_at := parse_retry_at(detail, now)) is not None:
+        until, source = retry_at, MARK_FROM_RETRY_AT
     else:
-        until = (
-            _headroom_exhausted_until(windows, now)
-            or parse_retry_at(detail, now)
-            or now + DEFAULT_EXHAUSTION_SECONDS
-        )
-    return min(max(until, now), now + MAX_EXHAUSTION_SECONDS)
+        until, source = now + DEFAULT_EXHAUSTION_SECONDS, MARK_FROM_DEFAULT
+    return min(max(until, now), now + MAX_EXHAUSTION_SECONDS), source
 
 
 def build_handoff_prompt(rollout: Path | None, prompt: str) -> str:

@@ -63,13 +63,15 @@ def auth_home_boot_report(environ: Mapping[str, str] = os.environ) -> dict[str, 
 
 
 def _codex_pool_report(root: Path) -> dict[str, Any]:
-    """Slot count, blocked slots by reason, headroom age, and whether a legacy login is in the way.
+    """Slot count, blocked or unusable slots by reason, headroom age, and a legacy login in the way.
 
     Empty without a pool. Stats and the pool's own state files only: no login is opened.
     """
     pool = codex_pool.pool_root(root)
     slots = codex_pool.pool_slots(pool)
-    if not slots:
+    # A slot whose login is missing or empty is reported too (by name), so the
+    # owner sees it needs re-enrolment even when no slot is usable.
+    if not slots and not codex_pool.unusable_slots(pool):
         return {}
     link = codex_pool.link_state(root / AUTH_HOME_CODEX_DIR, pool)
     return {

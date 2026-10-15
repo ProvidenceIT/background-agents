@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
+import signal
 import stat
 import sys
 import tomllib
@@ -603,6 +605,7 @@ try:
 except (OSError, ValueError):
     auth = {{}}
 mode, slot = auth.get("mode", "ok"), auth.get("slot")
+new_thread = auth.get("thread")
 argv = sys.argv[1:]
 resume = argv[argv.index("resume") + 1] if "resume" in argv else None
 with open(os.environ["FAKE_CODEX_RECORD"], "a") as handle:
@@ -627,12 +630,25 @@ def fail(text):
 if mode == "stderr_usage":
     sys.stderr.write({usage!r} + "\\n")
     sys.exit(1)
-if mode == "foreign" and resume:
-    out({{"type": "thread.started", "thread_id": resume}})
+FOREIGN = "invalid_encrypted_content: The encrypted content could not be verified."
+TOOL = {{"id": "item_1", "type": "command_execution", "command": "touch a", "exit_code": 0,
+        "aggregated_output": "", "status": "completed"}}
+RESUME_FOREIGN = ("foreign", "foreign_then_exhausted", "foreign_then_exhaust_after_tool")
+if mode == "foreign_always" or (resume and mode in RESUME_FOREIGN):
+    out({{"type": "thread.started", "thread_id": resume or {failed!r}}})
     out({{"type": "turn.started"}})
-    fail("invalid_encrypted_content: The encrypted content could not be verified.")
+    fail(FOREIGN)
+if mode == "foreign_after_tool":
+    out({{"type": "thread.started", "thread_id": resume or {failed!r}}})
+    out({{"type": "turn.started"}})
+    out({{"type": "item.completed", "item": TOOL}})
+    fail(FOREIGN)
+if mode == "foreign_then_exhausted":
+    mode = "exhausted"
+if mode == "foreign_then_exhaust_after_tool":
+    mode = "exhaust_after_tool"
 ok = mode in ("ok", "foreign", "slow")
-out({{"type": "thread.started", "thread_id": resume or ({thread!r} if ok else {failed!r})}})
+out({{"type": "thread.started", "thread_id": resume or new_thread or ({thread!r} if ok else {failed!r})}})
 out({{"type": "turn.started"}})
 out({{"type": "item.completed", "item": {{"id": "item_0", "type": "reasoning", "text": "thinking"}}}})
 if mode == "slow":
@@ -683,8 +699,11 @@ class PoolRig(Rig):
         self.environ["CODEX_REFRESH_TOKEN_URL_OVERRIDE"] = "https://example.invalid/token"
         self.harness = self.build()
 
-    def set_mode(self, slot: str, mode: str) -> None:
-        (self.pool / slot / "auth.json").write_text(json.dumps({"slot": slot, "mode": mode}))
+    def set_mode(self, slot: str, mode: str, *, thread: str | None = None) -> None:
+        login: dict[str, Any] = {"slot": slot, "mode": mode}
+        if thread is not None:
+            login["thread"] = thread  # the id a new thread on this slot gets
+        (self.pool / slot / "auth.json").write_text(json.dumps(login))
 
     def headroom(self, percents: dict[str, int]) -> None:
         from datetime import UTC, datetime
@@ -964,6 +983,250 @@ class TestPoolFailover:
         # The held failure is released as it would be without a pool.
         assert rig.errors() == [outcome.error]
         assert USAGE_TEXT in rig.warnings()
+
+
+REBASED_THREAD = "0199a213-0000-7000-8000-0000000ba5e0"
+
+
+class TestPoolRebaseAndProgress:
+    async def test_a_rebase_that_never_finishes_keeps_the_conversation_thread(self, tmp_path: Path):
+        """Foreign on resume, then every slot exhausted: the next turn still resumes THREAD_ID."""
+        rig = PoolRig(tmp_path, {"codex-1": "foreign_then_exhausted", "codex-2": "exhausted"})
+        _rollout(rig, THREAD_ID, "Write the parser")
+        await rig.harness.open()
+        assert await rig.harness.resume_session(THREAD_ID)
+
+        outcome = await rig.harness.run_prompt(prompt("Now the tests"), rig.emit)
+
+        assert not outcome.success
+        assert "every Codex subscription slot is at its limit" in (outcome.error or "")
+        runs = rig.runs()
+        assert [(r["slot"], "resume" in r["argv"]) for r in runs] == [
+            ("codex-1", True),
+            ("codex-1", False),
+            ("codex-2", False),
+        ]
+        assert rig.harness.session_id == THREAD_ID
+        argv = rig.harness.build_argv("gpt-6-sol", None, [])
+        assert argv[argv.index("resume") + 1] == THREAD_ID
+        # The thread is not tied to the slot it could not be resumed on.
+        assert THREAD_ID not in rig.state()["threads"]
+        rig.harness.log.info.assert_any_call(
+            "codex.pool.rebase_dropped", agent_session_id=THREAD_ID, dropped=None
+        )
+
+    async def test_a_rebase_then_a_usage_limit_moves_the_handoff_to_the_next_slot(
+        self, tmp_path: Path
+    ):
+        rig = PoolRig(tmp_path, {"codex-1": "foreign_then_exhausted", "codex-2": "ok"})
+        rig.set_mode("codex-2", "ok", thread=REBASED_THREAD)
+        _rollout(rig, THREAD_ID, "Write the parser")
+        await rig.harness.open()
+        assert await rig.harness.resume_session(THREAD_ID)
+
+        outcome = await rig.harness.run_prompt(prompt("Now the tests"), rig.emit)
+
+        assert outcome == TurnOutcome.ok()
+        first, second, third = rig.runs()
+        assert [r["slot"] for r in (first, second, third)] == ["codex-1", "codex-1", "codex-2"]
+        assert "resume" not in third["argv"]
+        assert "user: Write the parser" in third["stdin"]
+        assert third["stdin"].endswith("Now the tests")
+        assert "exhaustedUntil" in rig.state()["slots"]["codex-1"]
+        assert rig.harness.session_id == REBASED_THREAD
+        assert rig.state()["threads"][REBASED_THREAD] == "codex-2"
+        assert sum("continues in a new thread" in w for w in rig.warnings()) == 1
+
+    async def test_a_turn_rebases_at_most_once(self, tmp_path: Path):
+        """Progress, limit, rebase, progress, limit: the cross-account resume is not rebased again."""
+        from sandbox_runtime.harness.codex_pool import CONTINUE_PROMPT
+
+        rig = PoolRig(
+            tmp_path,
+            {
+                "codex-1": "exhaust_after_tool",
+                "codex-2": "foreign_then_exhaust_after_tool",
+                "codex-3": "foreign",
+            },
+        )
+        rig.set_mode("codex-2", "foreign_then_exhaust_after_tool", thread=REBASED_THREAD)
+        await rig.harness.open()
+
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+
+        assert not outcome.success
+        assert "invalid_encrypted_content" in (outcome.error or "")
+        runs = rig.runs()
+        resumed = [
+            r["argv"][r["argv"].index("resume") + 1] if "resume" in r["argv"] else None
+            for r in runs
+        ]
+        assert [r["slot"] for r in runs] == ["codex-1", "codex-2", "codex-2", "codex-3"]
+        assert resumed == [None, FAILED_THREAD, None, REBASED_THREAD]
+        assert runs[1]["stdin"] == CONTINUE_PROMPT
+        assert runs[3]["stdin"] == CONTINUE_PROMPT
+        assert sum("continues in a new thread" in w for w in rig.warnings()) == 1
+        # The rebased thread carries the work: it stays the conversation's thread.
+        assert rig.harness.session_id == REBASED_THREAD
+
+    async def test_a_fresh_thread_after_a_rebase_reruns_its_handoff_not_continue(
+        self, tmp_path: Path
+    ):
+        """Turn-wide progress must not make a later fresh thread resume with CONTINUE_PROMPT."""
+        from sandbox_runtime.harness.codex_pool import CONTINUE_PROMPT
+
+        rig = PoolRig(
+            tmp_path,
+            {"codex-1": "exhaust_after_tool", "codex-2": "foreign_then_exhausted", "codex-3": "ok"},
+        )
+        rig.set_mode("codex-2", "foreign_then_exhausted", thread=REBASED_THREAD)
+        await rig.harness.open()
+
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+
+        assert outcome == TurnOutcome.ok()
+        runs = rig.runs()
+        assert [r["slot"] for r in runs] == ["codex-1", "codex-2", "codex-2", "codex-3"]
+        last = runs[3]
+        assert "resume" not in last["argv"]
+        assert last["stdin"].startswith("[This conversation continues")
+        assert last["stdin"].endswith(CONTINUE_PROMPT)
+
+    async def test_a_foreign_thread_on_a_new_thread_is_released_not_rebased(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "foreign_always", "codex-2": "ok"})
+        await rig.harness.open()
+
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+
+        assert not outcome.success
+        assert len(rig.runs()) == 1
+        assert rig.errors() == [outcome.error]
+        assert not any("continues in a new thread" in w for w in rig.warnings())
+
+    async def test_a_foreign_thread_after_progress_is_released_not_rebased(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "foreign_after_tool", "codex-2": "ok"})
+        _rollout(rig, THREAD_ID)
+        await rig.harness.open()
+        assert await rig.harness.resume_session(THREAD_ID)
+
+        outcome = await rig.harness.run_prompt(prompt("Next"), rig.emit)
+
+        assert not outcome.success
+        assert len(rig.runs()) == 1
+        assert rig.errors() == [outcome.error]
+        assert not any("continues in a new thread" in w for w in rig.warnings())
+        assert rig.harness.session_id == THREAD_ID
+
+
+class TestPoolThreadMemory:
+    async def test_a_cancelled_failover_remembers_the_slot_that_ran_last(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "exhausted", "codex-2": "slow"})
+        _rollout(rig, THREAD_ID)
+        await rig.harness.open()
+        assert await rig.harness.resume_session(THREAD_ID)
+
+        task = asyncio.create_task(rig.harness.run_prompt(prompt("Next"), rig.emit))
+        await _wait_for(lambda: len(_runs_or_empty(rig)) == 2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert rig.state()["threads"][THREAD_ID] == "codex-2"
+
+    async def test_a_timed_out_turn_remembers_its_slot(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, {"codex-1": "slow", "codex-2": "ok"})
+        harness = CodexHarness(
+            config=rig.harness.config,
+            log=MagicMock(),
+            limits=PromptLimits(
+                inactivity_timeout_seconds=10.0,
+                prompt_max_duration_seconds=1.0,
+                prompt_cleanup_timeout_seconds=2.0,
+            ),
+            environ=rig.environ,
+        )
+        await harness.open()
+
+        outcome = await harness.run_prompt(prompt(), rig.emit)
+
+        assert outcome == TurnOutcome.failed("Prompt exceeded max duration of 1s.")
+        assert rig.state()["threads"] == {THREAD_ID: "codex-1"}
+
+
+class TestPoolChildGuard:
+    async def test_a_child_that_outlives_its_turn_pins_the_link_across_a_bridge_restart(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """W3: a child the harness could not confirm gone keeps the link, in this bridge and the next."""
+        rig = PoolRig(tmp_path, {"codex-1": "slow", "codex-2": "ok"})
+        await rig.harness.open()
+        # The signals never arrive: the child survives the cancel.
+        monkeypatch.setattr("sandbox_runtime.harness.codex.os.killpg", lambda pid, sig: None)
+        task = asyncio.create_task(rig.harness.run_prompt(prompt(), rig.emit))
+        await _wait_for(lambda: len(_runs_or_empty(rig)) == 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        pid = rig.runs()[0]["pid"]
+        try:
+            assert _alive(pid)
+            rig.harness.log.warn.assert_any_call(
+                "codex.pool.dirty", reason="child_not_confirmed_gone", slot="codex-1"
+            )
+            rig.set_mode("codex-1", "exhausted")
+
+            # The same bridge: pinned to codex-1, no failover to codex-2.
+            outcome = await rig.harness.run_prompt(prompt("Again"), rig.emit)
+            assert not outcome.success
+            assert rig.link() == "../codex-pool/codex-1/auth.json"
+
+            # A restarted bridge (new harness, same sandbox) finds the child and stays pinned.
+            restarted = rig.build()
+            await restarted.open()
+            restarted.log.warn.assert_any_call(
+                "codex.pool.dirty", reason="earlier_child_alive", slot=None
+            )
+            outcome = await restarted.run_prompt(prompt("Once more"), rig.emit)
+            assert not outcome.success
+            assert [r["slot"] for r in rig.runs()] == ["codex-1", "codex-1", "codex-1"]
+            assert rig.link() == "../codex-pool/codex-1/auth.json"
+        finally:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+
+        # Once that child is gone, a new bridge switches freely again.
+        await _wait_for(lambda: not _alive(pid))
+        fresh = rig.build()
+        await fresh.open()
+        assert await fresh.run_prompt(prompt("Later"), rig.emit) == TurnOutcome.ok()
+        assert rig.runs()[-1]["slot"] == "codex-2"
+
+    async def test_a_child_that_exited_leaves_no_record(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, THREE)
+        await rig.harness.open()
+        await rig.harness.run_prompt(prompt(), rig.emit)
+        assert not (rig.tmp_path / "codex-config" / "sf-codex-child.json").exists()
+
+    async def test_an_unusable_slot_is_named_at_open(self, tmp_path: Path):
+        rig = PoolRig(tmp_path, THREE)
+        (rig.pool / "codex-4").mkdir()
+        (rig.pool / "codex-4" / "auth.json").write_text("")
+        await rig.harness.open()
+        rig.harness.log.warn.assert_any_call(
+            "codex.pool.slot_unusable", slot="codex-4", reason="empty_login"
+        )
+
+
+def _runs_or_empty(rig: Rig) -> list[dict[str, Any]]:
+    return rig.runs() if rig.record.exists() else []
+
+
+async def _wait_for(condition, timeout_seconds: float = 10.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while not condition():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not met in time")
+        await asyncio.sleep(0.05)
 
 
 def _rollout(rig: Rig, thread_id: str, text: str = "Earlier request") -> Path:
