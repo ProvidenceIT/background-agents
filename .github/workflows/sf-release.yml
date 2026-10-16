@@ -756,7 +756,16 @@ jobs:
         run: |
           # A lightweight tag through the API: no checkout, no credential on disk.
           # The sf-tags ruleset makes it immutable once created.
-          existing=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha 2> /dev/null || true)
+          # gh api prints the error body on stdout even when it fails, so never read its output
+          # after a failure: a 404 means "no tag yet", anything else stops the job.
+          if existing=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha 2> "$RUNNER_TEMP/tag-err"); then
+            :
+          elif grep -q 'HTTP 404' "$RUNNER_TEMP/tag-err"; then
+            existing=""
+          else
+            echo "::error::cannot read tag $TAG: $(tr '\n' ' ' < "$RUNNER_TEMP/tag-err")"
+            exit 1
+          fi
           if [[ -n "$existing" ]]; then
             if [[ "$existing" == "$SHA" ]]; then
               echo "Tag $TAG already points at $SHA"
