@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bramdokman/background-agents/blob/sf/main/.github/sf/release-input.schema.json",
+  "title": "SF release input",
+  "description": "Written by .github/workflows/sf-release.yml (job promote) and read by deploy/scripts/promote.py in bramdokman/software-factory. Changing this file changes the contract between the two repos: update promote.py in the same release.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sourceRepo",
+    "sourceSha",
+    "releaseTag",
+    "runUrl",
+    "images",
+    "sandbox",
+    "forceComponents",
+    "allowDowngrade"
+  ],
+  "properties": {
+    "sourceRepo": {
+      "description": "The repository the images were built from.",
+      "const": "bramdokman/background-agents"
+    },
+    "sourceSha": {
+      "description": "Full sf/main commit the images were built from.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "releaseTag": {
+      "description": "Immutable git tag sf-<UTC committer time YYYYMMDDHHMMSS>-<first 8 of sourceSha>; also the image tag.",
+      "type": "string",
+      "pattern": "^sf-[0-9]{14}-[0-9a-f]{8}$"
+    },
+    "runUrl": {
+      "description": "The GitHub Actions run that produced this release.",
+      "type": "string",
+      "pattern": "^https://github\\.com/bramdokman/background-agents/actions/runs/[0-9]+(/attempts/[0-9]+)?$"
+    },
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["control-plane", "web", "teams-bot"],
+      "properties": {
+        "control-plane": { "$ref": "#/$defs/image" },
+        "web": { "$ref": "#/$defs/image" },
+        "teams-bot": { "$ref": "#/$defs/image" }
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hash12", "ref", "built"],
+      "properties": {
+        "hash12": {
+          "description": "First 12 hex characters of `cli.py hash --provider kubernetes`; also the sandbox image tag.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{12}$"
+        },
+        "ref": {
+          "description": "Digest-pinned reference, used verbatim for KUBERNETES_SANDBOX_IMAGE and the admission allowlist.",
+          "type": "string",
+          "pattern": "^ghcr\\.io/bramdokman/open-inspect-sandbox@sha256:[0-9a-f]{64}$"
+        },
+        "built": {
+          "description": "True when this run built and pushed the image; false when the content hash already existed in GHCR.",
+          "type": "boolean"
+        }
+      }
+    },
+    "forceComponents": {
+      "description": "Components to move even when their paths in deploy/sf/components.json did not change.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["control-plane", "web", "teams-bot"] }
+    },
+    "allowDowngrade": {
+      "description": "Let promote.py move to a sourceSha that is not a descendant of the deployed one.",
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag", "digest"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^ghcr\\.io/bramdokman/open-inspect-(control-plane|web|teams-bot)$"
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^sf-[0-9]{14}-[0-9a-f]{8}$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}
