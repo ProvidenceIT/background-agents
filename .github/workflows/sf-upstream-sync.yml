@@ -1,20 +1,29 @@
 # Weekly upstream sync for sf/main (this file never goes upstream).
 #
-# Merges ColeMurray/background-agents main into a fresh branch cut from sf/main
-# and opens an in-fork pull request against sf/main. A conflict opens (or
-# updates) an issue instead and pushes nothing. Never pushes to sf/main, never
-# opens anything upstream, never rebases.
+# Merges ColeMurray/background-agents main into a fresh branch cut from sf/main,
+# pushes it as sync/upstream-<date>-<up8>, and opens (or refreshes) ONE issue
+# "Upstream sync" with the compare link. Bram opens the pull request from that
+# link himself. Never pushes to sf/main, never opens anything upstream, never
+# rebases.
+#
+# Why no pull request and no App token: upstream code must not run in this
+# repository before Bram has looked at it.
+#   - The branch is pushed with GITHUB_TOKEN, and pushes made with GITHUB_TOKEN
+#     trigger no workflows. When Bram opens the PR, ci.yml / ci-python.yml run
+#     (as him, with read-only tokens) on the merged tree.
+#   - When upstream changes anything under .github/ (workflows, actions), nothing
+#     is pushed: a workflow file on a pushed branch could run with a token of its
+#     own choosing. The issue lists the files; merge those by hand after review
+#     (notes/scripts/sf-sync-upstream.sh --branch). GITHUB_TOKEN cannot push
+#     workflow files anyway.
+#   - A conflicting merge pushes nothing either; the issue lists the conflicts.
 #
 # Merge the sync pull request with a MERGE COMMIT only (sf/main is never
 # rebased or squashed: deployed tags are sf/main commits). The merge then
 # triggers a normal SF Release.
 #
-# Uses the sf-release-bot App token, not GITHUB_TOKEN: pull requests opened with
-# GITHUB_TOKEN do not trigger ci.yml / ci-python.yml, and an upstream merge that
-# touches .github/workflows needs the Workflows permission to be pushed.
-#
 # Scheduled workflows run from the default branch, so the fork's default
-# branch must be sf/main.
+# branch must be sf/main. Needs Issues enabled on the fork.
 name: SF Upstream Sync
 
 on:
@@ -35,34 +44,21 @@ jobs:
     if: github.repository == 'bramdokman/background-agents'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Holds the App credentials; deployment branches: sf/main only.
-    environment: sf-release
     permissions:
-      contents: read
+      # Push sync/* branches (the sf-main ruleset blocks sf/main itself: PR only,
+      # bypass Bram) and keep the status issue.
+      contents: write
+      issues: write
     env:
-      REPO: bramdokman/background-agents
+      REPO: ${{ github.repository }}
       UPSTREAM_URL: https://github.com/ColeMurray/background-agents.git
-      ISSUE_TITLE: Upstream sync needs a hand
+      ISSUE_TITLE: Upstream sync
     steps:
-      - name: Mint the App token (background-agents only)
-        id: app
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.SF_BOT_CLIENT_ID }}
-          private-key: ${{ secrets.SF_BOT_PRIVATE_KEY }}
-          owner: bramdokman
-          repositories: background-agents
-          permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
-          permission-workflows: write
-
       - name: Checkout sf/main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: sf/main
           fetch-depth: 0
-          token: ${{ steps.app.outputs.token }}
           persist-credentials: false
 
       - name: Fetch upstream
@@ -80,126 +76,155 @@ jobs:
             echo "uptodate=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Skip when a sync PR for this upstream commit is already open
+      - name: Close the status issue when sf/main is up to date
+        if: steps.fetch.outputs.uptodate == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UP8: ${{ steps.fetch.outputs.up8 }}
+        run: |
+          number=$(gh issue list -R "$REPO" --state open --search "\"$ISSUE_TITLE\" in:title" \
+            --json number,title --jq "[.[] | select(.title == \"$ISSUE_TITLE\")][0].number // empty")
+          if [[ -n "$number" ]]; then
+            gh issue close "$number" -R "$REPO" --comment "sf/main contains upstream/main \`$UP8\`." > /dev/null
+          fi
+
+      - name: Skip when a sync branch for this upstream commit exists
         id: existing
         if: steps.fetch.outputs.uptodate == 'false'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
           UP8: ${{ steps.fetch.outputs.up8 }}
         run: |
-          url=$(gh pr list -R "$REPO" --base sf/main --state open --json headRefName,url \
-            --jq "[.[] | select(.headRefName | startswith(\"sync/upstream-\") and endswith(\"-$UP8\"))][0].url // empty")
-          if [[ -n "$url" ]]; then
-            echo "A sync PR for upstream $UP8 is already open: $url" >> "$GITHUB_STEP_SUMMARY"
-            echo "open=true" >> "$GITHUB_OUTPUT"
+          branch=$(git ls-remote --heads origin "refs/heads/sync/upstream-*-$UP8" | awk '{print $2}' | head -n1)
+          if [[ -n "$branch" ]]; then
+            echo "Sync branch ${branch#refs/heads/} for upstream $UP8 already exists." >> "$GITHUB_STEP_SUMMARY"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
           else
-            echo "open=false" >> "$GITHUB_OUTPUT"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Merge
         id: merge
-        if: steps.fetch.outputs.uptodate == 'false' && steps.existing.outputs.open == 'false'
+        if: steps.fetch.outputs.uptodate == 'false' && steps.existing.outputs.exists == 'false'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          APP_SLUG: ${{ steps.app.outputs.app-slug }}
           UP8: ${{ steps.fetch.outputs.up8 }}
         run: |
           branch="sync/upstream-$(date -u +%Y%m%d)-$UP8"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          bot_id=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
           git checkout -b "$branch"
-          if git -c "user.name=${APP_SLUG}[bot]" \
-                 -c "user.email=${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com" \
+          if git -c "user.name=github-actions[bot]" \
+                 -c "user.email=41898282+github-actions[bot]@users.noreply.github.com" \
                  merge --no-ff --no-edit upstream/main -m "Merge upstream/main $UP8 into sf/main"; then
-            echo "clean=true" >> "$GITHUB_OUTPUT"
+            # Upstream changes under .github/ never reach a pushed branch unreviewed.
+            git diff --name-status HEAD^1 HEAD -- .github > "$RUNNER_TEMP/dotgithub.txt"
+            if [[ -s "$RUNNER_TEMP/dotgithub.txt" ]]; then
+              echo "state=workflows" >> "$GITHUB_OUTPUT"
+            else
+              echo "state=clean" >> "$GITHUB_OUTPUT"
+            fi
           else
             git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflicts.txt"
             git merge --abort
-            echo "clean=false" >> "$GITHUB_OUTPUT"
+            echo "state=conflict" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Push the sync branch and open the PR
-        if: steps.merge.outputs.clean == 'true'
+      - name: Push the sync branch
+        if: steps.merge.outputs.state == 'clean'
         env:
-          TOKEN: ${{ steps.app.outputs.token }}
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.merge.outputs.branch }}
+        run: |
+          # GITHUB_TOKEN push: triggers no workflow on the branch.
+          auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            push origin "HEAD:refs/heads/$BRANCH"
+
+      - name: Open or refresh the status issue
+        if: steps.merge.outputs.state != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE: ${{ steps.merge.outputs.state }}
           BRANCH: ${{ steps.merge.outputs.branch }}
           UP8: ${{ steps.fetch.outputs.up8 }}
+          SERVER: ${{ github.server_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          body="$RUNNER_TEMP/body.md"
+          body="$RUNNER_TEMP/issue.md"
           {
-            echo "Merges \`upstream/main\` @ \`$UP8\` (ColeMurray/background-agents) into \`sf/main\`."
+            case "$STATE" in
+              clean)
+                echo "Merging \`upstream/main\` @ \`$UP8\` into \`sf/main\` is clean and touches nothing under \`.github/\`."
+                echo "It is pushed as \`$BRANCH\`. CI has NOT run on it yet: look at the diff, then open the PR"
+                echo "(base \`sf/main\`); CI runs when you open it."
+                echo
+                echo "**Open the PR:** $SERVER/$REPO/compare/sf/main...$BRANCH?expand=1"
+                echo
+                echo "**Merge with a merge commit only.** No squash, no rebase: deployed tags are sf/main commits."
+                echo "Merging triggers SF Release, which opens the next deploy PR in software-factory."
+                echo
+                echo "Expected red spots on most syncs: the frozen route catalog"
+                echo "(\`hono-route-catalog-conformance.test.ts\`, \`route-admission-matrix\` snapshot) and the"
+                echo "default-model tests in \`packages/github-bot\`. Fix them on the branch."
+                echo
+                echo "### Files to review closely"
+                echo '```'
+                git diff --name-status HEAD^1 HEAD -- \
+                  deploy/kubernetes \
+                  terraform/d1/migrations \
+                  package.json package-lock.json \
+                  packages/control-plane/test/integration/__snapshots__ || true
+                echo '```'
+                echo
+                echo "### Upstream commits"
+                echo '```'
+                git log --oneline --no-decorate HEAD^1..upstream/main | head -n 300
+                echo '```'
+                ;;
+              workflows)
+                echo "Merging \`upstream/main\` @ \`$UP8\` into \`sf/main\` changes files under \`.github/\`. Nothing was pushed:"
+                echo "a workflow on a pushed branch would run before review."
+                echo
+                echo '```'
+                cat "$RUNNER_TEMP/dotgithub.txt"
+                echo '```'
+                echo
+                echo "Review those files, then merge locally (merge, never rebase) and push the branch yourself:"
+                echo '```'
+                echo "notes/scripts/sf-sync-upstream.sh --branch"
+                echo '```'
+                ;;
+              conflict)
+                echo "Merging \`upstream/main\` @ \`$UP8\` into \`sf/main\` conflicts. Nothing was pushed."
+                echo
+                echo "Conflicted files:"
+                echo '```'
+                cat "$RUNNER_TEMP/conflicts.txt"
+                echo '```'
+                echo
+                echo "Resolve locally (merge, never rebase), then merge into sf/main with a merge commit:"
+                echo '```'
+                echo "notes/scripts/sf-sync-upstream.sh --branch"
+                echo '```'
+                ;;
+            esac
             echo
-            echo "**Merge with a merge commit only.** No squash, no rebase: deployed tags are sf/main commits."
-            echo "Merging triggers SF Release, which opens the next deploy PR in software-factory."
-            echo
-            echo "Expected conflict points on most syncs: the frozen route catalog"
-            echo "(\`hono-route-catalog-conformance.test.ts\`, \`route-admission-matrix\` snapshot) and the"
-            echo "default-model tests in \`packages/github-bot\`. If CI is red on those, fix them on this branch."
-            echo
-            echo "### Upstream commits"
-            echo '```'
-            git log --oneline --no-decorate HEAD^1..upstream/main | head -n 300
-            echo '```'
-            echo
-            echo "### Files to review closely"
-            echo '```'
-            git diff --name-status HEAD^1 HEAD -- \
-              deploy/kubernetes \
-              terraform/d1/migrations \
-              .github/workflows \
-              packages/control-plane/test/integration/__snapshots__ || true
-            echo '```'
+            echo "Run: $RUN_URL"
           } > "$body"
           # Keep well under GitHub's 65536-character body limit.
           if [[ $(wc -c < "$body") -gt 60000 ]]; then
             head -c 60000 "$body" > "$body.tmp" && mv "$body.tmp" "$body"
             printf '\n\n_(truncated)_\n' >> "$body"
           fi
-
-          auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
-          echo "::add-mask::$auth"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
-            push origin "HEAD:refs/heads/$BRANCH"
-
-          gh label create upstream-sync -R "$REPO" --color 0e8a16 \
-            --description "Weekly upstream merge; merge commit only" 2> /dev/null || true
-          url=$(gh pr create -R "$REPO" --base sf/main --head "$BRANCH" \
-            --title "Sync upstream $UP8 (MERGE COMMIT ONLY)" --body-file "$body" --label upstream-sync)
-          echo "Sync PR: $url" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Report the conflict
-        if: steps.merge.outputs.clean == 'false'
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          UP8: ${{ steps.fetch.outputs.up8 }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          body="$RUNNER_TEMP/issue.md"
-          {
-            echo "Merging \`upstream/main\` @ \`$UP8\` into \`sf/main\` conflicts. Nothing was pushed."
-            echo
-            echo "Conflicted files:"
-            echo '```'
-            cat "$RUNNER_TEMP/conflicts.txt"
-            echo '```'
-            echo
-            echo "Resolve locally (merge, never rebase), then merge into sf/main with a merge commit:"
-            echo '```'
-            echo "notes/scripts/sf-sync-upstream.sh --branch"
-            echo '```'
-            echo "Run: $RUN_URL"
-          } > "$body"
           gh label create upstream-sync -R "$REPO" --color 0e8a16 \
             --description "Weekly upstream merge; merge commit only" 2> /dev/null || true
           number=$(gh issue list -R "$REPO" --state open --search "\"$ISSUE_TITLE\" in:title" \
             --json number,title --jq "[.[] | select(.title == \"$ISSUE_TITLE\")][0].number // empty")
           if [[ -n "$number" ]]; then
             gh issue edit "$number" -R "$REPO" --body-file "$body" > /dev/null
-            gh issue comment "$number" -R "$REPO" --body "Still conflicting at upstream \`$UP8\`: $RUN_URL" > /dev/null
-            echo "Updated issue #$number" >> "$GITHUB_STEP_SUMMARY"
+            gh issue comment "$number" -R "$REPO" --body "Upstream \`$UP8\`: $STATE. $RUN_URL" > /dev/null
+            echo "Updated issue #$number ($STATE)" >> "$GITHUB_STEP_SUMMARY"
           else
             url=$(gh issue create -R "$REPO" --title "$ISSUE_TITLE" --body-file "$body" --label upstream-sync)
-            echo "Opened $url" >> "$GITHUB_STEP_SUMMARY"
+            echo "Opened $url ($STATE)" >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "::warning::upstream/main $UP8 conflicts with sf/main; see the issue."
+          [[ "$STATE" == "clean" ]] || echo "::warning::upstream/main $UP8: $STATE; see the issue."

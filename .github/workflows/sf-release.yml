@@ -15,9 +15,21 @@
 # Secrets and variables (Settings > Secrets and variables > Actions):
 #   repo secret   SF_WS_URL         NEXT_PUBLIC_WS_URL baked into the web image
 #   repo variable SF_APP_NAME       NEXT_PUBLIC_APP_NAME baked into the web image
-#   environment sf-release (deployment branches: sf/main only):
+#   environment sf-release (deployment branches: sf/main only; required
+#   reviewer: Bram):
 #     variable SF_BOT_CLIENT_ID     client ID of the GitHub App sf-release-bot
 #     secret   SF_BOT_PRIVATE_KEY   its private key (PEM)
+#
+# Who can reach the App key (it can push software-factory, whose main Flux
+# applies): only the promote job, which runs no fork code and installs nothing,
+# and only from sf/main, which the sf-main ruleset lets nobody but Bram change
+# without a pull request. The App is installed on software-factory only and has
+# no Workflows permission.
+#
+# Images are trusted by provenance, not by tag: every image this workflow
+# pushes gets a GitHub artifact attestation, and an existing tag is reused only
+# when `gh attestation verify` proves this workflow on sf/main built that
+# digest. Anything else is rebuilt (and the tag overwritten).
 #
 # No pull_request / pull_request_target trigger, ever: nothing here runs on
 # code that has not been merged into sf/main.
@@ -51,7 +63,6 @@ permissions:
 env:
   NPM_CONFIG_AUDIT: "false"
   NPM_CONFIG_PREFER_OFFLINE: "true"
-  IMAGE_PREFIX: ghcr.io/bramdokman/open-inspect
   SANDBOX_REPOSITORY: ghcr.io/bramdokman/open-inspect-sandbox
 
 jobs:
@@ -63,16 +74,15 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      packages: read
     outputs:
       sha: ${{ steps.meta.outputs.sha }}
       sha8: ${{ steps.meta.outputs.sha8 }}
       ts: ${{ steps.meta.outputs.ts }}
       tag: ${{ steps.meta.outputs.tag }}
       sbx: ${{ steps.sbx.outputs.sbx }}
-      sbx_exists: ${{ steps.sbx.outputs.sbx_exists }}
       force_components: ${{ steps.meta.outputs.force_components }}
       allow_downgrade: ${{ steps.meta.outputs.allow_downgrade }}
+      gate_group: ${{ steps.meta.outputs.gate_group }}
     steps:
       - name: Validate the trigger
         env:
@@ -101,6 +111,9 @@ jobs:
           SHA: ${{ inputs.sha || github.sha }}
           FORCE: ${{ inputs.force_components }}
           ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade || false }}
+          EVENT: ${{ github.event_name }}
+          ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           if ! git merge-base --is-ancestor "$SHA" origin/sf/main; then
             echo "::error::$SHA is not on sf/main"
@@ -126,6 +139,16 @@ jobs:
           done
           [[ "$ALLOW_DOWNGRADE" == "true" ]] && downgrade=true || downgrade=false
 
+          # Gate concurrency: only the first attempt of a push run shares the
+          # cancelling groups, so a newer push cancels an older push's gates. A
+          # dispatch or a re-run gets groups of its own and can neither cancel
+          # nor be cancelled by the newest push.
+          if [[ "$EVENT" == "push" && "$ATTEMPT" == "1" ]]; then
+            gate_group=sf-release-push
+          else
+            gate_group="sf-release-run-$RUN_ID"
+          fi
+
           {
             echo "sha=$SHA"
             echo "sha8=$sha8"
@@ -133,15 +156,9 @@ jobs:
             echo "tag=$tag"
             echo "force_components=$force"
             echo "allow_downgrade=$downgrade"
+            echo "gate_group=$gate_group"
           } >> "$GITHUB_OUTPUT"
           echo "Release tag: \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Log in to GHCR (read)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
 
       - name: Sandbox content hash
         id: sbx
@@ -149,22 +166,16 @@ jobs:
           # cli.py hash prints {"hash": "<64 hex>"}; the helper also normalises
           # file modes so this tag matches a local run.
           sbx=$(.github/sf/sandbox-hash.sh)
-          if docker buildx imagetools inspect "$SANDBOX_REPOSITORY:$sbx" > /dev/null 2> "$RUNNER_TEMP/inspect.err"; then
-            exists=true
-          else
-            exists=false
-            # A missing image is expected for a new hash; anything else only
-            # costs a rebuild, but say so.
-            echo "imagetools inspect $SANDBOX_REPOSITORY:$sbx: $(head -c 300 "$RUNNER_TEMP/inspect.err")"
-          fi
           echo "sbx=$sbx" >> "$GITHUB_OUTPUT"
-          echo "sbx_exists=$exists" >> "$GITHUB_OUTPUT"
-          echo "Sandbox hash: \`$sbx\` (already in GHCR: $exists)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Sandbox hash: \`$sbx\`" >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
-  # Gates. Copies of ci.yml's jobs (that workflow stays untouched so upstream
-  # merges never conflict) plus the compose smoke without its change filter.
-  # A newer push cancels the same gate of an older run.
+  # Gates. Copies of ci.yml's and ci-python.yml's jobs that cover what we ship
+  # (those workflows stay untouched so upstream merges never conflict) plus the
+  # compose smoke without its change filter. Not copied: build-docs/test-docs
+  # (docs are not deployed), modal/e2b/daytona infra (not used), and the mypy
+  # steps (continue-on-error upstream). The web build runs in the web image.
+  # A newer push cancels the same gate of an older push (see gate_group).
   # ---------------------------------------------------------------------------
   verify-lint:
     name: Verify (lint)
@@ -172,7 +183,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
-      group: sf-release-verify-lint
+      group: ${{ needs.meta.outputs.gate_group }}-verify-lint
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -186,11 +197,20 @@ jobs:
       - run: npm ci
       - run: npm run build -w @open-inspect/shared
       - run: npm run lint
-      - run: npm run format:check
+      - run: npm run test:lint-complexity
       - run: npm run lint:sql-portability
-      - run: npm run test:kubernetes-admission-policy
+      - run: npm run test:lint-sql-portability
+      - run: npm run test:deploy-aws
       - run: npm run test:kubernetes-gc
       - run: npm run test:kubernetes-egress-proxy
+      - run: npm run test:kubernetes-admission-policy
+      - run: npm run test:rbac-bootstrap-owner
+      - run: npm run test:user-merge-cli
+      - run: npm run test:cf-logs-cli
+      - run: npm run test:audit-export-check
+      - run: npm run test:terraform-workflow-contract
+      - run: npm run test:node-version-workflow-contract
+      - run: npm run format:check
 
   verify-typecheck:
     name: Verify (typecheck)
@@ -198,7 +218,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
-      group: sf-release-verify-typecheck
+      group: ${{ needs.meta.outputs.gate_group }}-verify-typecheck
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -219,7 +239,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
-      group: sf-release-verify-unit
+      group: ${{ needs.meta.outputs.gate_group }}-verify-unit
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -246,7 +266,7 @@ jobs:
         shard: ["1/2", "2/2"]
     concurrency:
       # One group per shard, or the shards would cancel each other.
-      group: sf-release-verify-integration-${{ strategy.job-index }}
+      group: ${{ needs.meta.outputs.gate_group }}-verify-integration-${{ strategy.job-index }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -270,7 +290,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
-      group: sf-release-verify-web
+      group: ${{ needs.meta.outputs.gate_group }}-verify-web
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -291,7 +311,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
-      group: sf-release-verify-bots
+      group: ${{ needs.meta.outputs.gate_group }}-verify-bots
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -309,13 +329,57 @@ jobs:
       - run: npm test -w @open-inspect/linear-bot
       - run: npm test -w @open-inspect/teams-bot
 
+  verify-python:
+    name: Verify (Python - sandbox runtime and image inputs)
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ needs.meta.outputs.gate_group }}-verify-python
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.meta.outputs.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install sandbox-runtime (dev)
+        working-directory: packages/sandbox-runtime
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      # ci-python.yml: lint-python-sandbox-runtime
+      - name: Ruff (sandbox-runtime)
+        working-directory: packages/sandbox-runtime
+        run: |
+          ruff check src/ tests/
+          ruff format --check src/ tests/
+      # ci-python.yml: lint-python, limited to the sandbox image's own inputs
+      - name: Ruff (kubernetes-infra, sandbox-images)
+        run: |
+          ruff check packages/kubernetes-infra/ packages/sandbox-images/
+          ruff format --check packages/kubernetes-infra/ packages/sandbox-images/
+      # ci-python.yml: test-python-sandbox-runtime (the payload of the sandbox image)
+      - name: Pytest (sandbox-runtime)
+        working-directory: packages/sandbox-runtime
+        run: pytest tests/ -v --durations=20 -o faulthandler_timeout=60 -o faulthandler_exit_on_timeout=true
+      - name: Node tests (sandbox-runtime)
+        working-directory: packages/sandbox-runtime
+        run: node --test tests/*.test.mjs
+
   smoke:
     name: Compose smoke
     needs: meta
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: sf-release-smoke
+      group: ${{ needs.meta.outputs.gate_group }}-smoke
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -354,12 +418,16 @@ jobs:
       - verify-integration
       - verify-web
       - verify-bots
+      - verify-python
       - smoke
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
+      # Artifact attestation (Sigstore keyless; the fork is public).
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: true
       matrix:
@@ -370,14 +438,44 @@ jobs:
             file: deploy/sf/web/Dockerfile
           - component: teams-bot
             file: packages/teams-bot/Dockerfile
+    env:
+      REPOSITORY: ghcr.io/bramdokman/open-inspect-${{ matrix.component }}
+      TAG: ${{ needs.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.meta.outputs.sha }}
 
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Reuse the attested image of this release tag
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A re-run (or a dispatch of a released commit) must not push a new,
+          # non-reproducible digest under the same tags: the deployed
+          # release.json pins the old digest, which would go untagged. Reuse it,
+          # but only when the attestation proves this workflow on sf/main built
+          # it; a tag pushed by anything else is rebuilt and overwritten.
+          if digest=$(docker buildx imagetools inspect "$REPOSITORY:$TAG" --format '{{json .Manifest}}' 2> /dev/null | jq -er .digest); then
+            if .github/sf/verify-attestation.sh "$REPOSITORY@$digest"; then
+              echo "reuse=true" >> "$GITHUB_OUTPUT"
+              echo "digest=$digest" >> "$GITHUB_OUTPUT"
+              echo "Reused attested \`$REPOSITORY:$TAG@$digest\`" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::warning::$REPOSITORY:$TAG exists but carries no sf-release attestation; rebuilding"
+          fi
+          echo "reuse=false" >> "$GITHUB_OUTPUT"
+
       - name: Check the web build settings
-        if: matrix.component == 'web'
+        if: matrix.component == 'web' && steps.reuse.outputs.reuse != 'true'
         env:
           WS_URL: ${{ secrets.SF_WS_URL }}
           APP_NAME: ${{ vars.SF_APP_NAME }}
@@ -386,16 +484,11 @@ jobs:
           [[ -n "$APP_NAME" ]] || { echo "::error::variable SF_APP_NAME is missing"; exit 1; }
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        if: steps.reuse.outputs.reuse != 'true'
 
       - name: Build and push (web)
         id: push_web
-        if: matrix.component == 'web'
+        if: matrix.component == 'web' && steps.reuse.outputs.reuse != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -403,11 +496,12 @@ jobs:
           platforms: linux/amd64
           push: true
           # A single plain image manifest: the digest is what the cluster pins.
+          # Provenance comes from the attestation step below instead.
           provenance: false
           sbom: false
           tags: |
-            ${{ env.IMAGE_PREFIX }}-${{ matrix.component }}:${{ needs.meta.outputs.tag }}
-            ${{ env.IMAGE_PREFIX }}-${{ matrix.component }}:${{ needs.meta.outputs.sha8 }}
+            ${{ env.REPOSITORY }}:${{ needs.meta.outputs.tag }}
+            ${{ env.REPOSITORY }}:${{ needs.meta.outputs.sha8 }}
           labels: |
             org.opencontainers.image.source=https://github.com/bramdokman/background-agents
             org.opencontainers.image.revision=${{ needs.meta.outputs.sha }}
@@ -420,7 +514,7 @@ jobs:
 
       - name: Build and push
         id: push_other
-        if: matrix.component != 'web'
+        if: matrix.component != 'web' && steps.reuse.outputs.reuse != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -430,37 +524,42 @@ jobs:
           provenance: false
           sbom: false
           tags: |
-            ${{ env.IMAGE_PREFIX }}-${{ matrix.component }}:${{ needs.meta.outputs.tag }}
-            ${{ env.IMAGE_PREFIX }}-${{ matrix.component }}:${{ needs.meta.outputs.sha8 }}
+            ${{ env.REPOSITORY }}:${{ needs.meta.outputs.tag }}
+            ${{ env.REPOSITORY }}:${{ needs.meta.outputs.sha8 }}
           labels: |
             org.opencontainers.image.source=https://github.com/bramdokman/background-agents
             org.opencontainers.image.revision=${{ needs.meta.outputs.sha }}
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
 
+      - name: Attest the pushed image
+        if: steps.reuse.outputs.reuse != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.REPOSITORY }}
+          subject-digest: ${{ steps.push_web.outputs.digest || steps.push_other.outputs.digest }}
+
       - name: Record the digest
         env:
           COMPONENT: ${{ matrix.component }}
-          TAG: ${{ needs.meta.outputs.tag }}
-          DIGEST: ${{ steps.push_web.outputs.digest || steps.push_other.outputs.digest }}
+          DIGEST: ${{ steps.reuse.outputs.digest || steps.push_web.outputs.digest || steps.push_other.outputs.digest }}
         run: |
           if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "::error::build-push-action returned no digest ('$DIGEST')"
+            echo "::error::no image digest ('$DIGEST')"
             exit 1
           fi
-          repository="$IMAGE_PREFIX-$COMPONENT"
           # The tag must resolve to the digest we are about to record.
-          resolved=$(docker buildx imagetools inspect "$repository:$TAG" --format '{{json .Manifest}}' | jq -r .digest)
+          resolved=$(docker buildx imagetools inspect "$REPOSITORY:$TAG" --format '{{json .Manifest}}' | jq -r .digest)
           if [[ "$resolved" != "$DIGEST" ]]; then
-            echo "::error::$repository:$TAG resolves to $resolved, expected $DIGEST"
+            echo "::error::$REPOSITORY:$TAG resolves to $resolved, expected $DIGEST"
             exit 1
           fi
           mkdir -p "$RUNNER_TEMP/digest"
-          jq -n --arg repository "$repository" --arg tag "$TAG" --arg digest "$DIGEST" \
+          jq -n --arg repository "$REPOSITORY" --arg tag "$TAG" --arg digest "$DIGEST" \
             '{repository: $repository, tag: $tag, digest: $digest}' \
             > "$RUNNER_TEMP/digest/digest-$COMPONENT.json"
           cat "$RUNNER_TEMP/digest/digest-$COMPONENT.json"
-          echo "\`$repository:$TAG@$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$REPOSITORY:$TAG@$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -472,7 +571,8 @@ jobs:
   sandbox:
     name: Sandbox image
     # Gated like the other images: a new sandbox tag is never pushed for a
-    # commit that failed its gates. Only builds when the content hash is new.
+    # commit that failed its gates. Only builds when no attested image exists
+    # for the content hash.
     needs:
       - meta
       - verify-lint
@@ -481,12 +581,17 @@ jobs:
       - verify-integration
       - verify-web
       - verify-bots
+      - verify-python
       - smoke
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
+    env:
+      SBX: ${{ needs.meta.outputs.sbx }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -499,8 +604,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      - name: Reuse the attested image for this content hash
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The <hash12> tag is mutable and its value is computable from the
+          # public tree, so its existence proves nothing. Reuse the digest only
+          # when the attestation proves this workflow on sf/main built it.
+          if digest=$(docker buildx imagetools inspect "$SANDBOX_REPOSITORY:$SBX" --format '{{json .Manifest}}' 2> /dev/null |
+            jq -er .digest); then
+            if .github/sf/verify-attestation.sh "$SANDBOX_REPOSITORY@$digest"; then
+              echo "reuse=true" >> "$GITHUB_OUTPUT"
+              echo "ref=$SANDBOX_REPOSITORY@$digest" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::warning::$SANDBOX_REPOSITORY:$SBX exists but carries no sf-release attestation; rebuilding"
+          fi
+          echo "reuse=false" >> "$GITHUB_OUTPUT"
+
       - name: Free runner disk
-        if: needs.meta.outputs.sbx_exists != 'true'
+        if: steps.reuse.outputs.reuse != 'true'
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
@@ -508,25 +632,24 @@ jobs:
           df -h /
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: needs.meta.outputs.sbx_exists != 'true'
+        if: steps.reuse.outputs.reuse != 'true'
         with:
           node-version-file: .nvmrc
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-        if: needs.meta.outputs.sbx_exists != 'true'
+        if: steps.reuse.outputs.reuse != 'true'
         with:
           version: "0.9.7"
 
       - name: Check frozen image inputs and planner regressions
-        if: needs.meta.outputs.sbx_exists != 'true'
+        if: steps.reuse.outputs.reuse != 'true'
         run: |
           python3 packages/sandbox-images/cli.py lock --check
           uv run --frozen --project packages/sandbox-images --extra dev pytest packages/sandbox-images/tests
 
       - name: Build, verify and push the sandbox image
-        if: needs.meta.outputs.sbx_exists != 'true'
-        env:
-          SBX: ${{ needs.meta.outputs.sbx }}
+        id: build
+        if: steps.reuse.outputs.reuse != 'true'
         run: |
           # The tests above must not have changed the inputs: same hash as meta.
           now=$(.github/sf/sandbox-hash.sh)
@@ -539,29 +662,32 @@ jobs:
           KUBERNETES_SANDBOX_IMAGE_REPOSITORY="$SANDBOX_REPOSITORY" KUBERNETES_IMAGE_PUSH=true \
             python3 packages/sandbox-images/cli.py build --provider kubernetes --output "$RUNNER_TEMP/k8s-image.json"
           cat "$RUNNER_TEMP/k8s-image.json"
+          ref=$(jq -er .reference "$RUNNER_TEMP/k8s-image.json")
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest the pushed sandbox image
+        if: steps.reuse.outputs.reuse != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.SANDBOX_REPOSITORY }}
+          subject-digest: ${{ steps.build.outputs.digest }}
 
       - name: Record the sandbox reference
         env:
-          SBX: ${{ needs.meta.outputs.sbx }}
-          SBX_EXISTS: ${{ needs.meta.outputs.sbx_exists }}
+          REUSE: ${{ steps.reuse.outputs.reuse }}
+          REF: ${{ steps.reuse.outputs.ref || steps.build.outputs.ref }}
         run: |
-          if [[ "$SBX_EXISTS" == "true" ]]; then
-            digest=$(docker buildx imagetools inspect "$SANDBOX_REPOSITORY:$SBX" --format '{{json .Manifest}}' | jq -r .digest)
-            ref="$SANDBOX_REPOSITORY@$digest"
-            built=false
-          else
-            ref=$(jq -er .reference "$RUNNER_TEMP/k8s-image.json")
-            built=true
-          fi
-          if [[ ! "$ref" =~ ^ghcr\.io/bramdokman/open-inspect-sandbox@sha256:[0-9a-f]{64}$ ]]; then
-            echo "::error::unexpected sandbox reference '$ref'"
+          [[ "$REUSE" == "true" ]] && built=false || built=true
+          if [[ ! "$REF" =~ ^ghcr\.io/bramdokman/open-inspect-sandbox@sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::unexpected sandbox reference '$REF'"
             exit 1
           fi
           mkdir -p "$RUNNER_TEMP/digest"
-          jq -n --arg hash12 "$SBX" --arg ref "$ref" --argjson built "$built" \
+          jq -n --arg hash12 "$SBX" --arg ref "$REF" --argjson built "$built" \
             '{hash12: $hash12, ref: $ref, built: $built}' > "$RUNNER_TEMP/digest/digest-sandbox.json"
           cat "$RUNNER_TEMP/digest/digest-sandbox.json"
-          echo "Sandbox: \`$ref\` (hash $SBX, built in this run: $built)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Sandbox: \`$REF\` (hash $SBX, built in this run: $built)" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -600,15 +726,81 @@ jobs:
           echo "Tagged $SHA as $TAG"
           echo "Git tag: \`$TAG\`" >> "$GITHUB_STEP_SUMMARY"
 
-  promote:
-    name: Open the deploy PR
+  release-input:
+    name: Write the release input
+    # Everything that installs or runs third-party code for the hand-off runs
+    # here, in a job that holds no App credentials.
     needs: [meta, tag]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.meta.outputs.sha }}
+          sparse-checkout: .github/sf
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+
+      - name: Write release-input.json
+        env:
+          SHA: ${{ needs.meta.outputs.sha }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FORCE: ${{ needs.meta.outputs.force_components }}
+          ALLOW_DOWNGRADE: ${{ needs.meta.outputs.allow_downgrade }}
+        run: |
+          d="$RUNNER_TEMP/digests"
+          ls -l "$d"
+          mkdir -p "$RUNNER_TEMP/release-input"
+          jq -n \
+            --arg sha "$SHA" --arg tag "$TAG" --arg run "$RUN_URL" \
+            --slurpfile cp "$d/digest-control-plane.json" \
+            --slurpfile web "$d/digest-web.json" \
+            --slurpfile bot "$d/digest-teams-bot.json" \
+            --slurpfile sbx "$d/digest-sandbox.json" \
+            --argjson force "$FORCE" --argjson downgrade "$ALLOW_DOWNGRADE" \
+            '{
+              sourceRepo: "bramdokman/background-agents",
+              sourceSha: $sha,
+              releaseTag: $tag,
+              runUrl: $run,
+              images: {"control-plane": $cp[0], "web": $web[0], "teams-bot": $bot[0]},
+              sandbox: $sbx[0],
+              forceComponents: $force,
+              allowDowngrade: $downgrade
+            }' > "$RUNNER_TEMP/release-input/release-input.json"
+          cat "$RUNNER_TEMP/release-input/release-input.json"
+
+      - name: Validate release-input.json against the contract
+        run: |
+          pipx run --spec 'check-jsonschema==0.38.2' check-jsonschema \
+            --schemafile .github/sf/release-input.schema.json "$RUNNER_TEMP/release-input/release-input.json"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-input
+          path: ${{ runner.temp }}/release-input/release-input.json
+          if-no-files-found: error
+          retention-days: 30
+
+  promote:
+    name: Open the deploy PR
+    needs: [meta, release-input]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Holds the App credentials; deployment branches: sf/main only.
+    # Holds the App credentials; deployment branches: sf/main only; required
+    # reviewer: Bram. This job runs no code from the fork and installs nothing:
+    # pinned actions, git, gh, jq and the deploy repo's stdlib-only promote.py.
     environment: sf-release
-    # Never cancel a promote half-way; a newer one waits. promote.py refuses
-    # to move backwards, so an older run that finishes late is a no-op.
+    # Never cancel a promote half-way; a newer one waits. Order is enforced by
+    # the "Keep the open deploy PR moving forward" step, not by this group.
     concurrency:
       group: sf-promote
       cancel-in-progress: false
@@ -617,7 +809,21 @@ jobs:
     env:
       OPS_REPO: bramdokman/software-factory
       PROMOTE_BRANCH: promote/sf-main
+      SHA: ${{ needs.meta.outputs.sha }}
     steps:
+      - name: Checkout the fork (full history for the per-component diff; data only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.meta.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: fork
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-input
+          path: ${{ runner.temp }}/release-input
+
       - name: Mint the App token (software-factory only)
         id: app
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -639,75 +845,57 @@ jobs:
           persist-credentials: false
           path: ops
 
-      - name: Checkout the fork (full history for the per-component diff)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.meta.outputs.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-          path: fork
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: digest-*
-          path: ${{ runner.temp }}/digests
-          merge-multiple: true
-
-      - name: Write release-input.json
+      - name: Keep the open deploy PR moving forward
+        id: order
         env:
-          SHA: ${{ needs.meta.outputs.sha }}
-          TAG: ${{ needs.meta.outputs.tag }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          FORCE: ${{ needs.meta.outputs.force_components }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           ALLOW_DOWNGRADE: ${{ needs.meta.outputs.allow_downgrade }}
         run: |
-          d="$RUNNER_TEMP/digests"
-          ls -l "$d"
-          jq -n \
-            --arg sha "$SHA" --arg tag "$TAG" --arg run "$RUN_URL" \
-            --slurpfile cp "$d/digest-control-plane.json" \
-            --slurpfile web "$d/digest-web.json" \
-            --slurpfile bot "$d/digest-teams-bot.json" \
-            --slurpfile sbx "$d/digest-sandbox.json" \
-            --argjson force "$FORCE" --argjson downgrade "$ALLOW_DOWNGRADE" \
-            '{
-              sourceRepo: "bramdokman/background-agents",
-              sourceSha: $sha,
-              releaseTag: $tag,
-              runUrl: $run,
-              images: {"control-plane": $cp[0], "web": $web[0], "teams-bot": $bot[0]},
-              sandbox: $sbx[0],
-              forceComponents: $force,
-              allowDowngrade: $downgrade
-            }' > "$RUNNER_TEMP/release-input.json"
-          cat "$RUNNER_TEMP/release-input.json"
-
-      - name: Validate release-input.json against the contract
-        run: |
-          pipx run --spec 'check-jsonschema==0.38.2' check-jsonschema \
-            --schemafile fork/.github/sf/release-input.schema.json "$RUNNER_TEMP/release-input.json"
+          # promote.py compares with deploy/release.json on main (what is
+          # DEPLOYED). Until the open PR is merged, that check alone would let a
+          # late or re-run older release force-push the PR back to an older
+          # commit. Compare with what the open PR already proposes.
+          skip=false
+          number=$(gh pr list -R "$OPS_REPO" --head "$PROMOTE_BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          if [[ -n "$number" ]]; then
+            pending=$(gh api "repos/$OPS_REPO/contents/deploy/release.json?ref=$PROMOTE_BRANCH" --jq .content |
+              base64 -d | jq -r .sourceSha)
+            if [[ ! "$pending" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::cannot read sourceSha from $PROMOTE_BRANCH (got '$pending')"
+              exit 1
+            fi
+            if [[ "$pending" == "$SHA" ]] || git -C fork merge-base --is-ancestor "$pending" "$SHA" 2> /dev/null; then
+              echo "Open PR #$number proposes ${pending:0:8}, an ancestor of ${SHA:0:8} (or the same): moving it forward."
+            elif [[ "$ALLOW_DOWNGRADE" == "true" ]]; then
+              echo "::warning::open PR #$number proposes ${pending:0:8}, not an ancestor of ${SHA:0:8}; allow_downgrade is set"
+            else
+              skip=true
+              {
+                echo "Open deploy PR #$number already proposes ${pending:0:8}, which is not an ancestor of ${SHA:0:8}."
+                echo "Left it alone; dispatch with allow_downgrade to force."
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
       - name: Run promote.py
         id: promote
+        if: steps.order.outputs.skip != 'true'
         working-directory: ops
+        env:
+          INPUT: ${{ runner.temp }}/release-input/release-input.json
         run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
-          if [[ -f deploy/scripts/requirements.txt ]]; then
-            "$RUNNER_TEMP/venv/bin/pip" install --quiet -r deploy/scripts/requirements.txt
-          else
-            "$RUNNER_TEMP/venv/bin/pip" install --quiet 'PyYAML==6.0.2'
-          fi
           # The input JSON carries forceComponents/allowDowngrade too; the flags
           # repeat them for a promote.py that reads only its command line.
-          args=(--input "$RUNNER_TEMP/release-input.json"
+          args=(--input "$INPUT"
                 --fork "$GITHUB_WORKSPACE/fork"
                 --components "$GITHUB_WORKSPACE/fork/deploy/sf/components.json"
                 --out "$RUNNER_TEMP/promote")
-          force=$(jq -r '.forceComponents | join(",")' "$RUNNER_TEMP/release-input.json")
+          force=$(jq -r '.forceComponents | join(",")' "$INPUT")
           [[ -n "$force" ]] && args+=(--force-components "$force")
-          [[ "$(jq -r .allowDowngrade "$RUNNER_TEMP/release-input.json")" == "true" ]] && args+=(--allow-downgrade)
+          [[ "$(jq -r .allowDowngrade "$INPUT")" == "true" ]] && args+=(--allow-downgrade)
           set +e
-          "$RUNNER_TEMP/venv/bin/python" deploy/scripts/promote.py "${args[@]}"
+          python3 deploy/scripts/promote.py "${args[@]}"
           rc=$?
           set -e
           case "$rc" in
@@ -797,13 +985,14 @@ jobs:
         env:
           TAG: ${{ needs.meta.outputs.tag }}
           PR_URL: ${{ steps.pr.outputs.url }}
+          INPUT: ${{ runner.temp }}/release-input/release-input.json
         run: |
           {
             echo "### Release $TAG"
             echo
-            if [[ -f "$RUNNER_TEMP/release-input.json" ]]; then
+            if [[ -f "$INPUT" ]]; then
               echo '```json'
-              jq '{images, sandbox}' "$RUNNER_TEMP/release-input.json"
+              jq '{images, sandbox}' "$INPUT"
               echo '```'
             fi
             if [[ -n "$PR_URL" ]]; then
