@@ -307,7 +307,7 @@ describe("resolveModelSelection harness", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     // Stale model canonicalizes; the default harness runs the canonical one.
-    expect(result.selection.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(result.selection.model).toBe("anthropic/claude-opus-5-5");
     expect(result.selection.harness).toBe("opencode");
     expect(log.warn).not.toHaveBeenCalled();
   });
@@ -356,7 +356,11 @@ describe("resolveModelSelection harness", () => {
     );
     expect(result).toMatchObject({
       ok: true,
-      selection: { model: "anthropic/claude-sonnet-4-6", harness: "claude", reasoningEffort: null },
+      selection: {
+        model: "anthropic/claude-opus-5-5",
+        harness: "claude",
+        reasoningEffort: "xhigh",
+      },
     });
     expect(log.warn).not.toHaveBeenCalled();
   });
