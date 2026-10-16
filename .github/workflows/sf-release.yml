@@ -22,14 +22,17 @@
 #
 # Who can reach the App key (it can push software-factory, whose main Flux
 # applies): only the promote job, which runs no fork code and installs nothing,
-# and only from sf/main, which the sf-main ruleset lets nobody but Bram change
-# without a pull request. The App is installed on software-factory only and has
-# no Workflows permission.
+# and only from sf/main, which the sf-main-pr ruleset lets nobody but Bram change
+# without a pull request that Bram (code owner, .github/CODEOWNERS) approved.
+# The App is installed on software-factory only and has no Workflows
+# permission.
 #
 # Images are trusted by provenance, not by tag: every image this workflow
 # pushes gets a GitHub artifact attestation, and an existing tag is reused only
 # when `gh attestation verify` proves this workflow on sf/main built that
-# digest. Anything else is rebuilt (and the tag overwritten).
+# digest for that repository, from this commit (components: revision label) or
+# from a tree with this content hash (sandbox). Anything else is rebuilt (and
+# the tag overwritten).
 #
 # No pull_request / pull_request_target trigger, ever: nothing here runs on
 # code that has not been merged into sf/main.
@@ -441,6 +444,11 @@ jobs:
     env:
       REPOSITORY: ghcr.io/bramdokman/open-inspect-${{ matrix.component }}
       TAG: ${{ needs.meta.outputs.tag }}
+      # build-push-action uploads a build record (.dockerbuild artifact) and a
+      # job summary by default; both carry the build args, so SF_WS_URL would
+      # be downloadable from this public repository's runs. Off.
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+      DOCKER_BUILD_SUMMARY: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -457,20 +465,31 @@ jobs:
         id: reuse
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.meta.outputs.sha }}
         run: |
           # A re-run (or a dispatch of a released commit) must not push a new,
           # non-reproducible digest under the same tags: the deployed
           # release.json pins the old digest, which would go untagged. Reuse it,
-          # but only when the attestation proves this workflow on sf/main built
-          # it; a tag pushed by anything else is rebuilt and overwritten.
+          # but only when (1) an attestation of this workflow on sf/main names
+          # exactly this repository and digest, and (2) the image's revision
+          # label (set below from the meta sha; the attested digest covers it)
+          # is THIS commit. The tag is predictable and mutable: anything with
+          # packages: write could point it at an older or another component's
+          # attested digest. Everything else is rebuilt and the tag overwritten.
           if digest=$(docker buildx imagetools inspect "$REPOSITORY:$TAG" --format '{{json .Manifest}}' 2> /dev/null | jq -er .digest); then
-            if .github/sf/verify-attestation.sh "$REPOSITORY@$digest"; then
-              echo "reuse=true" >> "$GITHUB_OUTPUT"
-              echo "digest=$digest" >> "$GITHUB_OUTPUT"
-              echo "Reused attested \`$REPOSITORY:$TAG@$digest\`" >> "$GITHUB_STEP_SUMMARY"
-              exit 0
+            if .github/sf/verify-attestation.sh "$REPOSITORY@$digest" > /dev/null; then
+              rev=$(docker buildx imagetools inspect "$REPOSITORY@$digest" --format '{{json .Image}}' |
+                jq -r 'if has("config") then . else (to_entries[0].value) end | .config.Labels["org.opencontainers.image.revision"] // empty')
+              if [[ "$rev" == "$SHA" ]]; then
+                echo "reuse=true" >> "$GITHUB_OUTPUT"
+                echo "digest=$digest" >> "$GITHUB_OUTPUT"
+                echo "Reused attested \`$REPOSITORY:$TAG@$digest\` (revision $rev)" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              echo "::warning::$REPOSITORY:$TAG is an attested image of ${rev:-an unknown commit}, not $SHA; rebuilding"
+            else
+              echo "::warning::$REPOSITORY:$TAG exists but carries no sf-release attestation for this repository; rebuilding"
             fi
-            echo "::warning::$REPOSITORY:$TAG exists but carries no sf-release attestation; rebuilding"
           fi
           echo "reuse=false" >> "$GITHUB_OUTPUT"
 
@@ -509,8 +528,9 @@ jobs:
             NEXT_PUBLIC_WS_URL=${{ secrets.SF_WS_URL }}
             NEXT_PUBLIC_SANDBOX_PROVIDER=kubernetes
             NEXT_PUBLIC_APP_NAME=${{ vars.SF_APP_NAME }}
-          cache-from: type=gha,scope=${{ matrix.component }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+          # No GitHub Actions cache for web: its layers hold the baked-in
+          # SF_WS_URL, and pull_request runs from outside forks (ci.yml) can
+          # restore caches of the base branch sf/main.
 
       - name: Build and push
         id: push_other
@@ -608,18 +628,41 @@ jobs:
         id: reuse
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.meta.outputs.sha }}
         run: |
           # The <hash12> tag is mutable and its value is computable from the
           # public tree, so its existence proves nothing. Reuse the digest only
-          # when the attestation proves this workflow on sf/main built it.
+          # when an attestation of this workflow on sf/main names exactly this
+          # repository and digest AND was made by a push run (so its commit is
+          # the commit that run built) whose tree has this same content hash.
+          # Anything else, e.g. the tag pointed at an older attested sandbox, is
+          # rebuilt and the tag overwritten.
           if digest=$(docker buildx imagetools inspect "$SANDBOX_REPOSITORY:$SBX" --format '{{json .Manifest}}' 2> /dev/null |
             jq -er .digest); then
-            if .github/sf/verify-attestation.sh "$SANDBOX_REPOSITORY@$digest"; then
-              echo "reuse=true" >> "$GITHUB_OUTPUT"
-              echo "ref=$SANDBOX_REPOSITORY@$digest" >> "$GITHUB_OUTPUT"
-              exit 0
+            if attested=$(.github/sf/verify-attestation.sh "$SANDBOX_REPOSITORY@$digest"); then
+              while IFS=$'\t' read -r commit event; do
+                [[ "$event" == push && "$commit" =~ ^[0-9a-f]{40}$ ]] || continue
+                if [[ "$commit" == "$SHA" ]]; then
+                  hash=$SBX
+                else
+                  wt="$RUNNER_TEMP/attested-$commit"
+                  if ! git fetch -q --no-tags --depth=1 origin "$commit" || ! git worktree add -q --detach "$wt" "$commit"; then
+                    continue
+                  fi
+                  hash=$("$wt/.github/sf/sandbox-hash.sh") || hash=
+                  git worktree remove --force "$wt"
+                fi
+                if [[ "$hash" == "$SBX" ]]; then
+                  echo "reuse=true" >> "$GITHUB_OUTPUT"
+                  echo "ref=$SANDBOX_REPOSITORY@$digest" >> "$GITHUB_OUTPUT"
+                  echo "Reused attested sandbox \`$SANDBOX_REPOSITORY@$digest\` (built from $commit)" >> "$GITHUB_STEP_SUMMARY"
+                  exit 0
+                fi
+              done <<< "$attested"
+              echo "::warning::$SANDBOX_REPOSITORY:$SBX is attested, but not as a push build of a tree with content hash $SBX; rebuilding"
+            else
+              echo "::warning::$SANDBOX_REPOSITORY:$SBX exists but carries no sf-release attestation for this repository; rebuilding"
             fi
-            echo "::warning::$SANDBOX_REPOSITORY:$SBX exists but carries no sf-release attestation; rebuilding"
           fi
           echo "reuse=false" >> "$GITHUB_OUTPUT"
 
@@ -719,7 +762,7 @@ jobs:
               echo "Tag $TAG already points at $SHA"
               exit 0
             fi
-            echo "::error::tag $TAG exists on $existing, not $SHA"
+            echo "::error::tag $TAG exists on $existing, not $SHA. Only a repository admin can delete it (ruleset sf-tags-delete): gh api -X DELETE repos/$REPO/git/refs/tags/$TAG, then re-run this job"
             exit 1
           fi
           gh api -X POST "repos/$REPO/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$SHA" > /dev/null
