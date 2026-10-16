@@ -1,0 +1,17 @@
+# Build context for deploy/sf/web/Dockerfile (must sit next to it). BuildKit reads
+# this file in place of the repository's .dockerignore, which admits only what the
+# control-plane and teams-bot images need and so leaves packages/web out.
+# Moved from notes/manifests/oi-overlay-sf/web/Dockerfile.dockerignore (originally
+# feat/k8s-sandbox-provider, commit 97ae675c).
+*
+!package.json
+!package-lock.json
+!packages/shared/
+!packages/web/
+!scripts/coverage-policy.ts
+!scripts/coverage-baseline.json
+packages/**/node_modules/
+packages/**/dist/
+packages/**/coverage/
+packages/web/.next/
+packages/web/.env*

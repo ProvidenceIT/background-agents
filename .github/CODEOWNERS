@@ -1,0 +1,5 @@
+# sf/main of the fork: every change needs Bram's review. Ruleset sf-main-pr
+# (deploy/scripts/bootstrap-github.sh in bramdokman/software-factory) requires a
+# code-owner approval, so an approval from any other write user (a second account,
+# an outside fork's PR, Dependabot) does not count. Bram himself bypasses as admin.
+* @bramdokman

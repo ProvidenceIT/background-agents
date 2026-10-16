@@ -1,0 +1,32 @@
+{
+  "control-plane": [
+    "packages/control-plane/**",
+    "packages/shared/**",
+    "packages/sandbox-runtime/src/sandbox_runtime/*.json",
+    "terraform/d1/migrations/**",
+    "packages/control-plane/Dockerfile",
+    ".dockerignore",
+    "package.json",
+    "package-lock.json",
+    ".nvmrc"
+  ],
+  "web": [
+    "packages/web/**",
+    "packages/shared/**",
+    "deploy/sf/web/**",
+    "scripts/coverage-policy.ts",
+    "scripts/coverage-baseline.json",
+    "package.json",
+    "package-lock.json",
+    ".nvmrc"
+  ],
+  "teams-bot": [
+    "packages/teams-bot/**",
+    "packages/shared/**",
+    "packages/teams-bot/Dockerfile",
+    ".dockerignore",
+    "package.json",
+    "package-lock.json",
+    ".nvmrc"
+  ]
+}
