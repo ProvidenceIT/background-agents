@@ -131,7 +131,10 @@ describe("managed skill browser authentication", () => {
     ["POST", "/skills/preview", "user-or-service"],
     ["GET", "/skills/skill_1", "user-or-service"],
     ["POST", "/skills", "user"],
-    ["POST", "/skills/import", "user"],
+    ["POST", "/skills/import", "user-or-service"],
+    ["PATCH", "/skills/skill_1", "user-or-service"],
+    ["PUT", "/skills/skill_1", "user"],
+    ["DELETE", "/skills/skill_1", "user"],
     ["GET", "/skill-profiles", "user"],
     ["PATCH", "/skill-profiles/profile_1", "user"],
     ["GET", "/sessions/session_1/skills", "user"],
@@ -271,5 +274,104 @@ describe("opt-in service admission", () => {
       error: "Forbidden",
       code: "service_capability_required",
     });
+  });
+});
+
+describe("prompt-library opt-in admission", () => {
+  const ACTOR = "microsoft:4f1c2d3e-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+  const MANAGE_ROUTES = [
+    ["POST", "/skills/import/preview"],
+    ["POST", "/skills/import"],
+    ["POST", "/skills/skill_1/reimport/preview"],
+    ["POST", "/skills/skill_1/reimport"],
+    ["PATCH", "/skills/skill_1"],
+  ] as const;
+
+  async function serviceCall(
+    service: "prompt-library" | "motion" | "slack-bot" | "github-bot" | "teams-bot",
+    method: string,
+    path: string,
+    actor?: string
+  ) {
+    const { env } = createEnv(401);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const body = method === "GET" || method === "DELETE" ? undefined : "{}";
+    const request = await signedServiceRequest(`https://test.local${path}`, {
+      method,
+      body,
+      service,
+      actor,
+    });
+    return handleRequest(request, env as never, TEST_BACKGROUND_TASK_CONTEXT);
+  }
+
+  it.each([
+    ["POST", "/skills"],
+    ["PUT", "/skills/skill_1"],
+    ["DELETE", "/skills/skill_1"],
+    ["GET", "/skill-profiles"],
+    ["POST", "/skill-profiles"],
+    ["PATCH", "/skill-profiles/profile_1"],
+    ["DELETE", "/skill-profiles/profile_1"],
+  ])("refuses prompt-library on the human-only route %s %s", async (method, path) => {
+    const response = await serviceCall("prompt-library", method, path, ACTOR);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Human user authentication required",
+    });
+  });
+
+  it.each([
+    ["POST", "/skills/preview"],
+    ["GET", "/sessions"],
+    ["POST", "/sessions"],
+    ["GET", "/repos"],
+  ])("refuses prompt-library on %s %s, which does not opt it in", async (method, path) => {
+    const response = await serviceCall("prompt-library", method, path, ACTOR);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Forbidden",
+      code: "service_capability_required",
+    });
+  });
+
+  it.each<readonly [string, string]>([
+    ["GET", "/skills"],
+    ["GET", "/skills/skill_1"],
+    ["POST", "/skills/resolve-preview"],
+    ...MANAGE_ROUTES,
+  ])("requires an actor from prompt-library on its opt-in route %s %s", async (method, path) => {
+    const response = await serviceCall("prompt-library", method, path);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Forbidden",
+      code: "service_actor_required",
+    });
+  });
+
+  it.each(
+    (
+      [
+        ["github-bot", "github:583231"],
+        ["slack-bot", "slack:U1"],
+        ["teams-bot", ACTOR],
+        ["motion", ACTOR],
+      ] as const
+    ).flatMap(([service, actor]) =>
+      MANAGE_ROUTES.map(([method, path]) => [service, actor, method, path] as const)
+    )
+  )("still refuses %s (%s) on %s %s", async (service, actor, method, path) => {
+    for (const asserted of [actor, undefined]) {
+      const response = await serviceCall(service, method, path, asserted);
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        error: "Forbidden",
+        code: "service_capability_required",
+      });
+    }
   });
 });

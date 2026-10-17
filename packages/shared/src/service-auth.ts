@@ -32,6 +32,7 @@ export const SERVICE_NAMES = [
   "linear-bot",
   "teams-bot",
   "motion",
+  "prompt-library",
 ] as const;
 export type ServiceName = (typeof SERVICE_NAMES)[number];
 

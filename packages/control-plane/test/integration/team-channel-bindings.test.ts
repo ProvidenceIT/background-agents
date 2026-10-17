@@ -667,6 +667,7 @@ describe("service channel binding lookup", () => {
         "linear-bot",
         "teams-bot",
         "motion",
+        "prompt-library",
       ] as const) {
         if (service === matchingService) continue;
         const endpoint = `${BASE}/channel-bindings/${provider}/C123`;

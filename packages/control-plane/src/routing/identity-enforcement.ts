@@ -118,7 +118,9 @@ export function deriveIdentity(principal: Principal | undefined): DerivedIdentit
         participantUserId: principal.actor?.participantUserId ?? null,
         canonicalUserId: principal.actor?.canonicalUserId ?? null,
         actor: principal.actor,
-        spawnSource: principal.service,
+        // prompt-library creates no sessions or automations: no route that
+        // consumes this identity opts it in, so it has no spawn source.
+        spawnSource: principal.service === "prompt-library" ? null : principal.service,
       };
     case "sandbox":
       return null;

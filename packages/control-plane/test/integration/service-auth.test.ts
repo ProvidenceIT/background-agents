@@ -21,6 +21,7 @@ const SERVICE_SECRET: Record<ServiceName, string> = {
   "linear-bot": "test-service-secret-linear-bot",
   "teams-bot": "test-service-secret-teams-bot",
   motion: "test-service-secret-motion",
+  "prompt-library": "test-service-secret-prompt-library",
 };
 
 /** Entra object ids: the subject a Microsoft web sign-in stores and a Teams bot asserts. */
@@ -74,7 +75,11 @@ describe("sig1 service-credential authentication", () => {
         url: "https://test.local/sessions",
       });
       expect(response.status, service).toBe(403);
-      await expect(response.json()).resolves.toMatchObject({ code: "service_actor_required" });
+      // prompt-library is opted in only on skill routes, so it is refused before the actor check.
+      await expect(response.json()).resolves.toMatchObject({
+        code:
+          service === "prompt-library" ? "service_capability_required" : "service_actor_required",
+      });
     }
   });
 

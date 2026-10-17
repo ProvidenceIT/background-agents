@@ -66,6 +66,10 @@ const SERVICE_PERMISSION_CEILINGS: Record<ServiceName, readonly PermissionId[]> 
     "sessions.collaborate",
     "sessions.lifecycle",
   ],
+  // The prompt-library sync imports reviewed skills for one signed-in person on
+  // the skill routes that opt it in; the handlers also pin its sources
+  // (skills/prompt-library-sources.ts).
+  "prompt-library": ["skills.read", "skills.manage"],
 };
 
 /** Checks the hard permission ceiling for a trusted service, independent of user grants. */
@@ -78,9 +82,14 @@ export function serviceAllowsPermission(service: ServiceName, permission: Permis
  * other route refuses them before actor enrolment, whatever their ceiling.
  * On session routes they read any session the acting user may read, but every
  * other action reaches only the sessions they created for that user (see
- * `enforceSessionRequirement`).
+ * `enforceSessionRequirement`). On skill routes the prompt-library service
+ * reaches only skills imported from its allowlisted repositories, pinned to a
+ * commit (see `skills/prompt-library-sources.ts`).
  */
-export const OPT_IN_SERVICES = ["motion"] as const satisfies readonly ServiceName[];
+export const OPT_IN_SERVICES = [
+  "motion",
+  "prompt-library",
+] as const satisfies readonly ServiceName[];
 export type OptInServiceName = (typeof OPT_IN_SERVICES)[number];
 
 export function isOptInService(service: ServiceName): service is OptInServiceName {

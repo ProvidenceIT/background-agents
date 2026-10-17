@@ -8,10 +8,22 @@ import {
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
 } from "./router.test-support";
-import { serviceAllowsPermission } from "./authorization/service-permissions";
+import {
+  serviceAllowsPermission,
+  type OptInServiceName,
+} from "./authorization/service-permissions";
 
 function routeFor(method: string, path: string) {
   return matchRoute(routes, method, path)?.route;
+}
+
+function routesOptingIn(service: OptInServiceName) {
+  return routes.filter(
+    (route) =>
+      (route.authorization.kind === "active-user" ||
+        route.authorization.kind === "active-global") &&
+      route.authorization.service.optInServices?.includes(service) === true
+  );
 }
 
 describe("route policy table", () => {
@@ -430,17 +442,86 @@ describe("route policy table", () => {
       routeFor("GET", "/sessions/session-1/messages"),
       routeFor("GET", "/sessions/session-1/artifacts"),
     ]);
-    const optedIn = routes.filter(
-      (route) =>
-        (route.authorization.kind === "active-user" ||
-          route.authorization.kind === "active-global") &&
-        (route.authorization.service.optInServices ?? []).length > 0
-    );
+    const optedIn = routesOptingIn("motion");
 
     expect(new Set(optedIn)).toEqual(expected);
     for (const route of optedIn) {
       if (route.authorization.kind !== "active-user") continue;
       expect(route.authorization.service.optInServices).toEqual(["motion"]);
+    }
+  });
+
+  it("opts prompt-library into exactly its eight skill routes", () => {
+    const expected = new Set([
+      routeFor("GET", "/skills"),
+      routeFor("GET", "/skills/skill-1"),
+      routeFor("POST", "/skills/resolve-preview"),
+      routeFor("POST", "/skills/import/preview"),
+      routeFor("POST", "/skills/import"),
+      routeFor("POST", "/skills/skill-1/reimport/preview"),
+      routeFor("POST", "/skills/skill-1/reimport"),
+      routeFor("PATCH", "/skills/skill-1"),
+    ]);
+    const optedIn = routesOptingIn("prompt-library");
+
+    expect(new Set(optedIn)).toEqual(expected);
+    for (const route of optedIn) {
+      if (route.authorization.kind !== "active-user") continue;
+      expect(route.authorization.service.optInServices).toEqual(["prompt-library"]);
+    }
+    for (const [method, path] of [
+      ["POST", "/skills"],
+      ["POST", "/skills/preview"],
+      ["PUT", "/skills/skill-1"],
+      ["DELETE", "/skills/skill-1"],
+      ["GET", "/skill-profiles"],
+      ["POST", "/skill-profiles"],
+      ["PATCH", "/skill-profiles/profile-1"],
+      ["DELETE", "/skill-profiles/profile-1"],
+    ] as const) {
+      expect(optedIn, `${method} ${path}`).not.toContain(routeFor(method, path));
+    }
+  });
+
+  it("keeps skill management closed to every service but prompt-library", () => {
+    for (const path of [
+      "/skills/import/preview",
+      "/skills/import",
+      "/skills/skill-1/reimport/preview",
+      "/skills/skill-1/reimport",
+    ]) {
+      expect(routeFor("POST", path), path).toMatchObject({
+        authentication: { kind: "user-or-service" },
+        authorization: {
+          kind: "active-user",
+          allOf: [{ kind: "permission", permission: "skills.manage" }],
+          service: { kind: "deny", optInServices: ["prompt-library"] },
+        },
+      });
+    }
+    expect(routeFor("PATCH", "/skills/skill-1")?.authorization).toMatchObject({
+      service: { kind: "deny", optInServices: ["prompt-library"] },
+    });
+    for (const [method, path] of [
+      ["POST", "/skills"],
+      ["PUT", "/skills/skill-1"],
+      ["DELETE", "/skills/skill-1"],
+    ] as const) {
+      expect(routeFor(method, path)?.authentication.kind, `${method} ${path}`).toBe("user");
+    }
+  });
+
+  it("keeps every opt-in route within prompt-library's permission ceiling", () => {
+    for (const route of routesOptingIn("prompt-library")) {
+      if (route.authorization.kind !== "active-user") continue;
+      for (const requirement of route.authorization.allOf) {
+        expect(requirement.kind, `${route.method} ${route.path}`).toBe("permission");
+        if (requirement.kind !== "permission") continue;
+        expect(
+          serviceAllowsPermission("prompt-library", requirement.permission),
+          `prompt-library must allow ${requirement.permission} for ${route.method} ${route.path}`
+        ).toBe(true);
+      }
     }
   });
 
@@ -704,8 +785,8 @@ describe("route policy table", () => {
     ["PATCH", "/sessions/session-1/read-state"],
     ["GET", "/sessions/session-1/skills"],
     ["POST", "/skills"],
-    ["POST", "/skills/import"],
-    ["POST", "/skills/skill-1/reimport"],
+    ["PUT", "/skills/skill-1"],
+    ["DELETE", "/skills/skill-1"],
     ["GET", "/skill-profiles"],
   ])("owns the human-user restriction for %s %s", (method, path) => {
     expect(routeFor(method, path)?.authentication.kind).toBe("user");

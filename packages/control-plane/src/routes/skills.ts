@@ -30,6 +30,13 @@ import {
 import { EnvironmentStore } from "../db/environments";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import type { Env } from "../types";
+import {
+  isPromptLibraryService,
+  promptLibraryImportRefusal,
+  promptLibraryReimportRefusal,
+  promptLibraryResolvedCommitRefusal,
+  promptLibraryUpdateRefusal,
+} from "../skills/prompt-library-sources";
 import { createLogger } from "../logger";
 import {
   buildValidatedSkillRevision,
@@ -90,6 +97,7 @@ function audit(ctx: RequestContext, event: SkillAuditEvent): void {
   log.info("managed_skills.audit", {
     event: "managed_skills.audit",
     actor_user_id: canonicalUserId(ctx),
+    actor_service: ctx.principal?.kind === "service" ? ctx.principal.service : null,
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
     ...event,
@@ -212,7 +220,8 @@ async function fetchAuthorizedSkillImport(
     repositories: [{ owner: resolved.repoOwner, name: resolved.repoName, repoId: resolved.repoId }],
   });
   if (denied) return denied;
-  return fetchSkillImport(provider, source, name, resolved);
+  const result = await fetchSkillImport(provider, source, name, resolved);
+  return promptLibraryResolvedCommitRefusal(ctx, source.ref, result.source.commitSha) ?? result;
 }
 
 async function handlePreviewSkill(
@@ -309,6 +318,12 @@ async function handlePreviewSkillImport(
     "Invalid skill import source"
   );
   if (parsed instanceof Response) return parsed;
+  const refused = promptLibraryImportRefusal(
+    ctx,
+    env.PROMPT_LIBRARY_SKILL_REPOSITORIES,
+    parsed.source
+  );
+  if (refused) return refused;
   try {
     const result = await fetchAuthorizedSkillImport(env, ctx, parsed.source, parsed.name);
     if (result instanceof Response) return result;
@@ -328,6 +343,12 @@ async function handleImportSkill(
   if (!userId) return error("Canonical user required", 403);
   const parsed = await parseBody(request, importSkillInputSchema, "Invalid skill import");
   if (parsed instanceof Response) return parsed;
+  const refused = promptLibraryImportRefusal(
+    ctx,
+    env.PROMPT_LIBRARY_SKILL_REPOSITORIES,
+    parsed.source
+  );
+  if (refused) return refused;
   const denied = await authorizeSkillRepositories(
     env,
     ctx,
@@ -402,6 +423,13 @@ async function handlePreviewSkillReimport(
   if (parsed instanceof Response) return parsed;
   const skill = await new SkillStore(ctx.db).get(id);
   if (!skill) return error("Skill not found", 404);
+  const refused = promptLibraryReimportRefusal(
+    ctx,
+    env.PROMPT_LIBRARY_SKILL_REPOSITORIES,
+    skill.source,
+    parsed.ref
+  );
+  if (refused) return refused;
   try {
     const provider = createRouteSourceControlProvider(env);
     const source = recordedImportSource(skill.source, parsed.ref, provider.name);
@@ -430,6 +458,13 @@ async function handleReimportSkill(
   const store = new SkillStore(ctx.db);
   const skill = await store.get(id);
   if (!skill) return error("Skill not found", 404);
+  const refused = promptLibraryReimportRefusal(
+    ctx,
+    env.PROMPT_LIBRARY_SKILL_REPOSITORIES,
+    skill.source,
+    parsed.ref
+  );
+  if (refused) return refused;
   if (skill.currentRevisionId !== ifMatch) {
     return error(`Current revision is ${skill.currentRevisionId}`, 409);
   }
@@ -475,7 +510,7 @@ function sourceAuditFields(source: SkillImportResult["source"]) {
 
 async function handleSetSkillEnabled(
   request: Request,
-  _env: Env,
+  env: Env,
   params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
@@ -484,8 +519,19 @@ async function handleSetSkillEnabled(
   if (!userId) return error("Canonical user required", 403);
   const parsed = await parseBody(request, setSkillEnabledInputSchema, "Invalid skill update");
   if (parsed instanceof Response) return parsed;
+  const store = new SkillStore(ctx.db);
+  if (isPromptLibraryService(ctx)) {
+    const target = await store.get(id);
+    if (!target) return error("Skill not found", 404);
+    const refused = promptLibraryUpdateRefusal(
+      ctx,
+      env.PROMPT_LIBRARY_SKILL_REPOSITORIES,
+      target.source
+    );
+    if (refused) return refused;
+  }
   try {
-    const skill = await new SkillStore(ctx.db).setEnabled(id, parsed, userId);
+    const skill = await store.setEnabled(id, parsed, userId);
     if (skill) audit(ctx, { action: "skill.enabled_updated", skill_id: id });
     return skill ? json({ skill }) : error("Skill not found", 404);
   } catch (e) {
@@ -689,9 +735,26 @@ const SKILLS_READ = admit({
   ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   authorization: requirePermission("skills.read"),
 });
+/** Read routes the prompt-library sync uses; it is admitted only with an actor. */
+const SKILLS_READ_PROMPT_LIBRARY = admit({
+  ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("skills.read", { optInServices: ["prompt-library"] }),
+});
 const SKILLS_MANAGE = admit({
   ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   authorization: requirePermission("skills.manage"),
+});
+/**
+ * Import, re-import and enable/disable: people, and the prompt-library service
+ * acting for one with its sources pinned (skills/prompt-library-sources.ts).
+ * Every other service is refused, as on the human-only routes.
+ */
+const SKILLS_MANAGE_PROMPT_LIBRARY = admit({
+  ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("skills.manage", {
+    service: "deny",
+    optInServices: ["prompt-library"],
+  }),
 });
 const PROFILES_MANAGE_OWN = admit({
   ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
@@ -707,21 +770,29 @@ export const skillRoutes = new Hono<ControlPlaneHonoEnv>();
 
 // Read routes register ahead of administration so `/skills/preview` and
 // `/skills/resolve-preview` take precedence over the parameterized paths.
-skillRoutes.get("/skills", SKILLS_READ, (c) => dispatch(c, handleListSkills));
+skillRoutes.get("/skills", SKILLS_READ_PROMPT_LIBRARY, (c) => dispatch(c, handleListSkills));
 skillRoutes.post("/skills/preview", SKILLS_READ, (c) => dispatch(c, handlePreviewSkill));
-skillRoutes.post("/skills/resolve-preview", SKILLS_READ, (c) => dispatch(c, handleResolvePreview));
-skillRoutes.get("/skills/:id", SKILLS_READ, (c) => dispatch(c, handleGetSkill));
+skillRoutes.post("/skills/resolve-preview", SKILLS_READ_PROMPT_LIBRARY, (c) =>
+  dispatch(c, handleResolvePreview)
+);
+skillRoutes.get("/skills/:id", SKILLS_READ_PROMPT_LIBRARY, (c) => dispatch(c, handleGetSkill));
 
 skillRoutes.post("/skills", SKILLS_MANAGE, (c) => dispatch(c, handleCreateSkill));
-skillRoutes.post("/skills/import/preview", SKILLS_MANAGE, (c) =>
+skillRoutes.post("/skills/import/preview", SKILLS_MANAGE_PROMPT_LIBRARY, (c) =>
   dispatch(c, handlePreviewSkillImport)
 );
-skillRoutes.post("/skills/import", SKILLS_MANAGE, (c) => dispatch(c, handleImportSkill));
-skillRoutes.post("/skills/:id/reimport/preview", SKILLS_MANAGE, (c) =>
+skillRoutes.post("/skills/import", SKILLS_MANAGE_PROMPT_LIBRARY, (c) =>
+  dispatch(c, handleImportSkill)
+);
+skillRoutes.post("/skills/:id/reimport/preview", SKILLS_MANAGE_PROMPT_LIBRARY, (c) =>
   dispatch(c, handlePreviewSkillReimport)
 );
-skillRoutes.post("/skills/:id/reimport", SKILLS_MANAGE, (c) => dispatch(c, handleReimportSkill));
-skillRoutes.patch("/skills/:id", SKILLS_MANAGE, (c) => dispatch(c, handleSetSkillEnabled));
+skillRoutes.post("/skills/:id/reimport", SKILLS_MANAGE_PROMPT_LIBRARY, (c) =>
+  dispatch(c, handleReimportSkill)
+);
+skillRoutes.patch("/skills/:id", SKILLS_MANAGE_PROMPT_LIBRARY, (c) =>
+  dispatch(c, handleSetSkillEnabled)
+);
 skillRoutes.put("/skills/:id", SKILLS_MANAGE, (c) =>
   dispatch(c, handleReplaceSkillContentAndAssignments)
 );
