@@ -42,6 +42,10 @@ export interface EnvConfig {
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
   SERVICE_AUTH_SECRET_TEAMS_BOT?: string;
   SERVICE_AUTH_SECRET_MOTION?: string;
+  SERVICE_AUTH_SECRET_PROMPT_LIBRARY?: string;
+  // Comma-separated owner/name repositories the prompt-library service may import
+  // skills from; unset ⇒ DEFAULT_PROMPT_LIBRARY_SKILL_REPOSITORIES.
+  PROMPT_LIBRARY_SKILL_REPOSITORIES?: string;
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
 
   // GitHub App secrets (for git operations)

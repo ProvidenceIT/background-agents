@@ -8,6 +8,7 @@ export interface ServiceKeyEnv {
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
   SERVICE_AUTH_SECRET_TEAMS_BOT?: string;
   SERVICE_AUTH_SECRET_MOTION?: string;
+  SERVICE_AUTH_SECRET_PROMPT_LIBRARY?: string;
 }
 
 /** Resolve the verification key for one authenticated service. */
@@ -25,5 +26,7 @@ export function serviceAuthSecret(env: ServiceKeyEnv, service: ServiceName): str
       return env.SERVICE_AUTH_SECRET_TEAMS_BOT;
     case "motion":
       return env.SERVICE_AUTH_SECRET_MOTION;
+    case "prompt-library":
+      return env.SERVICE_AUTH_SECRET_PROMPT_LIBRARY;
   }
 }

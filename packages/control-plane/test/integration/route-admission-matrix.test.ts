@@ -38,7 +38,14 @@ import {
 const BASE = "https://test.local";
 const BROWSER_USER_ID = "11111111111111111111111111111111";
 const SANDBOX_TOKEN = "matrix-sandbox-token";
-const BOT_SERVICES = ["slack-bot", "github-bot", "linear-bot", "teams-bot", "motion"] as const;
+const BOT_SERVICES = [
+  "slack-bot",
+  "github-bot",
+  "linear-bot",
+  "teams-bot",
+  "motion",
+  "prompt-library",
+] as const;
 const PROTECTED_STATUSES = new Set([401, 403]);
 const ROUTE_MISS_BODY = JSON.stringify({ error: "Not found" });
 // Each pass issues one request per catalog route, and a fresh session per
@@ -615,19 +622,12 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     }
   });
 
-  it("admits motion with an enrolled actor on exactly its opt-in routes", async () => {
-    const objectId = "4f1c2d3e-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
-    await new UserStore(env.DB).createIdentity({
-      userId: BROWSER_USER_ID,
-      provider: "microsoft",
-      providerUserId: objectId,
-    });
-    // Motion stops and prompts only sessions it created for its actor (it reads any it may see).
-    const motionSessionId = await createReadySession();
-    await env.DB.prepare("UPDATE sessions SET spawn_source = 'motion' WHERE id = ?")
-      .bind(motionSessionId)
-      .run();
-
+  /** The routes an opt-in service reaches with its actor, and those it reaches without one. */
+  async function optInReach(
+    service: "motion" | "prompt-library",
+    actor: string,
+    sessionId: string
+  ): Promise<{ withActor: string[]; withoutActor: string[] }> {
     const withActor: string[] = [];
     const withoutActor: string[] = [];
     // Public and handler-authenticated routes leave credentials to their handlers.
@@ -647,23 +647,39 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
             ? fixtures.automationId
             : environmentRequirementFor(route)?.idParam === "id"
               ? fixtures.environmentId
-              : motionSessionId,
+              : sessionId,
         childId: fixtures.sandboxSessionId,
       })}`;
       const enrolled = await send(
         url,
         route.method,
-        await botHeaders(url, route.method, "motion", `microsoft:${objectId}`)
+        await botHeaders(url, route.method, service, actor)
       );
       if (await reachedSentinel(enrolled, identity)) withActor.push(identity);
-      const actorless = await send(
-        url,
-        route.method,
-        await botHeaders(url, route.method, "motion")
-      );
+      const actorless = await send(url, route.method, await botHeaders(url, route.method, service));
       if (await reachedSentinel(actorless, identity)) withoutActor.push(identity);
     }
+    return { withActor, withoutActor };
+  }
 
+  it("admits motion with an enrolled actor on exactly its opt-in routes", async () => {
+    const objectId = "4f1c2d3e-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+    await new UserStore(env.DB).createIdentity({
+      userId: BROWSER_USER_ID,
+      provider: "microsoft",
+      providerUserId: objectId,
+    });
+    // Motion stops and prompts only sessions it created for its actor (it reads any it may see).
+    const motionSessionId = await createReadySession();
+    await env.DB.prepare("UPDATE sessions SET spawn_source = 'motion' WHERE id = ?")
+      .bind(motionSessionId)
+      .run();
+
+    const { withActor, withoutActor } = await optInReach(
+      "motion",
+      `microsoft:${objectId}`,
+      motionSessionId
+    );
     expect(withActor.sort()).toEqual(
       [
         "GET /sessions",
@@ -687,6 +703,55 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       ] as const) {
         const response = await send(url, "GET", await botHeaders(url, "GET", service, actor));
         expect(response.status, `${service} ${url}`).toBe(403);
+      }
+    }
+  });
+
+  it("admits prompt-library with an enrolled actor on exactly its opt-in routes", async () => {
+    const objectId = "7c8d9e0f-1a2b-4c3d-9e4f-5a6b7c8d9e0f";
+    await new UserStore(env.DB).createIdentity({
+      userId: BROWSER_USER_ID,
+      provider: "microsoft",
+      providerUserId: objectId,
+    });
+
+    const { withActor, withoutActor } = await optInReach(
+      "prompt-library",
+      `microsoft:${objectId}`,
+      fixtures.readonlySessionId
+    );
+
+    expect(withActor.sort()).toEqual(
+      [
+        "GET /skills",
+        "GET /skills/:id",
+        "POST /skills/resolve-preview",
+        "POST /skills/import/preview",
+        "POST /skills/import",
+        "POST /skills/:id/reimport/preview",
+        "POST /skills/:id/reimport",
+        "PATCH /skills/:id",
+      ].sort()
+    );
+    expect(withoutActor).toEqual([]);
+
+    // Every other bot stays refused on the skill management routes, with or without an actor.
+    for (const [method, path] of [
+      ["POST", "/skills/import/preview"],
+      ["POST", "/skills/import"],
+      ["POST", "/skills/skill-1/reimport/preview"],
+      ["POST", "/skills/skill-1/reimport"],
+      ["PATCH", "/skills/skill-1"],
+    ] as const) {
+      const url = `${BASE}${path}`;
+      for (const [service, actor] of [
+        ["slack-bot", "slack:U-SENTINEL"],
+        ["github-bot", "github:583231"],
+        ["teams-bot", `microsoft:${objectId}`],
+        ["motion", `microsoft:${objectId}`],
+      ] as const) {
+        const response = await send(url, method, await botHeaders(url, method, service, actor));
+        expect(response.status, `${service} ${method} ${path}`).toBe(403);
       }
     }
   });

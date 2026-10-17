@@ -349,7 +349,15 @@ describe("isSignedCallbackPayload", () => {
 
 describe("isServiceName", () => {
   it("accepts exactly the registered services", () => {
-    for (const name of ["web", "slack-bot", "github-bot", "linear-bot", "teams-bot", "motion"]) {
+    for (const name of [
+      "web",
+      "slack-bot",
+      "github-bot",
+      "linear-bot",
+      "teams-bot",
+      "motion",
+      "prompt-library",
+    ]) {
       expect(isServiceName(name)).toBe(true);
     }
     for (const name of [
@@ -361,6 +369,8 @@ describe("isServiceName", () => {
       "msteams-bot",
       "Motion",
       "motion-bot",
+      "prompt_library",
+      "Prompt-Library",
       "unknown",
     ]) {
       expect(isServiceName(name)).toBe(false);

@@ -290,7 +290,10 @@ describe("managed skill import routes", () => {
     });
 
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ error: "Human user authentication required" });
+    expect(await response.json()).toEqual({
+      error: "Forbidden",
+      code: "service_capability_required",
+    });
   });
 
   it("requires a revision precondition before re-importing", async () => {

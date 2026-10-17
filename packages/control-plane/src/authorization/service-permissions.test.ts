@@ -37,9 +37,42 @@ describe("serviceAllowsPermission", () => {
     }
   });
 
-  it("lists motion, and only motion, as an opt-in service", () => {
-    expect(OPT_IN_SERVICES).toEqual(["motion"]);
+  it("caps prompt-library at reading and managing skills", () => {
+    for (const permission of ["skills.read", "skills.manage"] as const) {
+      expect(serviceAllowsPermission("prompt-library", permission)).toBe(true);
+    }
+    for (const permission of [
+      "skill_profiles.manage_own",
+      "sessions.create",
+      "sessions.read",
+      "repositories.read",
+      "repositories.use",
+      "environments.read",
+      "environments.use",
+      "integrations.read",
+      "automations.read",
+    ] as const) {
+      expect(serviceAllowsPermission("prompt-library", permission)).toBe(false);
+    }
+  });
+
+  it("does not let any other service manage skills", () => {
+    for (const service of [
+      "web",
+      "slack-bot",
+      "github-bot",
+      "linear-bot",
+      "teams-bot",
+      "motion",
+    ] as const) {
+      expect(serviceAllowsPermission(service, "skills.manage")).toBe(false);
+    }
+  });
+
+  it("lists motion and prompt-library, and only those, as opt-in services", () => {
+    expect(OPT_IN_SERVICES).toEqual(["motion", "prompt-library"]);
     expect(isOptInService("motion")).toBe(true);
+    expect(isOptInService("prompt-library")).toBe(true);
     for (const service of ["web", "slack-bot", "github-bot", "linear-bot", "teams-bot"] as const) {
       expect(isOptInService(service)).toBe(false);
     }

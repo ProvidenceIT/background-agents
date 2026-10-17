@@ -26,6 +26,7 @@ describe("actor namespaces", () => {
       "linear-bot": "linear",
       "teams-bot": "microsoft",
       motion: "microsoft",
+      "prompt-library": "microsoft",
     });
   });
 });
