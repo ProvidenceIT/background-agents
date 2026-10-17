@@ -622,6 +622,69 @@ listed here may change without notice, and new fields may appear.
   answer 501 under other providers; the snapshot and the inbox work under every provider. A session
   whose runtime cannot be reached answers 5xx: treat it as "not observed", not as a state.
 
+### Prompt library sync (`prompt-library`)
+
+The prompt-library sync (`scripts/sync-oi.sh` in `ProvidenceIT/prompt-library`) imports each release
+of reviewed skills into the managed-skills catalog without a browser, acting for one signed-in
+person. It is an opt-in service like motion: its permission ceiling alone admits it nowhere.
+
+- **Service `prompt-library`.** Its sig1 verification key is `SERVICE_AUTH_SECRET_PROMPT_LIBRARY`.
+  It asserts the `microsoft` actor namespace with the same existing-only rule as motion: only an
+  object id a web sign-in stored resolves, and an unknown one gets 403 `service_actor_not_enrolled`
+  with no user, identity or assignment written. Its ceiling is skills (read, manage). The acting
+  person's own role must still grant the route's permission, so the actor has to be an Owner or
+  Administrator (or hold a custom role with `skills.manage`); anyone else gets 403
+  `permission_required`. It creates no sessions, has no actorless grants and receives no callbacks.
+- **Eight opt-in routes.** It is named on exactly `GET /skills`, `GET /skills/:id`,
+  `POST /skills/resolve-preview`, `POST /skills/import/preview`, `POST /skills/import`,
+  `POST /skills/:id/reimport/preview`, `POST /skills/:id/reimport` and `PATCH /skills/:id` (enable
+  or disable). Each requires an actor (403 `service_actor_required` without one). Every other route
+  answers 403: `service_capability_required` on routes open to services, including
+  `POST /skills/preview`, and `Human user authentication required` on the human-only ones,
+  `POST /skills` (hand-authored create), `PUT /skills/:id` (content and assignment replace),
+  `DELETE /skills/:id` and every `/skill-profiles` route. The five management routes moved from
+  human-only to user-or-service with services denied except `prompt-library`: every other bot,
+  motion included, is still refused (403 `service_capability_required`), and people signed in on the
+  web are unaffected.
+- **Pinned sources.** On top of admission, the handlers hold the service to reviewed content
+  (`packages/control-plane/src/skills/prompt-library-sources.ts`). These rules apply only to the
+  service; people keep importing from any repository at any ref.
+  - Import preview and import: `source.repository` must be in `PROMPT_LIBRARY_SKILL_REPOSITORIES`
+    and `source.ref` a full 40-character lower-case commit SHA.
+  - Re-import preview and re-import: the skill's recorded import source must be from an allowlisted
+    repository, and `ref` must be such a SHA (an omitted or null `ref`, which means "the recorded
+    ref" for people, is refused).
+  - `PATCH /skills/:id`: the skill must have a recorded import source from an allowlisted
+    repository; hand-written skills and skills imported from elsewhere are refused.
+  - After the read, the commit the ref resolved to must be the SHA it names.
+
+  A refused repository answers 403 `prompt_library_source_not_allowed`, a refused ref 403
+  `prompt_library_ref_not_pinned`, both before the source is read or anything is written. A skill
+  that does not exist still answers 404 `Skill not found`. Import confirmation accepts the same
+  `assignments` as for people, so the sync's `[{"type":"global"}]` works; changing assignments of an
+  existing skill needs `PUT /skills/:id`, which the service cannot reach (the sync's
+  `ASSIGN_MODE=enforce` stays a human run).
+
+- **Audit.** Allowed management calls are recorded in `authorization_audit_events` like any
+  `skills.manage` call, attributed to the acting person (`actor_user_id_snapshot`) with
+  `actor_service_snapshot = 'prompt-library'`, and so are admission denials. A pinned-source refusal
+  happens after admission, so its row is the admitted one with `httpStatus: 403` in its metadata.
+  The skill rows carry the acting person as `created_by` / `updated_by`, and the
+  `managed_skills.audit` log line carries `actor_service`.
+- **Configuration.**
+
+  | Variable                             | Required | Description                                                                                                                                                       |
+  | ------------------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `SERVICE_AUTH_SECRET_PROMPT_LIBRARY` | yes      | sig1 key the sync signs with. Unset, the service cannot authenticate.                                                                                             |
+  | `PROMPT_LIBRARY_SKILL_REPOSITORIES`  | no       | Comma-separated `owner/name` repositories the service may import from, case-insensitive. Default `ProvidenceIT/prompt-library`. A set value replaces the default. |
+
+- **Client contract.** Sign every call with sig1 as `X-OpenInspect-Service: prompt-library` (the
+  canonical string names the service, so a web-signed request does not verify) and send
+  `X-OpenInspect-Actor: microsoft:<objectId>` of an Owner or Administrator who has signed in once on
+  the web. No cookie is needed. The timestamp, nonce and retry rules are motion's (see the
+  Providence client contract above); re-imports send `If-Match` with the current revision as for
+  people.
+
 ### GitHub Routing
 
 GitHub routes by numeric repository ID rather than channel bindings. Event automations run as their
