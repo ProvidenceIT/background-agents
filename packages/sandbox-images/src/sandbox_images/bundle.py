@@ -56,6 +56,8 @@ class ImageTarget(TypedDict):
     # Fixed numeric id for targets whose platform pins the runtime user by
     # number (a Kubernetes pod's runAsUser); others take useradd's choice.
     uid: NotRequired[int]
+    # sf: bake install/sf-stack.sh (extra Node majors, databases, browser libraries).
+    sfStack: NotRequired[bool]
 
 
 class ImagePlan(TypedDict):

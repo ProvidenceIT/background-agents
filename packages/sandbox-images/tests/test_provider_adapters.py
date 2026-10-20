@@ -8,7 +8,6 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-
 from sandbox_images import bundle, native
 
 ROOT = Path(__file__).parents[3]
@@ -308,3 +307,16 @@ def test_kubernetes_dockerfile_pins_user_environment_and_entrypoint():
     )
     with pytest.raises(ValueError, match="numeric uid"):
         render(PLAN)
+
+
+def test_kubernetes_dockerfile_layers_the_sf_stack_only_when_the_target_opts_in():
+    render = runpy.run_path(str(ROOT / "packages/kubernetes-infra/build-image.py"))[
+        "render_dockerfile"
+    ]
+    plan = kubernetes_plan()
+    assert "sf-stack" not in render(plan)
+    plan["target"] = plan["target"] | {"sfStack": True}
+    dockerfile = render(plan)
+    tools = dockerfile.index("install.sh tools\n")
+    stack = dockerfile.index("install.sh sf-stack\n")
+    assert tools < stack < dockerfile.index("COPY . /tmp/openinspect-image\n")

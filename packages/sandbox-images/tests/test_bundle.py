@@ -6,7 +6,6 @@ import shutil
 from pathlib import Path
 
 import pytest
-
 from sandbox_images.bundle import PROVIDERS, pack_bundle, plan_image, validate_toolchain
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -207,3 +206,14 @@ def test_docker_daemon_shutdown_timeout_fits_inside_the_runtime_stop_deadline():
         re.search(r"^DOCKER_STOP_TIMEOUT_SECONDS = ([0-9.]+)", runtime, re.M).group(1)
     )
     assert config["shutdown-timeout"] < stop_deadline
+
+
+def test_kubernetes_runtime_selects_node_and_skips_blocked_browser_downloads():
+    environment = plan_image(REPO_ROOT, "kubernetes")["runtimeEnv"]
+    path = environment["PATH"].split(":")
+    assert path.index("/opt/openinspect/node-select/bin") < path.index("/opt/openinspect/node/bin")
+    assert environment["PUPPETEER_EXECUTABLE_PATH"] == "/usr/local/bin/google-chrome"
+    assert environment["CYPRESS_INSTALL_BINARY"] == "0"
+    other = plan_image(REPO_ROOT, "modal")["runtimeEnv"]
+    assert "/opt/openinspect/node-select/bin" not in other["PATH"]
+    assert "NODE_OPTIONS" not in other
