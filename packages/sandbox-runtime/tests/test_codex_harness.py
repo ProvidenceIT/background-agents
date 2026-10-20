@@ -19,6 +19,7 @@ import signal
 import stat
 import sys
 import tomllib
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -586,9 +587,13 @@ class TestToolServer:
 # --- the login pool (harness/codex_pool.py) ----------------------------------
 
 FAILED_THREAD = "0199a213-0000-7000-8000-00000000fa11"
+# A day out: the pool ignores a reset that has passed and caps one far ahead.
+RESET_AT = (datetime.now(UTC) + timedelta(days=1)).replace(second=0, microsecond=0)
+RESET_ISO = RESET_AT.strftime("%Y-%m-%dT%H:%M:%SZ")
 USAGE_TEXT = (
     "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase "
-    "more credits or try again at Oct 20th, 2026 5:11 AM."
+    f"more credits or try again at {RESET_AT:%b} {RESET_AT.day}th, {RESET_AT.year} "
+    f"{RESET_AT.hour % 12 or 12}:{RESET_AT:%M} {'AM' if RESET_AT.hour < 12 else 'PM'}."
 )
 REFUSED_TEXT = (
     "Your access token could not be refreshed because your refresh token was already used. "
@@ -825,7 +830,7 @@ class TestPoolFailover:
         assert rig.harness.session_id == THREAD_ID
         assert rig.harness.subscription_slot == "codex-2"
         state = rig.state()
-        assert state["slots"]["codex-1"]["exhaustedUntil"] == "2026-10-20T05:11:00Z"
+        assert state["slots"]["codex-1"]["exhaustedUntil"] == RESET_ISO
         assert state["threads"] == {THREAD_ID: "codex-2"}
         assert rig.link() == "../codex-pool/codex-2/auth.json"
 
@@ -879,7 +884,7 @@ class TestPoolFailover:
         assert outcome.error is not None
         assert outcome.error.startswith(
             "Codex turn failed: every Codex subscription slot is at its limit "
-            "(earliest reset 2026-10-20T05:11:00Z): You’ve hit your usage limit."
+            f"(earliest reset {RESET_ISO}): You’ve hit your usage limit."
         )
         assert rig.errors() == [outcome.error]
         assert [run["slot"] for run in rig.runs()] == ["codex-1", "codex-2", "codex-3"]
