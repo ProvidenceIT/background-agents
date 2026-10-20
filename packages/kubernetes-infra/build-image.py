@@ -56,6 +56,17 @@ def render_dockerfile(plan: dict) -> str:
         "/tmp/openinspect-image/packages/sandbox-images/locks/plugins",
         f"COPY packages/sandbox-images/install/tools.sh {install}/tools.sh",
         f"RUN bash {install}/install.sh tools",
+        *(
+            [
+                "COPY packages/sandbox-images/toolchain.json "
+                "/tmp/openinspect-image/packages/sandbox-images/toolchain.json",
+                f"COPY packages/sandbox-images/install/sf-stack.sh {install}/sf-stack.sh",
+                f"COPY packages/sandbox-images/install/sf-stack {install}/sf-stack",
+                f"RUN bash {install}/install.sh sf-stack",
+            ]
+            if target.get("sfStack")
+            else []
+        ),
         "COPY . /tmp/openinspect-image",
         f"RUN bash {install}/install.sh runtime filesystem "
         "&& /opt/openinspect/python/bin/python "

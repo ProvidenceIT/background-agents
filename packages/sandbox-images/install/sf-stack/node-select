@@ -1,0 +1,31 @@
+#!/bin/sh
+# node, npm, npx and corepack on PATH: run the Node major a repository asks for.
+# OI_NODE_MAJOR wins; otherwise the nearest .nvmrc or .node-version between the
+# working directory and /workspace. Outside /workspace, or for a major the image
+# does not carry, the image default runs.
+name=${0##*/}
+root=/opt/openinspect/node-versions
+major=${OI_NODE_MAJOR:-}
+if [ -z "$major" ]; then
+  case "$PWD/" in
+  /workspace/*)
+    dir=$PWD
+    while [ -z "$major" ]; do
+      for file in "$dir/.nvmrc" "$dir/.node-version"; do
+        if [ -r "$file" ]; then
+          major=$(sed -n '1{s/^[[:space:]]*[vV]\{0,1\}//;s/[^0-9].*//;p;}' "$file")
+          [ -n "$major" ] && break
+        fi
+      done
+      [ "$dir" = /workspace ] && break
+      dir=${dir%/*}
+      [ -n "$dir" ] || break
+    done
+    ;;
+  esac
+fi
+bin=$root/default/bin
+if [ -n "$major" ] && [ -x "$root/$major/bin/$name" ]; then
+  bin=$root/$major/bin
+fi
+exec "$bin/$name" "$@"

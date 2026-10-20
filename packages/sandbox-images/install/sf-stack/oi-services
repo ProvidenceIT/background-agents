@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Local stand-ins for the database containers our repositories start with
+# Docker, which a gVisor sandbox cannot run. Both listen on 127.0.0.1 only.
+#
+#   oi-services start postgres [postgresql://user:pass@localhost:5432/db ...]
+#   oi-services start redis
+#   oi-services stop|status [postgres|redis]
+#
+# Postgres 16 (with pgvector) trusts local connections. Each URL given to
+# `start postgres` gets its role (superuser, with that password) and database,
+# so a repository's DATABASE_URL works unchanged.
+set -euo pipefail
+state="${OI_SERVICES_HOME:-$HOME/.local/share/oi-services}"
+pg_bin=/usr/lib/postgresql/16/bin
+pg_data="$state/postgres-16"
+pg_port="${OI_POSTGRES_PORT:-5432}"
+redis_port="${OI_REDIS_PORT:-6379}"
+
+usage() {
+  sed -n '5,7s/^# \{0,3\}//p' "$0" >&2
+  exit 2
+}
+
+psql_admin() {
+  psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$pg_port" -U postgres -d postgres "$@"
+}
+
+ensure_url() {
+  local parts
+  mapfile -t parts < <(python3 -I -c '
+import sys
+from urllib.parse import unquote, urlsplit
+url = urlsplit(sys.argv[1])
+if url.scheme not in ("postgres", "postgresql"):
+    sys.exit(f"not a postgres URL: {sys.argv[1]}")
+print(unquote(url.username or "postgres"))
+print(unquote(url.path.lstrip("/")) or "postgres")
+print(unquote(url.password or ""))
+' "$1")
+  (( ${#parts[@]} >= 2 )) || exit 1
+  psql_admin -v user="${parts[0]}" -v database="${parts[1]}" -v password="${parts[2]:-}" <<'SQL'
+SELECT format('CREATE ROLE %I LOGIN SUPERUSER', :'user')
+  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'user') \gexec
+SELECT format('ALTER ROLE %I PASSWORD %L', :'user', :'password') WHERE :'password' <> '' \gexec
+SELECT format('CREATE DATABASE %I OWNER %I', :'database', :'user')
+  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'database') \gexec
+SQL
+  echo "postgres: role ${parts[0]}, database ${parts[1]}"
+}
+
+start_postgres() {
+  mkdir -p "$state"
+  if [[ ! -s "$pg_data/PG_VERSION" ]]; then
+    "$pg_bin/initdb" -D "$pg_data" -U postgres --auth=trust -E UTF8 --no-locale >"$state/postgres-initdb.log"
+  fi
+  if ! "$pg_bin/pg_ctl" -D "$pg_data" status >/dev/null 2>&1; then
+    "$pg_bin/pg_ctl" -D "$pg_data" -l "$state/postgres.log" -w \
+      -o "-c listen_addresses=127.0.0.1 -p $pg_port -k /tmp" start >/dev/null
+  fi
+  for url in "$@"; do ensure_url "$url"; done
+  echo "postgres: postgresql://postgres@127.0.0.1:$pg_port/postgres (log $state/postgres.log)"
+}
+
+start_redis() {
+  mkdir -p "$state/redis"
+  if ! redis-cli -p "$redis_port" ping >/dev/null 2>&1; then
+    redis-server --daemonize yes --bind 127.0.0.1 --port "$redis_port" --dir "$state/redis" \
+      --pidfile "$state/redis.pid" --logfile "$state/redis.log" --save ""
+    for _ in $(seq 50); do redis-cli -p "$redis_port" ping >/dev/null 2>&1 && break; sleep 0.1; done
+  fi
+  echo "redis: redis://127.0.0.1:$redis_port (log $state/redis.log)"
+}
+
+stop_postgres() {
+  "$pg_bin/pg_ctl" -D "$pg_data" status >/dev/null 2>&1 && "$pg_bin/pg_ctl" -D "$pg_data" -m fast -w stop >/dev/null
+  echo "postgres: stopped"
+}
+
+stop_redis() {
+  redis-cli -p "$redis_port" shutdown nosave >/dev/null 2>&1 || true
+  echo "redis: stopped"
+}
+
+status() {
+  if "$pg_bin/pg_ctl" -D "$pg_data" status >/dev/null 2>&1; then echo "postgres: running on $pg_port"; else echo "postgres: stopped"; fi
+  if redis-cli -p "$redis_port" ping >/dev/null 2>&1; then echo "redis: running on $redis_port"; else echo "redis: stopped"; fi
+}
+
+command="${1:-}"
+service="${2:-}"
+shift $(( $# < 2 ? $# : 2 ))
+case "$command:$service" in
+  start:postgres) start_postgres "$@" ;;
+  start:redis) start_redis ;;
+  stop:postgres) stop_postgres ;;
+  stop:redis) stop_redis ;;
+  stop:) stop_postgres; stop_redis ;;
+  status:*) status ;;
+  *) usage ;;
+esac

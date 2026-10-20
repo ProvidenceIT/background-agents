@@ -40,6 +40,7 @@
     "node": "24",
     "user": "sandbox",
     "home": "/home/sandbox",
-    "uid": 1000
+    "uid": 1000,
+    "sfStack": true
   }
 }
