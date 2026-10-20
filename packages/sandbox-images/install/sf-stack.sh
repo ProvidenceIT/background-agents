@@ -34,6 +34,8 @@ install -d -m 0755 /opt/openinspect/node-select/bin
 install -m 0755 "$OI_INSTALL_DIR/sf-stack/node-select" /opt/openinspect/node-select/bin/node-select
 for command in node npm npx corepack; do
   ln -sf node-select "/opt/openinspect/node-select/bin/$command"
+  # Login shells reset PATH from /etc/profile and find node via /usr/local/bin.
+  ln -sf /opt/openinspect/node-select/bin/node-select "/usr/local/bin/$command"
 done
 install -m 0755 "$OI_INSTALL_DIR/sf-stack/oi-services" /usr/local/bin/oi-services
 
