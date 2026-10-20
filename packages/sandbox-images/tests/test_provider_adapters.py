@@ -8,6 +8,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+
 from sandbox_images import bundle, native
 
 ROOT = Path(__file__).parents[3]
