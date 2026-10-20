@@ -1,8 +1,9 @@
 /**
  * Read-through refresh for a session's pull requests (design §5.3): on
- * session open and on the manual sync action, read each PR artifact's current
- * provider state (app-authed), repair/refresh the D1 authority record, and
- * apply the snapshot to the DO artifact mirror. This is the only
+ * session open, on the manual sync action, and from the open-PR sweep
+ * (open-pull-request-sweep.ts) for sessions nobody opens, read each PR
+ * artifact's current provider state (app-authed), repair/refresh the D1
+ * authority record, and apply the snapshot to the DO artifact mirror. This is the only
  * freshness path that reads the provider directly and the only one required
  * when the bot is off.
  *

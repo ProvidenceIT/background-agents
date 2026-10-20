@@ -261,4 +261,49 @@ export class SessionPullRequestStore {
     }
     return summaries;
   }
+
+  /**
+   * Sessions holding an open pull request that the sweep has not attempted
+   * since `staleBefore`, least recently attempted first and never-attempted
+   * before all. The order is what makes a capped batch rotate: the sweep
+   * stamps each candidate before asking it to refresh, so a session whose
+   * provider read keeps failing goes to the back instead of heading every batch.
+   *
+   * COALESCE rather than NULLS FIRST: SQLite sorts NULL first and Postgres
+   * last, and stamps are epoch ms, so 0 sorts before any real attempt.
+   */
+  async listOpenPullRequestSessionIdsForSweep(
+    staleBefore: number,
+    limit: number
+  ): Promise<string[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT session_id
+         FROM session_pull_requests
+         WHERE lifecycle_state = 'open'
+         GROUP BY session_id
+         HAVING MIN(COALESCE(sweep_attempted_at, 0)) < ?
+         ORDER BY MIN(COALESCE(sweep_attempted_at, 0)) ASC, session_id ASC
+         LIMIT ?`
+      )
+      .bind(staleBefore, limit)
+      .all<{ session_id: string }>();
+
+    return (result.results ?? []).map((row) => row.session_id);
+  }
+
+  /** Record a sweep attempt on every open pull request of these sessions. */
+  async markSweepAttempted(sessionIds: readonly string[], now: number): Promise<void> {
+    if (sessionIds.length === 0) return;
+
+    const placeholders = sessionIds.map(() => "?").join(", ");
+    await this.db
+      .prepare(
+        `UPDATE session_pull_requests
+         SET sweep_attempted_at = ?
+         WHERE lifecycle_state = 'open' AND session_id IN (${placeholders})`
+      )
+      .bind(now, ...sessionIds)
+      .run();
+  }
 }

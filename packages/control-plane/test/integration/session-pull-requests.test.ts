@@ -1,8 +1,9 @@
 /**
  * SessionPullRequestStore: upsert with monotonic provider_updated_at guard,
  * identity lookups, legacy→external identity upgrade, grouped session
- * summaries, and the session-delete FK cascade. Exercises migration 0041 by
- * construction — the queries fail if it did not apply.
+ * summaries, the open-PR sweep's candidate queue, and the session-delete FK
+ * cascade. Exercises migrations 0041 and 0099 by construction — the queries
+ * fail if they did not apply.
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
@@ -30,6 +31,15 @@ async function seedSession(id: string): Promise<void> {
     createdAt: now,
     updatedAt: now,
   });
+}
+
+async function sweepStamp(artifactId: string): Promise<number | null> {
+  const row = await env.DB.prepare(
+    "SELECT sweep_attempted_at FROM session_pull_requests WHERE artifact_id = ?"
+  )
+    .bind(artifactId)
+    .first<{ sweep_attempted_at: number | null }>();
+  return row?.sweep_attempted_at ?? null;
 }
 
 async function countRecordsForSession(sessionId: string): Promise<number> {
@@ -340,6 +350,154 @@ describe("SessionPullRequestStore", () => {
     it("returns an empty map for an empty id list without querying", async () => {
       const store = new SessionPullRequestStore(env.DB);
       expect((await store.summariesForSessions([])).size).toBe(0);
+    });
+  });
+
+  describe("open pull request sweep queue", () => {
+    const STALE_BEFORE = 1_000;
+
+    /**
+     * session-1: open, never attempted.
+     * session-2: open, attempted at 300.
+     * session-3: open attempted at 100, plus a merged PR.
+     * session-4: merged and closed only.
+     * session-5: open, attempted after the cutoff.
+     */
+    async function seedQueue(store: SessionPullRequestStore): Promise<void> {
+      for (const id of ["session-2", "session-3", "session-4", "session-5"]) {
+        await seedSession(id);
+      }
+      const open = (artifactId: string, sessionId: string, prNumber: number) =>
+        store.upsert(makeRecord({ artifactId, sessionId, prNumber }));
+      await open("s1-open", "session-1", 1);
+      await open("s2-open", "session-2", 2);
+      await open("s3-open", "session-3", 3);
+      await store.upsert(
+        makeRecord({
+          artifactId: "s3-merged",
+          sessionId: "session-3",
+          prNumber: 4,
+          lifecycleState: "merged",
+          isDraft: false,
+        })
+      );
+      await store.upsert(
+        makeRecord({
+          artifactId: "s4-merged",
+          sessionId: "session-4",
+          prNumber: 5,
+          lifecycleState: "merged",
+          isDraft: false,
+        })
+      );
+      await store.upsert(
+        makeRecord({
+          artifactId: "s4-closed",
+          sessionId: "session-4",
+          prNumber: 6,
+          lifecycleState: "closed",
+          isDraft: false,
+        })
+      );
+      await open("s5-open", "session-5", 7);
+
+      await store.markSweepAttempted(["session-2"], 300);
+      await store.markSweepAttempted(["session-3"], 100);
+      await store.markSweepAttempted(["session-5"], 5_000);
+    }
+
+    it("lists sessions with open PRs, never-attempted first, then oldest attempt", async () => {
+      const store = new SessionPullRequestStore(env.DB);
+      await seedQueue(store);
+
+      expect(await store.listOpenPullRequestSessionIdsForSweep(STALE_BEFORE, 10)).toEqual([
+        "session-1",
+        "session-3",
+        "session-2",
+      ]);
+    });
+
+    it("honours the limit from the front of the queue", async () => {
+      const store = new SessionPullRequestStore(env.DB);
+      await seedQueue(store);
+
+      expect(await store.listOpenPullRequestSessionIdsForSweep(STALE_BEFORE, 2)).toEqual([
+        "session-1",
+        "session-3",
+      ]);
+    });
+
+    it("excludes sessions attempted at or after the cutoff", async () => {
+      const store = new SessionPullRequestStore(env.DB);
+      await seedQueue(store);
+
+      expect(await store.listOpenPullRequestSessionIdsForSweep(300, 10)).toEqual([
+        "session-1",
+        "session-3",
+      ]);
+      expect(await store.listOpenPullRequestSessionIdsForSweep(5_001, 10)).toEqual([
+        "session-1",
+        "session-3",
+        "session-2",
+        "session-5",
+      ]);
+    });
+
+    it("stamps only the open PRs of the given sessions", async () => {
+      const store = new SessionPullRequestStore(env.DB);
+      await seedQueue(store);
+
+      await store.markSweepAttempted(["session-1", "session-3"], 900);
+
+      expect(await sweepStamp("s1-open")).toBe(900);
+      expect(await sweepStamp("s3-open")).toBe(900);
+      expect(await sweepStamp("s3-merged")).toBeNull();
+      expect(await sweepStamp("s2-open")).toBe(300);
+      expect(await store.listOpenPullRequestSessionIdsForSweep(STALE_BEFORE, 10)).toEqual([
+        "session-2",
+        "session-1",
+        "session-3",
+      ]);
+    });
+
+    it("keeps the stamp across a provider write, and drops the session once its PR leaves open", async () => {
+      const store = new SessionPullRequestStore(env.DB);
+      await seedQueue(store);
+
+      await store.upsert(
+        makeRecord({
+          artifactId: "s2-open",
+          sessionId: "session-2",
+          prNumber: 2,
+          isDraft: false,
+          providerUpdatedAt: 2_000,
+        })
+      );
+      expect(await sweepStamp("s2-open")).toBe(300);
+
+      await store.upsert(
+        makeRecord({
+          artifactId: "s2-open",
+          sessionId: "session-2",
+          prNumber: 2,
+          lifecycleState: "merged",
+          isDraft: false,
+          providerUpdatedAt: 3_000,
+        })
+      );
+      expect(await store.listOpenPullRequestSessionIdsForSweep(STALE_BEFORE, 10)).toEqual([
+        "session-1",
+        "session-3",
+      ]);
+    });
+
+    it("does nothing for an empty session list", async () => {
+      const store = new SessionPullRequestStore(env.DB);
+      await store.upsert(makeRecord());
+
+      await store.markSweepAttempted([], 900);
+
+      expect(await sweepStamp("artifact-1")).toBeNull();
     });
   });
 

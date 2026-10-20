@@ -28,6 +28,9 @@ const createPrRequestSchema = z.object({
 
 type CreatePrRequest = z.infer<typeof createPrRequestSchema>;
 
+/** Who asked for a refresh over HTTP; opening a session triggers one without a request. */
+export type PullRequestRefreshRequestTrigger = "manual" | "sweep";
+
 /**
  * HTTP boundary for the pull-request endpoints: PR creation, sandbox-reported
  * snapshot application, and the manual refresh trigger.
@@ -44,7 +47,7 @@ export class PullRequestHandler {
       log: Logger
     ) => Promise<CreatePullRequestResult>,
     /** Kicks off a background read-through refresh. */
-    private readonly triggerPullRequestRefresh: () => void,
+    private readonly triggerPullRequestRefresh: (trigger: PullRequestRefreshRequestTrigger) => void,
     private readonly now: () => number = Date.now
   ) {}
 
@@ -172,12 +175,17 @@ export class PullRequestHandler {
   }
 
   /**
-   * Manual sync (design §5.3): fire the read-through refresh in the
-   * background and return immediately — the endpoint never blocks on a
-   * provider read.
+   * Manual sync (design §5.3) and the open-PR sweep: fire the read-through
+   * refresh in the background and return immediately — the endpoint never
+   * blocks on a provider read. `?trigger=sweep` only labels the refresh's logs.
    */
-  refreshPullRequests(): Response {
-    this.triggerPullRequestRefresh();
+  refreshPullRequests(url: URL): Response {
+    if (!this.sessionCoreRepository.getSession()) {
+      return Response.json({ error: "Session not found" }, { status: 404 });
+    }
+    this.triggerPullRequestRefresh(
+      url.searchParams.get("trigger") === "sweep" ? "sweep" : "manual"
+    );
     return Response.json({ status: "refreshing" }, { status: 202 });
   }
 }

@@ -138,7 +138,10 @@ import { AttachmentsHandler } from "./http/handlers/attachments.handler";
 import { WsTokenHandler } from "./http/handlers/ws-token.handler";
 import { SessionLifecycleHandler } from "./http/handlers/session-lifecycle.handler";
 import { SessionBudgetHandler } from "./http/handlers/session-budget.handler";
-import { PullRequestHandler } from "./http/handlers/pull-request.handler";
+import {
+  PullRequestHandler,
+  type PullRequestRefreshRequestTrigger,
+} from "./http/handlers/pull-request.handler";
 import { ParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
 import { createAlarmHandler } from "./alarm/handler";
@@ -781,7 +784,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       lifecycleManager.handleShutdownAlarm(allowCaptureRetry),
   });
 
-  const schedulePullRequestRefresh = (trigger: "open" | "manual"): void => {
+  const schedulePullRequestRefresh = (trigger: "open" | PullRequestRefreshRequestTrigger): void => {
     backgroundTasks.submit(
       () =>
         refreshSessionPullRequests(
@@ -934,7 +937,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
       return pullRequestService.createPullRequest(input);
     },
-    () => schedulePullRequestRefresh("manual")
+    schedulePullRequestRefresh
   );
 
   const participantsHandler = new ParticipantsHandler(participantRepository);
@@ -1055,7 +1058,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     createPr: (request, _url, requestLog) => pullRequestHandler.createPr(request, requestLog),
     pullRequestArtifactSnapshot: (request, url) =>
       pullRequestHandler.pullRequestArtifactSnapshot(request, url),
-    pullRequestsRefresh: () => pullRequestHandler.refreshPullRequests(),
+    pullRequestsRefresh: (_request, url) => pullRequestHandler.refreshPullRequests(url),
     wsToken: (request, _url, requestLog) => wsTokenHandler.generateWsToken(request, requestLog),
     updateTitle: (request) => sessionLifecycleHandler.updateTitle(request),
     budget: (request) => sessionBudgetHandler.update(request),

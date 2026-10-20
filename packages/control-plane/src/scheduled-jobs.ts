@@ -17,6 +17,7 @@
 import { runAuthHomeNoticesJob } from "./auth-homes/expiry-digest";
 import { checkAutofixQueueHealth } from "./autofix/queue-health";
 import { SessionIndexStore } from "./db/session-index";
+import { SessionPullRequestStore } from "./db/session-pull-request-store";
 import type { SqlDatabase } from "./db/sql-database";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
 import type { CorrelationContext, Logger } from "./logger";
@@ -27,6 +28,11 @@ import {
   AbandonedDraftSweep,
   SessionDraftExpiryClient,
 } from "./session/abandoned-draft-sweep";
+import {
+  OPEN_PULL_REQUEST_SWEEP_CRON,
+  OpenPullRequestSweep,
+  SessionPullRequestRefreshClient,
+} from "./session/open-pull-request-sweep";
 import type { SessionRuntimeClient } from "./session/runtime-client";
 import { runGitHubTeamSync } from "./teams/github-team-sync";
 import type { Env } from "./types";
@@ -90,6 +96,17 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       await new AbandonedDraftSweep(
         new SessionIndexStore(db),
         new SessionDraftExpiryClient(sessions),
+        log
+      ).run(nowMs);
+    },
+  },
+  {
+    name: "open_pull_request_sweep",
+    cron: OPEN_PULL_REQUEST_SWEEP_CRON,
+    async run({ db, sessions, log }, nowMs) {
+      await new OpenPullRequestSweep(
+        new SessionPullRequestStore(db),
+        new SessionPullRequestRefreshClient(sessions),
         log
       ).run(nowMs);
     },

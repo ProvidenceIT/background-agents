@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runAuthHomeNoticesJob } from "./auth-homes/expiry-digest";
 import { checkAutofixQueueHealth } from "./autofix/queue-health";
 import { SessionIndexStore } from "./db/session-index";
+import { SessionPullRequestStore } from "./db/session-pull-request-store";
 import type { SqlDatabase } from "./db/sql-database";
 import type * as ImageBuildScheduler from "./image-builds/scheduler";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
@@ -17,6 +18,12 @@ import {
   AbandonedDraftSweep,
   SessionDraftExpiryClient,
 } from "./session/abandoned-draft-sweep";
+import type * as OpenPullRequestSweepModule from "./session/open-pull-request-sweep";
+import {
+  OPEN_PULL_REQUEST_SWEEP_CRON,
+  OpenPullRequestSweep,
+  SessionPullRequestRefreshClient,
+} from "./session/open-pull-request-sweep";
 import type { SessionRuntimeClient } from "./session/runtime-client";
 import { runGitHubTeamSync } from "./teams/github-team-sync";
 import {
@@ -48,10 +55,18 @@ vi.mock("./session/abandoned-draft-sweep", async (importOriginal) => ({
   }),
   SessionDraftExpiryClient: vi.fn(),
 }));
+vi.mock("./session/open-pull-request-sweep", async (importOriginal) => ({
+  ...(await importOriginal<typeof OpenPullRequestSweepModule>()),
+  OpenPullRequestSweep: vi.fn(function () {
+    return { run: prSweepRun };
+  }),
+  SessionPullRequestRefreshClient: vi.fn(),
+}));
 
-const { schedulerTick, sweepRun } = vi.hoisted(() => ({
+const { schedulerTick, sweepRun, prSweepRun } = vi.hoisted(() => ({
   schedulerTick: vi.fn(async () => ({})),
   sweepRun: vi.fn(async () => ({})),
+  prSweepRun: vi.fn(async () => ({})),
 }));
 
 const TERRAFORM_WORKER = resolve(
@@ -96,7 +111,12 @@ describe("SCHEDULED_JOBS", () => {
     expect(new Set(crons).size).toBe(crons.length);
     expect(new Set(SCHEDULED_JOBS.map((job) => job.name)).size).toBe(crons.length);
     expect([...crons].sort()).toEqual(
-      [SCHEDULER_TICK_CRON, IMAGE_BUILD_SCHEDULER_CRON, ABANDONED_DRAFT_SWEEP_CRON].sort()
+      [
+        SCHEDULER_TICK_CRON,
+        IMAGE_BUILD_SCHEDULER_CRON,
+        ABANDONED_DRAFT_SWEEP_CRON,
+        OPEN_PULL_REQUEST_SWEEP_CRON,
+      ].sort()
     );
     expect([...terraformCronTriggers()].sort()).toEqual([...crons].sort());
     for (const job of SCHEDULED_JOBS) expect(findScheduledJob(job.cron)).toBe(job);
@@ -146,5 +166,18 @@ describe("SCHEDULED_JOBS", () => {
     expect(client).toBe(vi.mocked(SessionDraftExpiryClient).mock.instances[0]);
     expect(log).toBe(deps.log);
     expect(sweepRun).toHaveBeenCalledWith(1_234_567);
+  });
+
+  it("runs the open pull request sweep over the PR store and the session client at the run's time", async () => {
+    const deps = fakeDeps();
+
+    await findScheduledJob(OPEN_PULL_REQUEST_SWEEP_CRON)!.run(deps, 1_234_567);
+
+    expect(SessionPullRequestRefreshClient).toHaveBeenCalledWith(deps.sessions);
+    const [index, client, log] = vi.mocked(OpenPullRequestSweep).mock.calls[0]!;
+    expect(index).toBeInstanceOf(SessionPullRequestStore);
+    expect(client).toBe(vi.mocked(SessionPullRequestRefreshClient).mock.instances[0]);
+    expect(log).toBe(deps.log);
+    expect(prSweepRun).toHaveBeenCalledWith(1_234_567);
   });
 });
