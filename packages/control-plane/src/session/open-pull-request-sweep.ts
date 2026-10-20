@@ -14,11 +14,13 @@ import type { Logger } from "../logger";
 import type { SessionRuntimeClient } from "./runtime-client";
 
 /**
- * How long a session's open PRs go between sweep attempts. A missed webhook is
- * repaired within this interval plus the queue ahead of it, and each attempt
- * costs one provider read per open PR.
+ * The least time between two sweep attempts on one session. Kept well under
+ * the cron's 15-minute period: runs start at slot time plus a variable delay,
+ * so an interval equal to the period would skip a session whenever a run
+ * starts less late than the one that stamped it. Each attempt costs one
+ * provider read per PR artifact the session holds, merged and closed included.
  */
-const OPEN_PULL_REQUEST_RECHECK_INTERVAL_MS = 15 * 60 * 1000;
+const OPEN_PULL_REQUEST_RECHECK_INTERVAL_MS = 10 * 60 * 1000;
 
 /**
  * Max sessions asked to refresh per sweep (backpressure). Each costs one
@@ -35,8 +37,8 @@ const OPEN_PULL_REQUEST_SWEEP_LIMIT = 25;
 const OPEN_PULL_REQUEST_REFRESH_TIMEOUT_MS = 10_000;
 
 /**
- * Own cron, every 15 minutes to match OPEN_PULL_REQUEST_RECHECK_INTERVAL_MS,
- * and offset from the other control-plane crons so no two fire together.
+ * Own cron, every 15 minutes, offset from the other control-plane crons so no
+ * two fire together.
  */
 export const OPEN_PULL_REQUEST_SWEEP_CRON = "4,19,34,49 * * * *";
 

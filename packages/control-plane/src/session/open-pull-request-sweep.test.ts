@@ -60,6 +60,18 @@ describe("OpenPullRequestSweep", () => {
     expect(index.listOpenPullRequestSessionIdsForSweep).toHaveBeenCalledWith(NOW - RECHECK_MS, 25);
   });
 
+  it("reaches a session the previous slot stamped even when this run starts less late", async () => {
+    const { index, client } = createFakes([]);
+    const slot = 1_800_000_000_000;
+    const stampedAt = slot + 800;
+    const nextRunAt = slot + 15 * 60 * 1000 + 300;
+
+    await new OpenPullRequestSweep(index, client, createLog()).run(nextRunAt);
+
+    const [staleBefore] = vi.mocked(index.listOpenPullRequestSessionIdsForSweep).mock.calls[0];
+    expect(stampedAt < staleBefore).toBe(true);
+  });
+
   it("does nothing when no session holds a stale open pull request", async () => {
     const { calls, index, client } = createFakes([]);
     const log = createLog();
