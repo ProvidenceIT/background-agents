@@ -22,6 +22,11 @@ IMAGE_ENV_KEYS = frozenset(
         "PNPM_HOME",
         "OPENINSPECT_BIN_INSTALL_DIR",
         "OI_SCM_CRED_CACHE_DIR",
+        # sf: sandbox-images SF_STACK_ENVIRONMENT (kubernetes target).
+        "PUPPETEER_SKIP_DOWNLOAD",
+        "PUPPETEER_EXECUTABLE_PATH",
+        "CYPRESS_INSTALL_BINARY",
+        "NODE_OPTIONS",
     }
 )
 
