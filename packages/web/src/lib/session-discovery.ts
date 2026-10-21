@@ -97,6 +97,7 @@ export const SESSION_ORIGIN_LABELS: Record<SpawnSource, string> = {
   "slack-bot": "Slack bot",
   "teams-bot": "Microsoft Teams bot",
   motion: "Providence",
+  healthcheck: "Sandbox canary",
 };
 
 function isLifecycle(value: string | null): value is SessionLifecycle {

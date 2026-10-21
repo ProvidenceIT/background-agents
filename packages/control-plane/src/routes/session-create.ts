@@ -66,6 +66,11 @@ const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
 // Defense in depth on top of schema validation — matches git ref charsets.
 const BRANCH_NAME_PATTERN = /^[\w.\-/]+$/;
 
+/** The only create body the healthcheck service may send: at most a string title. */
+function isHealthcheckCreateBody(raw: Record<string, unknown>): boolean {
+  return Object.entries(raw).every(([key, value]) => key === "title" && typeof value === "string");
+}
+
 function withRetryAfter(response: Response): Response {
   response.headers.set("Retry-After", String(EXTERNAL_REF_RETRY_AFTER_SECONDS));
   return response;
@@ -190,6 +195,19 @@ export async function handleCreateSession(
   const parsed = await parseCreateSessionInput(request);
   if (!parsed.ok) return error(parsed.message, 400);
   const body = parsed.input;
+
+  // The sandbox canary only proves a sandbox spawns and connects: a title, no
+  // repository, environment, skills or provider choice.
+  if (
+    ctx.principal?.kind === "service" &&
+    ctx.principal.service === "healthcheck" &&
+    !isHealthcheckCreateBody(parsed.raw)
+  ) {
+    return json(
+      { error: "healthcheck may only create an empty session", code: "healthcheck_body_refused" },
+      403
+    );
+  }
 
   // Identity comes from the verified principal; caller-asserted identity/SCM
   // body fields are rejected. SCM credentials flow only through
@@ -500,7 +518,9 @@ sessionCreateRoutes.post(
   "/sessions",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("sessions.create", { optInServices: ["motion"] }),
+    authorization: requirePermission("sessions.create", {
+      optInServices: ["motion", "healthcheck"],
+    }),
     serviceActorClaims: extractSessionActorProfileClaims,
   }),
   (c) => dispatch(c, handleCreateSession)

@@ -53,6 +53,7 @@ export const ANALYTICS_SOURCE_LABELS: Record<SpawnSource, string> = {
   motion: "Providence",
   agent: "Agent sub-sessions",
   automation: "Automations",
+  healthcheck: "Sandbox canary",
 };
 
 export const ANALYTICS_TABS = ["overview", "usage", "cost", "pull-requests", "people"] as const;

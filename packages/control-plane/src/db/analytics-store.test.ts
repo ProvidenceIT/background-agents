@@ -106,8 +106,8 @@ describe("AnalyticsStore query boundaries", () => {
       binds: ["agent"],
     });
     expect(scopePredicate("automation", "s.spawn_source")).toEqual({
-      sql: "AND s.spawn_source IN (?)",
-      binds: ["automation"],
+      sql: "AND s.spawn_source IN (?, ?)",
+      binds: ["automation", "healthcheck"],
     });
     expect(scopePredicate("all", "s.spawn_source")).toEqual({ sql: "", binds: [] });
   });

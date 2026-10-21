@@ -278,6 +278,61 @@ describe("opt-in service admission", () => {
   });
 });
 
+describe("healthcheck opt-in admission", () => {
+  const ACTOR = "microsoft:2b3c4d5e-6f70-4a81-92a3-b4c5d6e7f809";
+
+  async function healthcheckCall(method: string, path: string, actor?: string) {
+    const { env } = createEnv(401);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const body = method === "GET" ? undefined : "{}";
+    const request = await signedServiceRequest(`https://test.local${path}`, {
+      method,
+      body,
+      service: "healthcheck",
+      actor,
+    });
+    return handleRequest(
+      request,
+      { ...env, SCM_PROVIDER: "github" } as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+  }
+
+  it.each([
+    ["POST", "/sessions/session-1/prompt"],
+    ["POST", "/sessions/session-1/ws-token"],
+    ["POST", "/sessions/session-1/stop"],
+    ["POST", "/sessions/session-1/unarchive"],
+    ["GET", "/sessions/session-1/events"],
+    ["GET", "/sessions/session-1/messages"],
+    ["GET", "/sessions"],
+    ["GET", "/repos"],
+    ["GET", "/skills"],
+  ])("refuses healthcheck on %s %s, which does not opt it in", async (method, path) => {
+    const response = await healthcheckCall(method, path, ACTOR);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Forbidden",
+      code: "service_capability_required",
+    });
+  });
+
+  it.each([
+    ["POST", "/sessions"],
+    ["GET", "/sessions/session-1"],
+    ["POST", "/sessions/session-1/archive"],
+  ])("requires an actor from healthcheck on its opt-in route %s %s", async (method, path) => {
+    const response = await healthcheckCall(method, path);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Forbidden",
+      code: "service_actor_required",
+    });
+  });
+});
+
 describe("prompt-library opt-in admission", () => {
   const ACTOR = "microsoft:4f1c2d3e-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
   const MANAGE_ROUTES = [

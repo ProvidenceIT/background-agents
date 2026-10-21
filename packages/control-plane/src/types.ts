@@ -43,6 +43,7 @@ export interface EnvConfig {
   SERVICE_AUTH_SECRET_TEAMS_BOT?: string;
   SERVICE_AUTH_SECRET_MOTION?: string;
   SERVICE_AUTH_SECRET_PROMPT_LIBRARY?: string;
+  SERVICE_AUTH_SECRET_HEALTHCHECK?: string;
   // Comma-separated owner/name repositories the prompt-library service may import
   // skills from; unset ⇒ DEFAULT_PROMPT_LIBRARY_SKILL_REPOSITORIES.
   PROMPT_LIBRARY_SKILL_REPOSITORIES?: string;

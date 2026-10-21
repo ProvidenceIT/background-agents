@@ -69,8 +69,9 @@ describe("serviceAllowsPermission", () => {
     }
   });
 
-  it("lists motion and prompt-library, and only those, as opt-in services", () => {
-    expect(OPT_IN_SERVICES).toEqual(["motion", "prompt-library"]);
+  it("lists motion, prompt-library and healthcheck, and only those, as opt-in services", () => {
+    expect(OPT_IN_SERVICES).toEqual(["motion", "prompt-library", "healthcheck"]);
+    expect(isOptInService("healthcheck")).toBe(true);
     expect(isOptInService("motion")).toBe(true);
     expect(isOptInService("prompt-library")).toBe(true);
     for (const service of ["web", "slack-bot", "github-bot", "linear-bot", "teams-bot"] as const) {

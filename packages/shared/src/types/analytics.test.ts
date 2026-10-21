@@ -15,6 +15,7 @@ it("derives the existing human population from the exhaustive spawn-source mappi
     motion: "human",
     agent: "agent",
     automation: "automation",
+    healthcheck: "automation",
   });
   expect(ANALYTICS_SCOPE_SPAWN_SOURCES.human).toEqual([
     "user",
@@ -25,7 +26,7 @@ it("derives the existing human population from the exhaustive spawn-source mappi
     "motion",
   ]);
   expect(ANALYTICS_SCOPE_SPAWN_SOURCES.agent).toEqual(["agent"]);
-  expect(ANALYTICS_SCOPE_SPAWN_SOURCES.automation).toEqual(["automation"]);
+  expect(ANALYTICS_SCOPE_SPAWN_SOURCES.automation).toEqual(["automation", "healthcheck"]);
 });
 
 it("computes cache hits against cache reads plus uncached inputs, or null for no input", () => {

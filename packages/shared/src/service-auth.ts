@@ -33,6 +33,7 @@ export const SERVICE_NAMES = [
   "teams-bot",
   "motion",
   "prompt-library",
+  "healthcheck",
 ] as const;
 export type ServiceName = (typeof SERVICE_NAMES)[number];
 

@@ -169,6 +169,7 @@ export default defineConfig({
             SERVICE_AUTH_SECRET_TEAMS_BOT: "test-service-secret-teams-bot",
             SERVICE_AUTH_SECRET_MOTION: "test-service-secret-motion",
             SERVICE_AUTH_SECRET_PROMPT_LIBRARY: "test-service-secret-prompt-library",
+            SERVICE_AUTH_SECRET_HEALTHCHECK: "test-service-secret-healthcheck",
             BROWSER_AUTH_SECRET: "test-browser-auth-secret-with-at-least-32-characters",
             GITHUB_CLIENT_ID: "github-app-client-id",
             GITHUB_CLIENT_SECRET: "github-app-client-secret",

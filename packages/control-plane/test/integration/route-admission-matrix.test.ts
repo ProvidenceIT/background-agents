@@ -45,6 +45,7 @@ const BOT_SERVICES = [
   "teams-bot",
   "motion",
   "prompt-library",
+  "healthcheck",
 ] as const;
 const PROTECTED_STATUSES = new Set([401, 403]);
 const ROUTE_MISS_BODY = JSON.stringify({ error: "Not found" });
@@ -624,7 +625,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
 
   /** The routes an opt-in service reaches with its actor, and those it reaches without one. */
   async function optInReach(
-    service: "motion" | "prompt-library",
+    service: "motion" | "prompt-library" | "healthcheck",
     actor: string,
     sessionId: string
   ): Promise<{ withActor: string[]; withoutActor: string[] }> {
@@ -754,6 +755,41 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
         const response = await send(url, method, await botHeaders(url, method, service, actor));
         expect(response.status, `${service} ${method} ${path}`).toBe(403);
       }
+    }
+  });
+
+  it("admits healthcheck with an enrolled actor on exactly its opt-in routes", async () => {
+    const objectId = "2b3c4d5e-6f70-4a81-92a3-b4c5d6e7f809";
+    await new UserStore(env.DB).createIdentity({
+      userId: BROWSER_USER_ID,
+      provider: "microsoft",
+      providerUserId: objectId,
+    });
+    // The canary archives only sessions it created for its actor (it reads any it may see).
+    const canarySessionId = await createReadySession();
+    await env.DB.prepare("UPDATE sessions SET spawn_source = 'healthcheck' WHERE id = ?")
+      .bind(canarySessionId)
+      .run();
+
+    const { withActor, withoutActor } = await optInReach(
+      "healthcheck",
+      `microsoft:${objectId}`,
+      canarySessionId
+    );
+    expect(withActor.sort()).toEqual(
+      ["GET /sessions/:id", "POST /sessions", "POST /sessions/:id/archive"].sort()
+    );
+    expect(withoutActor).toEqual([]);
+
+    // Naming healthcheck on the archive route does not open it to the other opt-in services.
+    const url = `${BASE}/sessions/${canarySessionId}/archive`;
+    for (const service of ["motion", "prompt-library"] as const) {
+      const response = await send(
+        url,
+        "POST",
+        await botHeaders(url, "POST", service, `microsoft:${objectId}`)
+      );
+      expect(response.status, `${service} ${url}`).toBe(403);
     }
   });
 
