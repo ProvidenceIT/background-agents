@@ -1,5 +1,6 @@
 """Shared payload staging and conservative build invalidation."""
 
+import ast
 import json
 import re
 import shutil
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from sandbox_images.bundle import PROVIDERS, pack_bundle, plan_image, validate_toolchain
+from sandbox_images.configuration import runtime_environment
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -23,6 +25,22 @@ def checkout(tmp_path):
         ),
     )
     return path
+
+
+def runtime_image_env_keys():
+    source = REPO_ROOT / "packages/sandbox-runtime/src/sandbox_runtime/image_environment.py"
+    for node in ast.parse(source.read_text()).body:
+        if isinstance(node, ast.Assign) and node.targets[0].id == "IMAGE_ENV_KEYS":
+            return {element.value for element in node.value.args[0].elts}
+    raise AssertionError("IMAGE_ENV_KEYS not found")
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("sf_stack", [False, True])
+def test_runtime_accepts_every_baked_environment_key(provider, sf_stack):
+    # The sandbox refuses to start on a baked key it does not allow.
+    target = plan_image(REPO_ROOT, provider)["target"] | ({"sfStack": True} if sf_stack else {})
+    assert set(runtime_environment(target)) <= runtime_image_env_keys()
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
