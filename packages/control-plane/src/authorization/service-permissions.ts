@@ -70,6 +70,10 @@ const SERVICE_PERMISSION_CEILINGS: Record<ServiceName, readonly PermissionId[]> 
   // the skill routes that opt it in; the handlers also pin its sources
   // (skills/prompt-library-sources.ts).
   "prompt-library": ["skills.read", "skills.manage"],
+  // The sandbox canary (deploy healthcheck) creates an empty session for one signed-in
+  // person, reads its sandbox status and archives it; session-create pins it to a
+  // title-only body, and no prompt route opts it in.
+  healthcheck: ["sessions.create", "sessions.read", "sessions.lifecycle"],
 };
 
 /** Checks the hard permission ceiling for a trusted service, independent of user grants. */
@@ -89,6 +93,7 @@ export function serviceAllowsPermission(service: ServiceName, permission: Permis
 export const OPT_IN_SERVICES = [
   "motion",
   "prompt-library",
+  "healthcheck",
 ] as const satisfies readonly ServiceName[];
 export type OptInServiceName = (typeof OPT_IN_SERVICES)[number];
 

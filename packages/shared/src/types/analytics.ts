@@ -27,6 +27,8 @@ export const ANALYTICS_SPAWN_SOURCE_SCOPE: Record<SpawnSource, Exclude<Analytics
   motion: "human",
   agent: "agent",
   automation: "automation",
+  // The deploy's sandbox canary: empty sessions, kept out of the human default.
+  healthcheck: "automation",
 };
 const spawnSources = Object.keys(ANALYTICS_SPAWN_SOURCE_SCOPE).map((source) =>
   spawnSourceSchema.parse(source)

@@ -278,6 +278,7 @@ export const TEST_SERVICE_SECRETS = {
   SERVICE_AUTH_SECRET_TEAMS_BOT: "test-service-secret-teams-bot",
   SERVICE_AUTH_SECRET_MOTION: "test-service-secret-motion",
   SERVICE_AUTH_SECRET_PROMPT_LIBRARY: "test-service-secret-prompt-library",
+  SERVICE_AUTH_SECRET_HEALTHCHECK: "test-service-secret-healthcheck",
 } as const;
 
 export async function signedServiceRequest(

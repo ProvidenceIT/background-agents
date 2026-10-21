@@ -72,4 +72,5 @@ export const ASSERTION_RIGHTS: Record<ServiceName, ActorNamespace | null> = {
   "teams-bot": "microsoft",
   motion: "microsoft",
   "prompt-library": "microsoft",
+  healthcheck: "microsoft",
 };

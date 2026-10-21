@@ -391,8 +391,12 @@ sessionRuntimeProxyRoutes.get(
   "/sessions/:id",
   admit({
     ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
-    // People, and Providence for an enrolled person; every other bot is refused.
-    authorization: requireSession("read", { service: "deny", optInServices: ["motion"] }),
+    // People, Providence and the sandbox canary for an enrolled person; every
+    // other bot is refused.
+    authorization: requireSession("read", {
+      service: "deny",
+      optInServices: ["motion", "healthcheck"],
+    }),
   }),
   (c) => dispatchSession(c, handleSessionSnapshot)
 );
@@ -529,7 +533,13 @@ sessionRuntimeProxyRoutes.get(
 sessionRuntimeProxyRoutes.patch("/sessions/:id/title", LIFECYCLE, (c) =>
   dispatchSession(c, lifecycleProxy(SessionInternalPaths.updateTitle))
 );
-sessionRuntimeProxyRoutes.post("/sessions/:id/archive", LIFECYCLE, (c) =>
+// The sandbox canary archives the sessions it created (opt-in services reach only those).
+const ARCHIVE = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requireSession("lifecycle", { optInServices: ["healthcheck"] }),
+});
+
+sessionRuntimeProxyRoutes.post("/sessions/:id/archive", ARCHIVE, (c) =>
   dispatchSession(c, lifecycleProxy(SessionInternalPaths.archive))
 );
 sessionRuntimeProxyRoutes.post("/sessions/:id/unarchive", LIFECYCLE, (c) =>

@@ -27,6 +27,7 @@ const spawnSourceSchema = z.enum([
   "slack-bot",
   "teams-bot",
   "motion",
+  "healthcheck",
 ] satisfies [SpawnSource, ...SpawnSource[]]);
 
 /**

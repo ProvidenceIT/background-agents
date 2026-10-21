@@ -169,6 +169,7 @@ const teamInboxSessionSchema = z.object({
     "slack-bot",
     "teams-bot",
     "motion",
+    "healthcheck",
   ]),
   environmentId: z.string().nullable(),
   createdAt: z.number(),

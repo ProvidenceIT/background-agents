@@ -26,6 +26,7 @@ const SERVICE_SECRETS: Record<ServiceName, string> = {
   "teams-bot": "test-service-secret-teams-bot",
   motion: "test-service-secret-motion",
   "prompt-library": "test-service-secret-prompt-library",
+  healthcheck: "test-service-secret-healthcheck",
 };
 
 function fetchWorker(request: Request, requestEnv: WorkerBindings = env): Promise<Response> {

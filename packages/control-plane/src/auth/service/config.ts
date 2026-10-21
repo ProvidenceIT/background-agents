@@ -9,6 +9,7 @@ export interface ServiceKeyEnv {
   SERVICE_AUTH_SECRET_TEAMS_BOT?: string;
   SERVICE_AUTH_SECRET_MOTION?: string;
   SERVICE_AUTH_SECRET_PROMPT_LIBRARY?: string;
+  SERVICE_AUTH_SECRET_HEALTHCHECK?: string;
 }
 
 /** Resolve the verification key for one authenticated service. */
@@ -28,5 +29,7 @@ export function serviceAuthSecret(env: ServiceKeyEnv, service: ServiceName): str
       return env.SERVICE_AUTH_SECRET_MOTION;
     case "prompt-library":
       return env.SERVICE_AUTH_SECRET_PROMPT_LIBRARY;
+    case "healthcheck":
+      return env.SERVICE_AUTH_SECRET_HEALTHCHECK;
   }
 }

@@ -21,6 +21,7 @@ const SECRETS = {
   SERVICE_AUTH_SECRET_TEAMS_BOT: "teams-secret",
   SERVICE_AUTH_SECRET_MOTION: "motion-secret",
   SERVICE_AUTH_SECRET_PROMPT_LIBRARY: "prompt-library-secret",
+  SERVICE_AUTH_SECRET_HEALTHCHECK: "healthcheck-secret",
 };
 
 const SERVICE_SECRET: Record<ServiceName, string> = {
@@ -31,6 +32,7 @@ const SERVICE_SECRET: Record<ServiceName, string> = {
   "teams-bot": SECRETS.SERVICE_AUTH_SECRET_TEAMS_BOT,
   motion: SECRETS.SERVICE_AUTH_SECRET_MOTION,
   "prompt-library": SECRETS.SERVICE_AUTH_SECRET_PROMPT_LIBRARY,
+  healthcheck: SECRETS.SERVICE_AUTH_SECRET_HEALTHCHECK,
 };
 
 /** An Entra object id, the subject the Microsoft sign-in stores and a Teams bot asserts. */

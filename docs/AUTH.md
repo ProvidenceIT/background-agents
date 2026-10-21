@@ -693,6 +693,26 @@ person. It is an opt-in service like motion: its permission ceiling alone admits
   Providence client contract above); re-imports send `If-Match` with the current revision as for
   people.
 
+### Sandbox canary (`healthcheck`)
+
+The deploy's hourly canary proves a sandbox spawns and its runtime connects back, without a prompt
+and so without model credits. It is an opt-in service like motion, acting for one signed-in person.
+
+- **Service `healthcheck`.** Its sig1 verification key is `SERVICE_AUTH_SECRET_HEALTHCHECK`. It
+  asserts `microsoft` actors under the existing-only rule (403 `service_actor_not_enrolled` for an
+  object id no web sign-in stored). Its ceiling is sessions (create, read, lifecycle), and the
+  acting person's own role must still grant each.
+- **Three opt-in routes.** `POST /sessions`, `GET /sessions/:id` and `POST /sessions/:id/archive`,
+  each with an actor. Every other route refuses it, including every prompt, WebSocket token,
+  sandbox-access and repository route. Like motion, it reaches only the sessions it created for that
+  person on the archive route.
+- **Empty sessions only.** On `POST /sessions` the body may hold nothing but a string `title`; any
+  other key (a repository, environment, skills, provider choice, model) answers 403
+  `healthcheck_body_refused` before anything is written. Session creation starts the warm spawn, so
+  `GET /sessions/:id` then reports `sandboxStatus` (`ready` once the runtime connected) and
+  `spawnError`. Its sessions carry `spawnSource: "healthcheck"`.
+- **Configuration.** `SERVICE_AUTH_SECRET_HEALTHCHECK`; unset, the service cannot authenticate.
+
 ### GitHub Routing
 
 GitHub routes by numeric repository ID rather than channel bindings. Event automations run as their

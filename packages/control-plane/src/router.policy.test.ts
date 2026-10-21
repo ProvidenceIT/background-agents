@@ -453,7 +453,31 @@ describe("route policy table", () => {
       ) {
         continue;
       }
-      expect(route.authorization.service.optInServices).toEqual(["motion"]);
+      // The sandbox canary shares POST /sessions and GET /sessions/:id.
+      expect(route.authorization.service.optInServices).toEqual(
+        route === routeFor("POST", "/sessions") || route === routeFor("GET", "/sessions/session-1")
+          ? ["motion", "healthcheck"]
+          : ["motion"]
+      );
+    }
+  });
+
+  it("opts healthcheck into exactly create, read and archive", () => {
+    const expected = new Set([
+      routeFor("POST", "/sessions"),
+      routeFor("GET", "/sessions/session-1"),
+      routeFor("POST", "/sessions/session-1/archive"),
+    ]);
+    const optedIn = routesOptingIn("healthcheck");
+
+    expect(new Set(optedIn)).toEqual(expected);
+    for (const [method, path] of [
+      ["POST", "/sessions/session-1/prompt"],
+      ["POST", "/sessions/session-1/ws-token"],
+      ["POST", "/sessions/session-1/unarchive"],
+      ["GET", "/sessions/session-1/sandbox-access"],
+    ] as const) {
+      expect(optedIn, `${method} ${path}`).not.toContain(routeFor(method, path));
     }
   });
 
@@ -600,7 +624,7 @@ describe("route policy table", () => {
       authorization: {
         kind: "active-user",
         allOf: [{ kind: "session", action: "read" }],
-        service: { kind: "deny", optInServices: ["motion"] },
+        service: { kind: "deny", optInServices: ["motion", "healthcheck"] },
       },
     });
     expect(routeFor("GET", "/sessions/inbox")).toMatchObject({
