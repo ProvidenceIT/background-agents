@@ -8,6 +8,7 @@ import type {
 import { SessionForkTakenError, SessionIndexStore } from "../../src/db/session-index";
 import * as repositoryResolution from "../../src/repos/resolve";
 import { FORK_CONSENT_LINE } from "../../src/session/fork-handoff";
+import { BudgetExhaustedError, SessionMessageQueue } from "../../src/session/message-queue";
 import { cleanD1Tables } from "./cleanup";
 import { insertIdentity } from "./identity-seed-helpers";
 import {
@@ -233,6 +234,44 @@ describe("session fork routes", () => {
       reasoningEffort: "low",
     });
     await waitForSandboxStatus(env.SESSION.get(env.SESSION.idFromName(sessionId)), "failed");
+  });
+
+  it("relays a refused first prompt and creates a working fork on retry", async () => {
+    const { name } = await seedSource();
+    const forkRequestId = crypto.randomUUID();
+    vi.spyOn(
+      SessionMessageQueue.prototype as unknown as { assertBudgetAvailable: () => void },
+      "assertBudgetAvailable"
+    ).mockImplementationOnce(() => {
+      throw new BudgetExhaustedError();
+    });
+
+    const refused = await fork(name, { forkRequestId, handoff: "Continue." });
+
+    expect(refused.status).toBe(409);
+    await expect(refused.json()).resolves.toEqual({
+      error:
+        "Session cost limit reached. The session owner must raise or remove the limit to continue.",
+      code: "BUDGET_EXHAUSTED",
+    });
+    const refusedRow = await env.DB.prepare(
+      "SELECT id, status, status_revision FROM sessions WHERE forked_from_session_id = ? AND fork_request_id = ?"
+    )
+      .bind(name, forkRequestId)
+      .first<{ id: string; status: string; status_revision: number }>();
+    expect(refusedRow).toMatchObject({ status: "failed", status_revision: 0 });
+
+    const retry = await fork(name, { forkRequestId, handoff: "Continue." });
+
+    expect(retry.status).toBe(201);
+    const { sessionId, created } = await retry.json<ForkSessionResponse>();
+    expect(created).toBe(true);
+    expect(sessionId).not.toBe(refusedRow?.id);
+    const forkStub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+    expect(await queryDO(forkStub, "SELECT content FROM messages")).toEqual([
+      { content: "Continue." },
+    ]);
+    await waitForSandboxStatus(forkStub, "failed");
   });
 
   it("retries a fork that failed before its runtime claimed it", async () => {
