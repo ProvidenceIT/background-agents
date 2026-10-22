@@ -222,7 +222,7 @@ class TestAuthHome:
         ]
         h = Harness(
             tmp_path,
-            turns=[refused, [_result(0.1)]],
+            turns=[refused, [_result(0.1)], [_result(0.1)]],
             environ={"SF_AUTH_HOME": str(home), "SF_AUTH_HOME_PROVIDERS": "anthropic"},
         )
         await h.harness.open()
@@ -244,6 +244,11 @@ class TestAuthHome:
         assert second == TurnOutcome.ok(message_cost_usd=0.1)
         assert len(h.clients) == 2
         assert h.clients[1].options["resume"] == h.harness.session_id
+        assert h.harness.subscription_slot == "claude-2"
+
+        _, third = await _run(h.harness, HarnessPrompt(message_id="m3", text="And then"))
+        assert third.success is True
+        assert len(h.clients) == 2
         assert h.harness.subscription_slot == "claude-2"
 
     @pytest.mark.asyncio
