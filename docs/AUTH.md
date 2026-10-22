@@ -268,6 +268,15 @@ and teamless sessions use `workspace`. `team` visibility requires a team. Agent-
 a team-owned session require the active prompt author to still be a team member and fail with
 `not_member` otherwise; they never borrow the parent owner's membership.
 
+**Forks.** `POST /sessions/:id/fork` needs `read` and `collaborate` on the source session plus
+`sessions.create`; `GET /sessions/:id/fork/handoff` (the editable first-prompt draft) needs only
+`read`. A fork is a new private session owned by the caller, with no team and no copied
+collaborators. It goes through the same target authorization, provider auth resolution and admission
+as `POST /sessions`, on the source's repositories. It is not a child: `parent_session_id` stays
+null, so forks never count toward child quotas or spawn depth. `forkRequestId` makes the call
+idempotent per source: a retry by the same person returns the same fork with `created: false`;
+another person's retry with that id gets 409 `fork_request_conflict`.
+
 **Settings > Teams > Require a team for new sessions** (`requireTeamOnCreate`, off by default)
 requires a team for new sessions, environments, and automations, including bot-created sessions.
 Requests without one fail with `team_required`. Existing workspace-owned resources are unaffected,

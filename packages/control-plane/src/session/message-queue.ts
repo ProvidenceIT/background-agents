@@ -643,6 +643,7 @@ export class SessionMessageQueue {
       this.log.debug("processMessageQueue: prompt claim lost", { message_id: message.id });
       return;
     }
+    this.repository.setLastTurnLimit(null);
 
     const sent = this.wsManager.send(sandboxWs, command);
 

@@ -108,6 +108,8 @@ export class SessionSnapshotReader {
       reasoningEffort: session.reasoning_effort ?? undefined,
       isProcessing: this.getIsProcessing(),
       parentSessionId: session.parent_session_id,
+      forkedFromSessionId: this.deps.sessionCoreRepository.getForkedFromSessionId(),
+      lastTurnLimit: this.deps.sessionCoreRepository.getLastTurnLimit(),
       totalCost: session.total_cost ?? 0,
       maxSessionCostUsd: session.max_cost_usd,
       budgetExhausted: session.budget_exhausted === 1,

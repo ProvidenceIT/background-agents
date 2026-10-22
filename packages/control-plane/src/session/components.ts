@@ -720,7 +720,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     (title) => {
       titleService.applySessionTitleUpdate(title, { onlyIfUnset: true });
     },
-    recordSettledTurn
+    recordSettledTurn,
+    (limit) => sessionCoreRepository.setLastTurnLimit(limit)
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(
     sessionCoreRepository,

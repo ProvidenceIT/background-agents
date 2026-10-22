@@ -21,6 +21,7 @@ import type { SessionModelProviderAuthInput } from "../model-provider-accounts/p
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import type { SessionExternalRef } from "./external-ref";
+import type { SessionForkOrigin } from "../db/session-index";
 
 const logger = createLogger("session-init");
 
@@ -105,6 +106,8 @@ export interface SessionInitInput {
   authHomeSelection?: AuthHomeSelection | null;
   /** The calling service's idempotency key for this create, stored on the session row. */
   externalRef?: SessionExternalRef | null;
+  /** Set only for a fork: its source and the caller's idempotency key. */
+  fork?: SessionForkOrigin | null;
 }
 
 /**
@@ -228,6 +231,7 @@ export async function initializeSession(
     authHomeId: input.authHomeId ?? null,
     authHomeSelection: input.authHomeSelection ?? null,
     externalRef: input.externalRef ?? null,
+    fork: input.fork ?? null,
   });
 
   // Step 2: runtime init
@@ -264,6 +268,7 @@ export async function initializeSession(
           parentSessionId: input.parentSessionId,
           spawnSource: input.spawnSource,
           spawnDepth: input.spawnDepth,
+          forkedFromSessionId: input.fork?.sourceSessionId ?? null,
         }),
       }
     );
