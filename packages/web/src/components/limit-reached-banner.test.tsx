@@ -92,6 +92,30 @@ describe("LimitReachedBanner", () => {
     expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
   });
 
+  it("keeps Continue disabled while the sent prompt waits in the queue", async () => {
+    const onContinue = vi.fn(async () => ({ ok: true as const }));
+    const { rerender } = render(
+      <LimitReachedBanner limit={LIMIT} isProcessing={false} onContinue={onContinue} />
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    });
+    rerender(
+      <LimitReachedBanner
+        limit={LIMIT}
+        isProcessing={false}
+        onContinue={onContinue}
+        hasQueuedPrompt
+      />
+    );
+
+    const button = screen.getByRole("button", { name: "Queued" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
   it("opens the fork dialog from Fork…", () => {
     const onFork = vi.fn();
     render(<LimitReachedBanner limit={LIMIT} isProcessing={false} onFork={onFork} />);

@@ -546,6 +546,7 @@ function SessionContent({
           onContinue={canContinueAfterLimit ? continueAfterLimit : undefined}
           onFork={onFork}
           isProcessing={isProcessing}
+          hasQueuedPrompt={promptQueue.some((item) => item.status === "pending")}
         />
       )}
 

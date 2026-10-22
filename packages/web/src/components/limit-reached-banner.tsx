@@ -16,6 +16,11 @@ interface LimitReachedBannerProps {
   /** Opens the fork dialog; leave unset when the viewer cannot fork. */
   onFork?: () => void;
   isProcessing: boolean;
+  /**
+   * A prompt waits in the queue for the sandbox; it clears the limit once it
+   * runs, so another Continue would only queue a duplicate.
+   */
+  hasQueuedPrompt?: boolean;
 }
 
 export function LimitReachedBanner({ limit, ...props }: LimitReachedBannerProps) {
@@ -52,6 +57,7 @@ function LimitBanner({
   onContinue,
   onFork,
   isProcessing,
+  hasQueuedPrompt = false,
 }: LimitReachedBannerProps & { limit: TurnLimit }) {
   const nowMs = useNowMs(limit.resetsAtMs);
   const [continuing, setContinuing] = useState(false);
@@ -85,10 +91,10 @@ function LimitBanner({
         <button
           type="button"
           className="rounded-sm border border-border bg-background px-2.5 py-1 text-sm font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={!onContinue || isProcessing || continuing}
+          disabled={!onContinue || isProcessing || continuing || hasQueuedPrompt}
           onClick={() => void handleContinue()}
         >
-          {continuing ? "Sending…" : "Continue"}
+          {continuing ? "Sending…" : hasQueuedPrompt ? "Queued" : "Continue"}
         </button>
         <button
           type="button"
