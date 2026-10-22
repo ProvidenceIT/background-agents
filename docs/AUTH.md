@@ -295,8 +295,10 @@ may still collaborate and enqueues the prompt as them through the normal turn ad
 quota, budget). A refusal there drops it; any other failure (authorization that cannot be read, a
 database error, a sandbox recovery hold) tries again a minute later, up to 30 times. When it does
 not run (refused, the requester lost access, retries spent), the snapshot's
-`scheduledContinueFailure` says why until the session moves on. Any other prompt, a new turn result,
-archiving or cancelling drops the schedule.
+`scheduledContinueFailure` says why until the session moves on. Every viewer sees it, so a refusal
+is kept as a code (`usage_quota_exceeded`, `budget_exhausted`, ...), never the refusal's message,
+which can describe the requester's own quota. Any other prompt, a new turn result, archiving or
+cancelling drops the schedule.
 
 **Settings > Teams > Require a team for new sessions** (`requireTeamOnCreate`, off by default)
 requires a team for new sessions, environments, and automations, including bot-created sessions.
