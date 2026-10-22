@@ -25,7 +25,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from .base import TurnOutcome
+from .base import SubscriptionLimit, TurnOutcome
 from .claude_tools import OI_TOOL_SERVER_NAME
 
 if TYPE_CHECKING:
@@ -92,6 +92,8 @@ class ClaudeTurnState:
     step_id: str | None = None
     # Skip a session-injected turn until its result, not the prompt's result.
     injected: bool = False
+    # The subscription window that refused this turn, if one did.
+    limit: SubscriptionLimit | None = None
 
     def turn_text(self) -> str:
         return "\n\n".join(entry.text for entry in self.texts if entry.text)
@@ -342,6 +344,8 @@ class ClaudeTranslator:
                             parent_tool_use_id=message.parent_tool_use_id,
                         )
                     )
+            if message.error == "rate_limit" and state.limit is None:
+                state.limit = SubscriptionLimit.of("unknown")
             if message.error:
                 events.extend(
                     self._error_events(
@@ -381,6 +385,8 @@ class ClaudeTranslator:
 
         if isinstance(message, RateLimitEvent):
             info = message.rate_limit_info
+            if info.status == "rejected":
+                state.limit = SubscriptionLimit.of(info.rate_limit_type, info.resets_at)
             if info.status in ("allowed_warning", "rejected"):
                 detail = f"Anthropic rate limit {info.status}"
                 if info.rate_limit_type:
@@ -495,7 +501,9 @@ class ClaudeTranslator:
                             {"type": "error", "error": str(detail), "messageId": state.message_id},
                         )
                     )
-                translation.outcome = TurnOutcome.failed(str(detail), message_cost_usd=message_cost)
+                translation.outcome = TurnOutcome.failed(
+                    str(detail), message_cost_usd=message_cost, limit=state.limit
+                )
             else:
                 translation.outcome = TurnOutcome.ok(message_cost_usd=message_cost)
             return translation
