@@ -211,8 +211,11 @@ function SessionContent({
     modelAvailability.status === "available";
   const continueAfterLimit = useContinueAfterLimit(sendPrompt, selectedModel, reasoningEffort);
   const continueAtReset = useContinueAtReset(sessionId, applyScheduledContinue);
+  // A sandbox hold may lift before the reset and is retried, but a reached cost limit refuses it.
   const canScheduleContinue =
-    capabilities.collaborate && isSessionPromptable(sessionState?.status ?? DEFAULT_SESSION_STATUS);
+    capabilities.collaborate &&
+    isSessionPromptable(sessionState?.status ?? DEFAULT_SESSION_STATUS) &&
+    !sessionState?.budgetExhausted;
   const [cancellingPromptIds, setCancellingPromptIds] = useState<ReadonlySet<string>>(new Set());
   const cancellingPromptIdsRef = useRef(new Set<string>());
   const handleRemoveQueuedPrompt = useCallback(

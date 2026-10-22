@@ -534,6 +534,19 @@ it("cancels a scheduled continue from the banner", async () => {
   expect(applyScheduledContinue).toHaveBeenCalledWith(null);
 });
 
+it("offers no scheduled continue once the session cost limit is reached", () => {
+  limitedSocketResettingLater();
+  mocks.socket.mockReturnValue({
+    ...mocks.socket(),
+    sessionState: { ...mocks.socket().sessionState, budgetExhausted: true },
+  });
+  render(<SessionPage />);
+
+  expect(screen.getByRole("region", { name: "Subscription limit reached" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "Continue when it resets" })).toBeNull();
+});
+
 it("gives a viewer without collaborate no way to schedule or cancel", () => {
   const { resetsAtMs } = limitedSocketResettingLater();
   const viewer = {
