@@ -523,9 +523,7 @@ it("cancels a scheduled continue from the banner", async () => {
     /saved\. Continues automatically at \d{2}:\d{2}\./
   );
   expect(screen.queryByRole("button", { name: "Continue when it resets" })).toBeNull();
-  await userEvent
-    .setup()
-    .click(screen.getByRole("button", { name: "Cancel the scheduled continue" }));
+  await userEvent.setup().click(screen.getByRole("button", { name: "Cancel auto-continue" }));
 
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/sessions/session-1/continue-at-reset",
@@ -570,5 +568,5 @@ it("gives a viewer without collaborate no way to schedule or cancel", () => {
   expect(screen.getByRole("region", { name: "Subscription limit reached" })).toHaveTextContent(
     /Continues automatically at/
   );
-  expect(screen.queryByRole("button", { name: "Cancel the scheduled continue" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Cancel auto-continue" })).toBeNull();
 });

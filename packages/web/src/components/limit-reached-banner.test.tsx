@@ -187,8 +187,8 @@ describe("LimitReachedBanner", () => {
         "Claude subscription limit reached (five-hour window, slot claude-5). Resets at 09:00 (in 4 min). The conversation and workspace are saved. Continues automatically at 09:01."
       );
       expect(screen.queryByRole("button", { name: "Continue when it resets" })).toBeNull();
-      const cancel = screen.getByRole("button", { name: "Cancel the scheduled continue" });
-      expect(cancel).toHaveTextContent("Cancel");
+      const cancel = screen.getByRole("button", { name: "Cancel auto-continue" });
+      expect(cancel).toHaveTextContent("Cancel auto-continue");
 
       await act(async () => {
         fireEvent.click(cancel);
@@ -229,7 +229,7 @@ describe("LimitReachedBanner", () => {
         />
       );
       expect(screen.getByRole("region")).toHaveTextContent("Continues automatically at 09:01.");
-      expect(screen.queryByRole("button", { name: "Cancel the scheduled continue" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Cancel auto-continue" })).toBeNull();
     });
 
     it("renders the scheduled clock only in the browser", () => {
@@ -280,7 +280,7 @@ describe("LimitReachedBanner", () => {
       fireEvent.click(button);
       await act(async () => settle());
 
-      expect(screen.getByRole("button", { name: "Cancel the scheduled continue" })).toBe(button);
+      expect(screen.getByRole("button", { name: "Cancel auto-continue" })).toBe(button);
       expect(button).not.toHaveAttribute("aria-disabled", "true");
       expect(document.activeElement).toBe(button);
 
@@ -321,7 +321,7 @@ describe("LimitReachedBanner", () => {
       expect(notice).toHaveTextContent("Continues automatically at 09:01.");
 
       await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Cancel the scheduled continue" }));
+        fireEvent.click(screen.getByRole("button", { name: "Cancel auto-continue" }));
       });
       expect(notice).toHaveTextContent("The scheduled continue was cancelled.");
 
@@ -335,7 +335,7 @@ describe("LimitReachedBanner", () => {
     it("moves focus to Continue when a cancel after the reset removes its button", async () => {
       vi.setSystemTime(Date.UTC(2026, 9, 22, 9, 0, 30));
       render(<CancellableHost onContinue={ok} />);
-      const cancel = screen.getByRole("button", { name: "Cancel the scheduled continue" });
+      const cancel = screen.getByRole("button", { name: "Cancel auto-continue" });
       cancel.focus();
 
       await act(async () => {
@@ -353,7 +353,7 @@ describe("LimitReachedBanner", () => {
     it("moves focus to the banner when Continue cannot take it", async () => {
       vi.setSystemTime(Date.UTC(2026, 9, 22, 9, 0, 30));
       render(<CancellableHost />);
-      const cancel = screen.getByRole("button", { name: "Cancel the scheduled continue" });
+      const cancel = screen.getByRole("button", { name: "Cancel auto-continue" });
       cancel.focus();
 
       await act(async () => {
@@ -446,7 +446,7 @@ describe("LimitReachedBanner", () => {
         />
       );
       await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Cancel the scheduled continue" }));
+        fireEvent.click(screen.getByRole("button", { name: "Cancel auto-continue" }));
       });
       expect(screen.getByRole("alert")).toHaveTextContent(
         "The scheduled continue could not be cancelled."

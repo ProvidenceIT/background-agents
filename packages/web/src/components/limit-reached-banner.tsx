@@ -183,15 +183,12 @@ function LimitBanner({
             type="button"
             className={`${BUTTON_CLASS} aria-disabled:cursor-not-allowed aria-disabled:opacity-60`}
             aria-disabled={pending !== null}
-            aria-label={
-              continueAtReset.action === "cancel" ? "Cancel the scheduled continue" : undefined
-            }
             onClick={() => void run(continueAtReset.action, continueAtReset.handler)}
           >
             {continueAtReset.action === "cancel"
               ? pending === "cancel"
                 ? "Cancelling…"
-                : "Cancel"
+                : "Cancel auto-continue"
               : pending === "schedule"
                 ? "Scheduling…"
                 : "Continue when it resets"}
