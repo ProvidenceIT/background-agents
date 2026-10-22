@@ -77,6 +77,8 @@ def test_smoke_test_preserves_failures(monkeypatch):
         ("ttyd", "ttyd version 1.7.7", "1.7.7"),
         ("ttyd", "ttyd version 1.7.7-40e79c7", "1.7.7"),
         ("google-chrome", "Google Chrome for Testing 152.0.7977.82", "152.0.7977.82"),
+        ("grok", "grok 1.0.52 (0920c8169e27) [stable]", "1.0.52"),
+        ("agy", "1.4.5", "1.4.5"),
     ],
 )
 def test_records_normalized_observed_tool_versions(command, output, expected):
