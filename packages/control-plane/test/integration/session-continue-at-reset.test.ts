@@ -137,6 +137,22 @@ describe("continue when the limit resets", () => {
     expect(await snapshotScheduledAt(name)).toBeNull();
   });
 
+  it("refuses while the session cost limit is reached", async () => {
+    const { name, stub } = await seedLimitedSession(Date.now() + 3_600_000);
+    await queryDO(stub, "UPDATE session SET budget_exhausted = 1");
+
+    const response = await continueAtReset(name, "POST");
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error:
+        "Session cost limit reached. The session owner must raise or remove the limit to continue.",
+      code: "BUDGET_EXHAUSTED",
+    });
+    expect(await storedSchedule(stub)).toBeNull();
+    expect(await snapshotScheduledAt(name)).toBeNull();
+  });
+
   it("rejects a body", async () => {
     const { name } = await seedLimitedSession(Date.now() + 3_600_000);
 

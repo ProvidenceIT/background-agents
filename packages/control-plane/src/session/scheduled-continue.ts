@@ -50,7 +50,9 @@ function lastingRefusal(error: unknown): ScheduledContinueRefusal | null {
 export type ScheduleContinueOutcome =
   | { kind: "scheduled"; atMs: number }
   /** The last turn hit no limit, or its reset is unknown or already past. */
-  | { kind: "no_future_reset" };
+  | { kind: "no_future_reset" }
+  /** The session's cost limit is reached, so the continue would be refused when due. */
+  | { kind: "budget_exhausted" };
 
 export interface ScheduledContinueDeps {
   repository: Pick<
@@ -100,6 +102,9 @@ export class SessionScheduledContinue {
     const now = this.deps.now();
     const resetsAtMs = this.deps.repository.getLastTurnLimit()?.resetsAtMs ?? null;
     if (resetsAtMs === null || resetsAtMs <= now) return { kind: "no_future_reset" };
+    if (this.deps.repository.getSession()?.budget_exhausted === 1) {
+      return { kind: "budget_exhausted" };
+    }
     const schedule: ScheduledContinue = {
       atMs: resetsAtMs + CONTINUE_AT_RESET_BUFFER_MS,
       requestedByUserId: requester.requestedByUserId,

@@ -38,6 +38,7 @@ function setup(
   overrides: {
     limit?: TurnLimit | null;
     status?: string;
+    budgetExhausted?: boolean;
     queued?: number;
     authorization?: "allowed" | "denied" | "unavailable";
     enqueue?: (request: EnqueuePromptRequest) => Promise<unknown>;
@@ -49,6 +50,7 @@ function setup(
     failure: null as ScheduledContinueFailure | null,
     limit: overrides.limit === undefined ? LIMIT : overrides.limit,
     status: overrides.status ?? "active",
+    budgetExhausted: overrides.budgetExhausted ?? false,
     queued: overrides.queued ?? 0,
   };
   const broadcasts: ServerMessage[] = [];
@@ -66,7 +68,8 @@ function setup(
         state.failure = failure;
       },
       getLastTurnLimit: () => state.limit,
-      getSession: () => ({ status: state.status }) as never,
+      getSession: () =>
+        ({ status: state.status, budget_exhausted: state.budgetExhausted ? 1 : 0 }) as never,
     },
     messageRepository: { getPendingOrProcessingCount: () => state.queued },
     alarmScheduler: {
@@ -137,6 +140,15 @@ describe("SessionScheduledContinue", () => {
     const { scheduled, state, armed, broadcasts } = setup({ limit: limit as TurnLimit | null });
 
     await expect(scheduled.schedule(requester)).resolves.toEqual({ kind: "no_future_reset" });
+    expect(state.stored).toBeNull();
+    expect(armed).toEqual([]);
+    expect(broadcasts).toEqual([]);
+  });
+
+  it("refuses while the session cost limit is reached", async () => {
+    const { scheduled, state, armed, broadcasts } = setup({ budgetExhausted: true });
+
+    await expect(scheduled.schedule(requester)).resolves.toEqual({ kind: "budget_exhausted" });
     expect(state.stored).toBeNull();
     expect(armed).toEqual([]);
     expect(broadcasts).toEqual([]);
