@@ -51,7 +51,7 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(254);
+    expect(routes).toHaveLength(255);
 
     const paths = routes.map((route) => route.path);
     expect(new Set(paths).size).toBe(192);
@@ -686,6 +686,19 @@ describe("route policy table", () => {
           { kind: "permission", permission: "sessions.create" },
         ],
         service: { kind: "actor" },
+      },
+    });
+    expect(routeFor("GET", "/sessions/source/fork/subscription-slots")).toMatchObject({
+      authentication: { kind: "user-or-service" },
+      supportedScmProviders: ["github"],
+      cacheControl: "private, no-store",
+      authorization: {
+        kind: "active-user",
+        allOf: [
+          { kind: "session", action: "read" },
+          { kind: "session", action: "collaborate" },
+          { kind: "permission", permission: "sessions.create" },
+        ],
       },
     });
     expect(routeFor("GET", "/sessions/source/fork/handoff")).toMatchObject({
