@@ -105,6 +105,11 @@ function LimitBanner({
     (scheduledContinueFailure ? describeScheduledContinueFailure(scheduledContinueFailure) : null);
   const resetAhead = nowMs !== null && limit.resetsAtMs !== null && limit.resetsAtMs > nowMs;
 
+  const continueAtReset = scheduled
+    ? onCancelScheduledContinue && { action: "cancel" as const, handler: onCancelScheduledContinue }
+    : onScheduleContinue &&
+      resetAhead && { action: "schedule" as const, handler: onScheduleContinue };
+
   const run = async (action: BannerAction, handler?: () => Promise<ContinueAfterLimitResult>) => {
     if (!handler || pending) return;
     setPending(action);
@@ -141,29 +146,27 @@ function LimitBanner({
         >
           {pending === "continue" ? "Sending…" : hasQueuedPrompt ? "Queued" : "Continue"}
         </button>
-        {scheduled
-          ? onCancelScheduledContinue && (
-              <button
-                type="button"
-                className={BUTTON_CLASS}
-                disabled={pending !== null}
-                aria-label="Cancel the scheduled continue"
-                onClick={() => void run("cancel", onCancelScheduledContinue)}
-              >
-                {pending === "cancel" ? "Cancelling…" : "Cancel"}
-              </button>
-            )
-          : onScheduleContinue &&
-            resetAhead && (
-              <button
-                type="button"
-                className={BUTTON_CLASS}
-                disabled={pending !== null}
-                onClick={() => void run("schedule", onScheduleContinue)}
-              >
-                {pending === "schedule" ? "Scheduling…" : "Continue when it resets"}
-              </button>
-            )}
+        {continueAtReset && (
+          // One element for Schedule and Cancel, never disabled while it works, so keyboard
+          // focus stays on it from the click to the answer.
+          <button
+            type="button"
+            className={`${BUTTON_CLASS} aria-disabled:cursor-not-allowed aria-disabled:opacity-60`}
+            aria-disabled={pending !== null}
+            aria-label={
+              continueAtReset.action === "cancel" ? "Cancel the scheduled continue" : undefined
+            }
+            onClick={() => void run(continueAtReset.action, continueAtReset.handler)}
+          >
+            {continueAtReset.action === "cancel"
+              ? pending === "cancel"
+                ? "Cancelling…"
+                : "Cancel"
+              : pending === "schedule"
+                ? "Scheduling…"
+                : "Continue when it resets"}
+          </button>
+        )}
         <button
           type="button"
           className={BUTTON_CLASS}

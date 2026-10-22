@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TurnLimit } from "@open-inspect/shared/types/sandbox-events";
 import { LIMIT_COUNTDOWN_TICK_MS, LimitReachedBanner } from "./limit-reached-banner";
@@ -242,6 +243,56 @@ describe("LimitReachedBanner", () => {
       );
       expect(html).not.toContain("Continues automatically");
       expect(html).not.toContain("Continue when it resets");
+    });
+
+    it("keeps keyboard focus on one button that stays focusable while it works", async () => {
+      let settle: () => void = () => {};
+      function Host() {
+        const [atMs, setAtMs] = useState<number | null>(null);
+        const answer = (next: number | null) => () =>
+          new Promise<{ ok: true }>((resolve) => {
+            settle = () => {
+              setAtMs(next);
+              resolve({ ok: true });
+            };
+          });
+        return (
+          <LimitReachedBanner
+            limit={LIMIT}
+            isProcessing={false}
+            scheduledContinueAtMs={atMs}
+            onScheduleContinue={answer(SCHEDULED_AT_MS)}
+            onCancelScheduledContinue={answer(null)}
+          />
+        );
+      }
+      render(<Host />);
+      const button = screen.getByRole("button", { name: "Continue when it resets" });
+      button.focus();
+
+      act(() => {
+        fireEvent.click(button);
+      });
+      // A disabled button drops focus to the page in browsers (HTML focus fixup).
+      expect(button).toHaveTextContent("Scheduling…");
+      expect(button).not.toBeDisabled();
+      expect(button).toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(button);
+      await act(async () => settle());
+
+      expect(screen.getByRole("button", { name: "Cancel the scheduled continue" })).toBe(button);
+      expect(button).not.toHaveAttribute("aria-disabled", "true");
+      expect(document.activeElement).toBe(button);
+
+      act(() => {
+        fireEvent.click(button);
+      });
+      expect(button).toHaveTextContent("Cancelling…");
+      expect(button).not.toBeDisabled();
+      await act(async () => settle());
+
+      expect(screen.getByRole("button", { name: "Continue when it resets" })).toBe(button);
+      expect(document.activeElement).toBe(button);
     });
 
     it("announces the schedule and its cancel from a region mounted with the banner", () => {
