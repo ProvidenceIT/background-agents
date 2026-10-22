@@ -295,6 +295,74 @@ describe("LimitReachedBanner", () => {
       expect(document.activeElement).toBe(button);
     });
 
+    function CancellableHost({ onContinue }: { onContinue?: () => Promise<{ ok: true }> }) {
+      const [atMs, setAtMs] = useState<number | null>(SCHEDULED_AT_MS);
+      return (
+        <LimitReachedBanner
+          limit={LIMIT}
+          isProcessing={false}
+          onContinue={onContinue}
+          scheduledContinueAtMs={atMs}
+          onScheduleContinue={async () => {
+            setAtMs(SCHEDULED_AT_MS);
+            return { ok: true };
+          }}
+          onCancelScheduledContinue={async () => {
+            setAtMs(null);
+            return { ok: true };
+          }}
+        />
+      );
+    }
+
+    it("announces a cancel the viewer made until they schedule again", async () => {
+      render(<CancellableHost />);
+      const [, notice] = screen.getAllByRole("status");
+      expect(notice).toHaveTextContent("Continues automatically at 09:01.");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Cancel the scheduled continue" }));
+      });
+      expect(notice).toHaveTextContent("The scheduled continue was cancelled.");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Continue when it resets" }));
+      });
+      expect(notice).toHaveTextContent("Continues automatically at 09:01.");
+      expect(notice).not.toHaveTextContent("cancelled");
+    });
+
+    it("moves focus to Continue when a cancel after the reset removes its button", async () => {
+      vi.setSystemTime(Date.UTC(2026, 9, 22, 9, 0, 30));
+      render(<CancellableHost onContinue={ok} />);
+      const cancel = screen.getByRole("button", { name: "Cancel the scheduled continue" });
+      cancel.focus();
+
+      await act(async () => {
+        fireEvent.click(cancel);
+      });
+
+      expect(cancel).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Continue when it resets" })).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Continue" }));
+      expect(screen.getAllByRole("status")[1]).toHaveTextContent(
+        "The scheduled continue was cancelled."
+      );
+    });
+
+    it("moves focus to the banner when Continue cannot take it", async () => {
+      vi.setSystemTime(Date.UTC(2026, 9, 22, 9, 0, 30));
+      render(<CancellableHost />);
+      const cancel = screen.getByRole("button", { name: "Cancel the scheduled continue" });
+      cancel.focus();
+
+      await act(async () => {
+        fireEvent.click(cancel);
+      });
+
+      expect(document.activeElement).toBe(screen.getByRole("region"));
+    });
+
     it("announces the schedule and its cancel from a region mounted with the banner", () => {
       const { rerender } = render(
         <LimitReachedBanner limit={LIMIT} isProcessing={false} onScheduleContinue={ok} />

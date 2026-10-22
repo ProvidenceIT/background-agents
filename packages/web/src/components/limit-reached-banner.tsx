@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { TurnLimit } from "@open-inspect/shared/types/sandbox-events";
 import type { ScheduledContinueFailure } from "@open-inspect/shared/types/server-messages";
 import {
@@ -19,6 +19,8 @@ const BUTTON_CLASS =
   "rounded-sm border border-border bg-background px-2.5 py-1 text-sm font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60";
 
 type BannerAction = "continue" | "schedule" | "cancel";
+
+const CANCELLED_NOTICE = "The scheduled continue was cancelled.";
 
 const ACTION_FAILURES: Record<BannerAction, string> = {
   continue: "The continue prompt could not be sent.",
@@ -94,6 +96,22 @@ function LimitBanner({
   const nowMs = useNowMs(limit.resetsAtMs);
   const [pending, setPending] = useState<BannerAction | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Live regions do not announce removed text, so the viewer's own cancel says so in words.
+  const [cancelled, setCancelled] = useState(false);
+  const [seenScheduledAtMs, setSeenScheduledAtMs] = useState(scheduledContinueAtMs);
+  if (scheduledContinueAtMs !== seenScheduledAtMs) {
+    setSeenScheduledAtMs(scheduledContinueAtMs);
+    if (scheduledContinueAtMs !== null) setCancelled(false);
+  }
+  const [refocus, setRefocus] = useState(false);
+  const sectionRef = useRef<HTMLElement>(null);
+  const continueRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!refocus || pending !== null) return;
+    setRefocus(false);
+    const target = continueRef.current?.disabled ? sectionRef.current : continueRef.current;
+    target?.focus();
+  }, [refocus, pending]);
   const summary = turnLimitSummary(limit);
   const reset = nowMs === null ? null : describeTurnLimit(limit, nowMs).reset;
   const scheduled =
@@ -102,7 +120,10 @@ function LimitBanner({
       : describeScheduledContinue(scheduledContinueAtMs, nowMs);
   const continueNotice =
     scheduled ??
-    (scheduledContinueFailure ? describeScheduledContinueFailure(scheduledContinueFailure) : null);
+    (scheduledContinueFailure
+      ? describeScheduledContinueFailure(scheduledContinueFailure)
+      : null) ??
+    (cancelled ? CANCELLED_NOTICE : null);
   const resetAhead = nowMs !== null && limit.resetsAtMs !== null && limit.resetsAtMs > nowMs;
 
   const continueAtReset = scheduled
@@ -116,7 +137,13 @@ function LimitBanner({
     setActionError(null);
     try {
       const result = await handler();
-      if (!result.ok) setActionError(result.message);
+      if (!result.ok) {
+        setActionError(result.message);
+      } else if (action === "cancel") {
+        setCancelled(true);
+        // Past the reset nothing replaces Cancel, so focus moves on once the button is gone.
+        if (!resetAhead) setRefocus(true);
+      }
     } catch {
       setActionError(ACTION_FAILURES[action]);
     } finally {
@@ -126,8 +153,10 @@ function LimitBanner({
 
   return (
     <section
+      ref={sectionRef}
+      tabIndex={-1}
       aria-label="Subscription limit reached"
-      className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-warning/40 bg-warning-muted px-4 py-2.5 text-sm text-foreground"
+      className="outline-none flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-warning/40 bg-warning-muted px-4 py-2.5 text-sm text-foreground"
     >
       <p className="min-w-0 flex-1">
         <span className="font-medium">{summary}</span>
@@ -139,6 +168,7 @@ function LimitBanner({
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <button
+          ref={continueRef}
           type="button"
           className={BUTTON_CLASS}
           disabled={!onContinue || isProcessing || pending !== null || hasQueuedPrompt}
