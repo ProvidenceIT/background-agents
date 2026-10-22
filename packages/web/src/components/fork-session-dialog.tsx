@@ -10,16 +10,30 @@ import {
   type ValidModel,
 } from "@open-inspect/shared/models";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
-import type { ForkSessionRequest } from "@open-inspect/shared/types/session-api";
+import type {
+  ForkSessionRequest,
+  ForkSubscriptionSlot,
+} from "@open-inspect/shared/types/session-api";
 import { ModelReasoningSelector } from "@/components/model-reasoning-selector";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import type { ModelPreference } from "@/lib/model-selection";
 import { resolveHarnessModelSelection } from "@/lib/session-harness";
-import { createSessionFork, fetchForkHandoff } from "@/lib/session-fork";
+import {
+  createSessionFork,
+  fetchForkHandoff,
+  fetchForkSubscriptionSlots,
+} from "@/lib/session-fork";
 
 export interface ForkSource {
   id: string;
@@ -104,6 +118,38 @@ function useForkModelSelection(source: ForkSource) {
   };
 }
 
+/** The only harness whose pool slots a fork can pin. */
+const PINNABLE_SLOT_HARNESS: HarnessId = "claude";
+
+/** Select value for "no preference"; the colon keeps it apart from every valid slot name. */
+const AUTOMATIC_SLOT_VALUE = ":automatic";
+
+/** Slots the caller's home offers for the harness; empty until loaded, on failure, or elsewhere. */
+function useForkSubscriptionSlots(sessionId: string, harness: HarnessId) {
+  const [loaded, setLoaded] = useState<{ harness: HarnessId; slots: ForkSubscriptionSlot[] }>({
+    harness,
+    slots: [],
+  });
+  const pinnable = harness === PINNABLE_SLOT_HARNESS;
+
+  useEffect(() => {
+    if (!pinnable) return;
+    let cancelled = false;
+    void fetchForkSubscriptionSlots(sessionId, harness).then((result) => {
+      if (!cancelled) setLoaded({ harness, slots: result.ok ? result.value : [] });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [harness, pinnable, sessionId]);
+
+  return pinnable && loaded.harness === harness ? loaded.slots : [];
+}
+
+function slotLabel({ slot, percentRemaining }: ForkSubscriptionSlot) {
+  return percentRemaining === null ? slot : `${slot} (${percentRemaining}%)`;
+}
+
 function ForkSessionForm({ source, onClose }: { source: ForkSource; onClose: () => void }) {
   const router = useRouter();
   // Reused on retries so a request that reached the server but lost its response replays the
@@ -111,6 +157,10 @@ function ForkSessionForm({ source, onClose }: { source: ForkSource; onClose: () 
   const [forkRequestId] = useState(() => crypto.randomUUID());
   const { draft, text, setText, retry } = useHandoffDraft(source.id);
   const model = useForkModelSelection(source);
+  const slots = useForkSubscriptionSlots(source.id, model.harness);
+  const [chosenSlot, setChosenSlot] = useState<string | null>(null);
+  // A slot chosen for one agent, or one the refreshed list dropped, falls back to automatic.
+  const subscriptionSlot = slots.some((slot) => slot.slot === chosenSlot) ? chosenSlot : null;
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -131,6 +181,7 @@ function ForkSessionForm({ source, onClose }: { source: ForkSource; onClose: () 
         : {}),
       // A blank draft lets the server build its own handoff.
       ...(text.trim() ? { handoff: text } : {}),
+      ...(subscriptionSlot ? { subscriptionSlot } : {}),
     };
     const result = await createSessionFork(source.id, request);
     if (!result.ok) {
@@ -173,6 +224,28 @@ function ForkSessionForm({ source, onClose }: { source: ForkSource; onClose: () 
           disabled={submitting}
         />
       </div>
+      {slots.length > 1 && (
+        <div className="grid gap-1.5">
+          <Label htmlFor="fork-subscription">Subscription</Label>
+          <Select
+            value={subscriptionSlot ?? AUTOMATIC_SLOT_VALUE}
+            onValueChange={(value) => setChosenSlot(value === AUTOMATIC_SLOT_VALUE ? null : value)}
+            disabled={submitting}
+          >
+            <SelectTrigger id="fork-subscription" className="w-full sm:w-72">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={AUTOMATIC_SLOT_VALUE}>Automatic (most headroom)</SelectItem>
+              {slots.map((slot) => (
+                <SelectItem key={slot.slot} value={slot.slot}>
+                  {slotLabel(slot)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
       {model.selection.availability.status === "unavailable" && (
         <p className="text-sm text-destructive">{model.selection.availability.message}</p>
       )}
