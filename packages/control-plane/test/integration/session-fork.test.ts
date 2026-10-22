@@ -5,7 +5,7 @@ import type {
   ForkHandoffResponse,
   ForkSessionResponse,
 } from "@open-inspect/shared/types/session-api";
-import { SessionIndexStore } from "../../src/db/session-index";
+import { SessionForkTakenError, SessionIndexStore } from "../../src/db/session-index";
 import * as repositoryResolution from "../../src/repos/resolve";
 import { FORK_CONSENT_LINE } from "../../src/session/fork-handoff";
 import { cleanD1Tables } from "./cleanup";
@@ -283,6 +283,60 @@ describe("session fork routes", () => {
         .bind(sessionId)
         .first()
     ).toEqual({ user_id: MEMBER, spawn_source: "slack-bot" });
+    await waitForSandboxStatus(env.SESSION.get(env.SESSION.idFromName(sessionId)), "failed");
+  });
+
+  it("lets only one session hold a fork request id", async () => {
+    const origin = { sourceSessionId: "fork-source", forkRequestId: crypto.randomUUID() };
+    const row = (id: string) => ({
+      id,
+      title: "Fix the parser (fork)",
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created" as const,
+      ownerTeamId: null,
+      visibility: "private" as const,
+      userId: MEMBER,
+      createdAt: 1,
+      updatedAt: 1,
+      fork: origin,
+    });
+    await store.create(row("fork-a"));
+
+    const second = store.create(row("fork-b"));
+
+    await expect(second).rejects.toBeInstanceOf(SessionForkTakenError);
+    await expect(second).rejects.toMatchObject({ existingSessionId: "fork-a" });
+    expect(await store.get("fork-b")).toBeNull();
+  });
+
+  it("answers a request that lost the race for its fork id with the winner", async () => {
+    const { name } = await seedSource();
+    const forkRequestId = crypto.randomUUID();
+    const first = await fork(name, { forkRequestId, handoff: "Continue." });
+    expect(first.status).toBe(201);
+    const { sessionId } = await first.json<ForkSessionResponse>();
+    // The second request reads the index before the first one's row lands.
+    vi.spyOn(SessionIndexStore.prototype, "findFork").mockResolvedValueOnce(null);
+
+    const second = await fork(name, { forkRequestId, handoff: "Continue." });
+
+    expect(second.status).toBe(200);
+    await expect(second.json()).resolves.toEqual({
+      sessionId,
+      forkedFromSessionId: name,
+      created: false,
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM sessions WHERE forked_from_session_id = ?"
+      )
+        .bind(name)
+        .first()
+    ).toEqual({ count: 1 });
     await waitForSandboxStatus(env.SESSION.get(env.SESSION.idFromName(sessionId)), "failed");
   });
 
