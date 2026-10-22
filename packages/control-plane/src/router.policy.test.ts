@@ -54,8 +54,8 @@ describe("route policy table", () => {
     expect(routes).toHaveLength(255);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(192);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(254);
+    expect(new Set(paths).size).toBe(193);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(255);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
