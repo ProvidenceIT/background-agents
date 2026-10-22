@@ -9,6 +9,7 @@ import { SessionIndexStore } from "../../src/db/session-index";
 import * as repositoryResolution from "../../src/repos/resolve";
 import { FORK_CONSENT_LINE } from "../../src/session/fork-handoff";
 import { cleanD1Tables } from "./cleanup";
+import { insertIdentity } from "./identity-seed-helpers";
 import {
   initNamedSession,
   queryDO,
@@ -253,6 +254,37 @@ describe("session fork routes", () => {
         { id: sessionId, fork_request_id: forkRequestId },
       ],
     });
+    await waitForSandboxStatus(env.SESSION.get(env.SESSION.idFromName(sessionId)), "failed");
+  });
+
+  it("records a bot's fork as that bot's unattended run", async () => {
+    const { name } = await seedSource();
+    // A web request seeds the member's user row; the Slack identity links to it.
+    await serviceFetch(`${BASE}/sessions/${name}/fork/handoff`, {
+      as: { userId: MEMBER, role: "member" },
+    });
+    await insertIdentity({
+      id: "fork-slack-member",
+      userId: MEMBER,
+      provider: "slack",
+      providerUserId: "U_FORK_MEMBER",
+    });
+    const body = JSON.stringify({ forkRequestId: crypto.randomUUID(), handoff: "Continue." });
+
+    const response = await serviceFetch(`${BASE}/sessions/${name}/fork`, {
+      method: "POST",
+      body,
+      service: "slack-bot",
+      actor: "slack:U_FORK_MEMBER",
+    });
+
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<ForkSessionResponse>();
+    expect(
+      await env.DB.prepare("SELECT user_id, spawn_source FROM sessions WHERE id = ?")
+        .bind(sessionId)
+        .first()
+    ).toEqual({ user_id: MEMBER, spawn_source: "slack-bot" });
     await waitForSandboxStatus(env.SESSION.get(env.SESSION.idFromName(sessionId)), "failed");
   });
 

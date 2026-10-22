@@ -201,7 +201,7 @@ async function handleForkSession(
     body: createBody.data,
     resolvedUserId,
     participantUserId: enforcement.enforced.participantUserId,
-    spawnSource: undefined,
+    spawnSource: enforcement.enforced.spawnSource ?? undefined,
     externalRef: null,
     fork: origin,
   });
