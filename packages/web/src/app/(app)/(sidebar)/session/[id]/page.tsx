@@ -56,6 +56,7 @@ import { useSessionInspectorTab } from "@/hooks/use-session-inspector-tab";
 import { findLatestTerminalMessageId } from "@/lib/session-read-state";
 import { useMarkSessionRead } from "@/hooks/use-mark-session-read";
 import { usePromptInput } from "@/hooks/use-prompt-input";
+import { useContinueAfterLimit } from "@/hooks/use-continue-after-limit";
 import { formatSessionCost } from "@/lib/session-cost";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useSessionSnapshot, useRefreshSessionSnapshot } from "./session-snapshot-provider";
@@ -63,13 +64,9 @@ import { useSessionRename } from "@/hooks/use-session-rename";
 import { SandboxShutdownBanner } from "@/components/sandbox-shutdown-banner";
 import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
 import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
-import {
-  LimitReachedBanner,
-  type ContinueAfterLimitResult,
-} from "@/components/limit-reached-banner";
+import { LimitReachedBanner } from "@/components/limit-reached-banner";
 import { ForkSessionDialog } from "@/components/fork-session-dialog";
 import { ForkedFromLink } from "@/components/forked-from-link";
-import { CONTINUE_AFTER_LIMIT_PROMPT } from "@/lib/turn-limit";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -206,20 +203,7 @@ function SessionContent({
     !sessionState?.budgetExhausted &&
     !sandboxBlockReason &&
     modelAvailability.status === "available";
-  const continueAfterLimit = useCallback(async (): Promise<ContinueAfterLimitResult> => {
-    const result = await sendPrompt(CONTINUE_AFTER_LIMIT_PROMPT, selectedModel, reasoningEffort);
-    if (result.ok) return { ok: true };
-    return {
-      ok: false,
-      message:
-        result.message ??
-        (result.reason === "timeout"
-          ? "Sending the continue prompt timed out."
-          : result.reason === "disconnected"
-            ? "Reconnect before continuing."
-            : "The continue prompt was rejected."),
-    };
-  }, [reasoningEffort, selectedModel, sendPrompt]);
+  const continueAfterLimit = useContinueAfterLimit(sendPrompt, selectedModel, reasoningEffort);
   const [cancellingPromptIds, setCancellingPromptIds] = useState<ReadonlySet<string>>(new Set());
   const cancellingPromptIdsRef = useRef(new Set<string>());
   const handleRemoveQueuedPrompt = useCallback(
