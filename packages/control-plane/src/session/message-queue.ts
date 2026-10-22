@@ -189,7 +189,9 @@ export class SessionMessageQueue {
      * Every turn is admitted through it: the subscription-home gate, the
      * usage quota, and the audit of a turn a home served (ADR 0005).
      */
-    private readonly turns: TurnAdmissionGate = ADMIT_EVERY_TURN
+    private readonly turns: TurnAdmissionGate = ADMIT_EVERY_TURN,
+    /** Any prompt queued or started moves the session on past a scheduled continue. */
+    private readonly clearScheduledContinue: (reason: string) => void = () => {}
   ) {}
 
   async enqueueAutofix(
@@ -644,6 +646,7 @@ export class SessionMessageQueue {
       return;
     }
     this.repository.setLastTurnLimit(null);
+    this.clearScheduledContinue("turn_started");
 
     const sent = this.wsManager.send(sandboxWs, command);
 
@@ -1003,6 +1006,7 @@ export class SessionMessageQueue {
       throw error;
     }
 
+    this.clearScheduledContinue("prompt_enqueued");
     await this.sessionStatus.transition("active");
     this.broadcastPromptQueue();
 

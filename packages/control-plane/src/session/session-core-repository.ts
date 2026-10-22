@@ -19,6 +19,20 @@ const sessionForkRowSchema = z.object({
   last_turn_limit: z.string().nullable(),
 });
 
+/** An opted-in prompt the session enqueues itself once the last turn's limit resets. */
+export const scheduledContinueSchema = z.object({
+  /** When it fires (epoch ms): the reset plus CONTINUE_AT_RESET_BUFFER_MS. */
+  atMs: z.number().int().nonnegative(),
+  /** Canonical user who scheduled it; the prompt is theirs and re-checked when it fires. */
+  requestedByUserId: z.string().min(1),
+  /** Their participant id, the prompt's author. */
+  authorId: z.string().min(1),
+  createdAtMs: z.number().int().nonnegative(),
+});
+export type ScheduledContinue = z.infer<typeof scheduledContinueSchema>;
+
+const scheduledContinueRowSchema = z.object({ scheduled_continue: z.string().nullable() });
+
 /** Data for upserting a session. */
 export interface UpsertSessionData {
   id: string;
@@ -165,6 +179,31 @@ export class SessionCoreRepository {
     this.sql.exec(
       `UPDATE session SET last_turn_limit = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
       limit ? JSON.stringify(limit) : null
+    );
+  }
+
+  /** A stored value that no longer parses reads as nothing scheduled. */
+  getScheduledContinue(): ScheduledContinue | null {
+    const row = this.sql.exec(`SELECT scheduled_continue FROM session LIMIT 1`).toArray()[0];
+    if (row === undefined) return null;
+    const parsed = scheduledContinueRowSchema.safeParse(row);
+    if (!parsed.success) {
+      throw new SessionStorageIntegrityError("Malformed persisted scheduled continue row");
+    }
+    const stored = parsed.data.scheduled_continue;
+    if (!stored) return null;
+    try {
+      const schedule = scheduledContinueSchema.safeParse(JSON.parse(stored));
+      return schedule.success ? schedule.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  setScheduledContinue(schedule: ScheduledContinue | null): void {
+    this.sql.exec(
+      `UPDATE session SET scheduled_continue = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
+      schedule ? JSON.stringify(schedule) : null
     );
   }
 

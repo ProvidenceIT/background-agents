@@ -51,11 +51,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(255);
+    expect(routes).toHaveLength(257);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(193);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(255);
+    expect(new Set(paths).size).toBe(194);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(257);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
@@ -701,6 +701,16 @@ describe("route policy table", () => {
         ],
       },
     });
+    for (const method of ["POST", "DELETE"]) {
+      expect(routeFor(method, "/sessions/source/continue-at-reset")).toMatchObject({
+        authentication: { kind: "user-or-service" },
+        supportedScmProviders: ["github"],
+        authorization: {
+          kind: "active-user",
+          allOf: [{ kind: "session", action: "collaborate" }],
+        },
+      });
+    }
     expect(routeFor("GET", "/sessions/source/fork/handoff")).toMatchObject({
       authentication: { kind: "user-or-service" },
       supportedScmProviders: "all",
