@@ -1,9 +1,9 @@
 /**
  * SessionStatusService — owns the session's `status` and its projections.
  *
- * Every status change fans out to three places: the connected clients
- * (broadcast), the D1 session index (status + terminal metrics mirror), and
- * the parent session's Durable Object (child rollup). This service is the
+ * Every status change fans out to the connected clients (broadcast), the D1
+ * session index (status + terminal metrics mirror), the parent session's
+ * Durable Object (child rollup) and the session notice outbox. This service is the
  * single place those projections are kept consistent; every public method is
  * a transition on that one noun.
  */
@@ -21,6 +21,7 @@ import type { ArtifactRepository } from "./artifact-repository";
 import type { UsageRepository } from "./usage-repository";
 import type { SessionMessenger } from "./messenger";
 import type { BackgroundTasks } from "../platform-ports";
+import type { SessionNoticeRecorder } from "../notifications/recorder";
 import { isSessionPromptable, isTurnSettled } from "@open-inspect/shared/types/session-activity";
 
 /** The index projections this service keeps consistent with the session row. */
@@ -45,7 +46,9 @@ export class SessionStatusService {
     /** Reaches the parent session's runtime for the child rollup. */
     private readonly sessions: SessionRuntimeClient,
     /** Told once the session is archived or cancelled, after the local write. */
-    private readonly onClosed: () => void = () => {}
+    private readonly onClosed: () => void = () => {},
+    /** Told of every status change; it decides which settle the owner hears about. */
+    private readonly notices: Pick<SessionNoticeRecorder, "settled"> | null = null
   ) {}
 
   /**
@@ -230,6 +233,9 @@ export class SessionStatusService {
 
     // Notify parent session (if this is a child) so its UI can refresh
     this.notifyParentOfStatusChange(session, publicSessionId, status);
+
+    // The owner's notice, once per revision (src/notifications).
+    this.notices?.settled(session, publicSessionId, status, revision);
   }
 
   /**

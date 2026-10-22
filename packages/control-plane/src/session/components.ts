@@ -23,7 +23,10 @@
 
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
-import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
+import {
+  sandboxPromptBlockReason,
+  type SandboxShutdownState,
+} from "@open-inspect/shared/types/sandbox-shutdown";
 import { generateId, hashToken } from "../auth/crypto";
 import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
@@ -115,6 +118,8 @@ import { SessionMessageQueue } from "./message-queue";
 import { SessionBudgetService } from "./budget-service";
 import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import { MessageFailureService } from "./message-failure-service";
+import { createNoticeChannelRegistry } from "../notifications/channels";
+import { SessionNoticeRecorder, recordSessionNotices } from "../notifications/recorder";
 import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
 import { SandboxShutdownRepository } from "./sandbox-shutdown-repository";
 import { SandboxArtifactEventHandler } from "./sandbox-events/artifact.handler";
@@ -489,7 +494,25 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     // Parent notifications have no request of their own: each is one hop
     // under this child's trace, with its own request id.
     createSessionRuntimeClientForTrace(env, durableObjectId),
-    () => scheduledContinue.clear("session_closed")
+    () => scheduledContinue.clear("session_closed"),
+    new SessionNoticeRecorder({
+      backgroundTasks,
+      log,
+      source: {
+        latestTerminalMessage: () => messageRepository.getLatestTerminalMessage(),
+        artifacts: () => artifactRepository.listArtifacts(),
+        activeDurationMs: () => messageRepository.getActiveDurationMs(),
+        lastTurnLimit: () => sessionCoreRepository.getLastTurnLimit(),
+        // Read only on a transition, after the composition below has run.
+        shutdown: (): SandboxShutdownState | null => shutdown.snapshot(),
+      },
+      record: (facts) =>
+        recordSessionNotices(facts, {
+          db,
+          registry: createNoticeChannelRegistry(env, db, log),
+          nowMs: Date.now(),
+        }),
+    })
   );
 
   const titleService = new SessionTitleService({
