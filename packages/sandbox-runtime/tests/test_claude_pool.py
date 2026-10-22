@@ -26,6 +26,7 @@ from sandbox_runtime.harness.claude_pool import (
     rank_pick,
     read_refusals,
     record_refusal,
+    refusal_scope,
 )
 
 NOW = 1_800_000_000.0
@@ -292,6 +293,36 @@ class TestRankPick:
         refusals.write_text("not json")
         assert read_refusals(refusals, NOW) == {}
 
+    def test_a_model_window_refusal_blocks_only_that_model(self, tmp_path: Path) -> None:
+        home = _home(tmp_path, ["claude-1", "claude-5"])
+        refusals = tmp_path / "refused.json"
+        record_refusal(refusals, "claude-5", NOW + 6 * 86400, NOW, scope="opus")
+        assert read_refusals(refusals, NOW) == {}
+        assert read_refusals(refusals, NOW, ["opus"]) == {"claude-5": NOW + 6 * 86400}
+
+        def picks(model: str) -> set[str]:
+            return {
+                pick_slot(
+                    home / "claude",
+                    ["--model", model],
+                    refusals_file=refusals,
+                    now=NOW,
+                    rng=random.Random(seed),
+                ).slot
+                for seed in range(20)
+            }
+
+        assert picks("claude-opus-4-6") == {"claude-1"}
+        assert picks("claude-sonnet-4-6") == {"claude-1", "claude-5"}
+
+    def test_refusal_scopes_follow_the_limit_window(self) -> None:
+        assert refusal_scope("seven_day_opus") == "opus"
+        assert refusal_scope("seven_day_sonnet") == "sonnet"
+        assert refusal_scope("five_hour") == "account"
+        assert refusal_scope("seven_day") == "account"
+        assert refusal_scope("overage") == "account"
+        assert refusal_scope("unknown") == "account"
+
     def test_the_module_still_runs_standalone(self, tmp_path: Path) -> None:
         source = Path(__file__).parents[1] / "src/sandbox_runtime/harness/claude_pool.py"
         (tmp_path / "standalone_pool.py").write_text(source.read_text())
@@ -368,7 +399,7 @@ class TestWrapper:
         config = tmp_path / "cfg"
         config.mkdir()
         far = datetime.now(UTC).timestamp() + 3600
-        (config / POOL_REFUSALS_FILE).write_text(json.dumps({"claude-5": far}))
+        (config / POOL_REFUSALS_FILE).write_text(json.dumps({"claude-5": {"account": far}}))
         for _ in range(5):
             child, pick_file = self._run(tmp_path, home)
             assert child["token"] == _token("claude-1")

@@ -252,6 +252,82 @@ class TestAuthHome:
         assert h.harness.subscription_slot == "claude-2"
 
     @pytest.mark.asyncio
+    async def test_a_turn_that_succeeds_after_a_rejection_keeps_its_slot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        home = self._home(tmp_path)
+
+        async def connect(client: FakeSdkClient) -> None:
+            config_dir = Path(client.options["env"]["CLAUDE_CONFIG_DIR"])
+            (config_dir / POOL_PICK_FILE).write_text(json.dumps({"slot": "claude-5"}))
+            client.connected = True
+
+        monkeypatch.setattr(FakeSdkClient, "connect", connect)
+        rejected_then_done = [
+            RateLimitEvent(
+                rate_limit_info=RateLimitInfo(
+                    status="rejected", rate_limit_type="seven_day_opus", resets_at=1_790_000_000
+                ),
+                uuid="u",
+                session_id="s",
+            ),
+            _result(0.1),
+        ]
+        h = Harness(
+            tmp_path,
+            turns=[rejected_then_done, [_result(0.1)]],
+            environ={"SF_AUTH_HOME": str(home), "SF_AUTH_HOME_PROVIDERS": "anthropic"},
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+
+        _, first = await _run(h.harness, HarnessPrompt(message_id="m1", text="a"))
+        assert first == TurnOutcome.ok(message_cost_usd=0.1)
+        assert not (h.config.config_dir / POOL_REFUSALS_FILE).exists()
+
+        await _run(h.harness, HarnessPrompt(message_id="m2", text="b"))
+        assert len(h.clients) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_model_window_refusal_blocks_the_slot_for_that_model_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        home = self._home(tmp_path)
+
+        async def connect(client: FakeSdkClient) -> None:
+            config_dir = Path(client.options["env"]["CLAUDE_CONFIG_DIR"])
+            (config_dir / POOL_PICK_FILE).write_text(json.dumps({"slot": "claude-5"}))
+            client.connected = True
+
+        monkeypatch.setattr(FakeSdkClient, "connect", connect)
+        resets_at = time.time() + 6 * 86400
+        refused = [
+            RateLimitEvent(
+                rate_limit_info=RateLimitInfo(
+                    status="rejected", rate_limit_type="seven_day_opus", resets_at=resets_at
+                ),
+                uuid="u",
+                session_id="s",
+            ),
+            _result(0.0, subtype="error_during_execution", is_error=True, result="Opus limit"),
+        ]
+        h = Harness(
+            tmp_path,
+            turns=[refused],
+            environ={"SF_AUTH_HOME": str(home), "SF_AUTH_HOME_PROVIDERS": "anthropic"},
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+
+        _, outcome = await _run(
+            h.harness, HarnessPrompt(message_id="m1", text="a", model="claude-opus-4-6")
+        )
+        assert outcome.limit == SubscriptionLimit(window="seven_day_opus", resets_at=resets_at)
+        refusals = h.config.config_dir / POOL_REFUSALS_FILE
+        assert read_refusals(refusals, time.time()) == {}
+        assert read_refusals(refusals, time.time(), ["opus"]) == {"claude-5": resets_at}
+
+    @pytest.mark.asyncio
     async def test_api_key_children_report_no_slot(self, tmp_path: Path):
         h = Harness(tmp_path, turns=[[_result(0.1)]])
         await h.harness.open()

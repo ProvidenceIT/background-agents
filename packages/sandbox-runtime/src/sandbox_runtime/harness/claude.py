@@ -117,15 +117,20 @@ MAX_STDOUT_MESSAGE_BYTES: Final = _ATTACHMENT_BASE64_BYTES + _STDOUT_MESSAGE_HEA
 class SdkClient(Protocol):
     """The slice of ``ClaudeSDKClient`` the harness uses (a fake stands in for tests)."""
 
-    async def connect(self) -> None: ...
+    async def connect(self) -> None:
+        ...
 
-    async def disconnect(self) -> None: ...
+    async def disconnect(self) -> None:
+        ...
 
-    async def query(self, prompt: Any, session_id: str = "default") -> None: ...
+    async def query(self, prompt: Any, session_id: str = "default") -> None:
+        ...
 
-    async def interrupt(self) -> None: ...
+    async def interrupt(self) -> None:
+        ...
 
-    def receive_messages(self) -> AsyncIterator[Message]: ...
+    def receive_messages(self) -> AsyncIterator[Message]:
+        ...
 
 
 SdkClientFactory = Callable[[Any], SdkClient]
@@ -512,14 +517,19 @@ class ClaudeHarness:
         state = ClaudeTurnState(
             message_id=prompt.message_id, cost_baseline=self._translator.cost_baseline
         )
+        outcome: TurnOutcome | None = None
         try:
             outcome = await self._stream_turn(client, prompt, emit, state, deadline, max_duration)
         finally:
-            if state.limit is not None:
+            # A turn that still succeeded after a rejected event (an overage or
+            # model fallback) leaves the slot usable.
+            if state.limit is not None and (outcome is None or not outcome.success):
                 self._repick_slot = True
                 slot = self.subscription_slot
                 if slot is not None:
-                    record_pool_refusal(self.config.config_dir, slot, state.limit.resets_at)
+                    record_pool_refusal(
+                        self.config.config_dir, slot, state.limit.window, state.limit.resets_at
+                    )
         if state.limit is not None and not outcome.success and not outcome.cancelled:
             # A refused turn can also end by timeout or transport loss; the
             # limit is still the cause the user needs to see.

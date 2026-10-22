@@ -6,7 +6,7 @@ already reads every subscription's headroom for its own fleet, pushes the
 percentages (never a credential) to ``claude/pool/headroom.json``. The
 wrapper calls :func:`pick_slot` at every exec, so each child starts on the
 subscription with the most headroom left. A child serves turns until one
-hits a subscription limit; the harness then records that slot as refused
+fails on a subscription limit; the harness then records that slot as refused
 until the window resets (:func:`record_refusal`) and starts a new child for
 the next turn, whose pick passes the refused slot over, so a turn after an
 exhausted one moves on by itself.
@@ -16,7 +16,8 @@ Rules, in order:
 1. A window known to be exhausted (at or below ``EXHAUSTED_PERCENT``) with a
    reset still ahead rules its slot out. This holds for an old snapshot too:
    an exhausted window stays exhausted until its reset, whoever reported it.
-   A refusal this session recorded rules its slot out the same way.
+   A refusal this session recorded rules its slot out the same way; a
+   refusal of a model window (``seven_day_opus``) only for that model.
 2. With a fresh snapshot, slots with a reading rank by their tightest
    window: five-hour, week, and a model window the ``--model`` argument
    names (``fable`` for ``claude-fable-5-1``). One is chosen at random from
@@ -61,6 +62,10 @@ EXHAUSTED_PERCENT = 5
 SPREAD_PERCENT = 10
 # The account windows every model draws on.
 ACCOUNT_WINDOWS = ("five_hour", "seven_day")
+# A refusal of one of these limit windows blocks only that model's window.
+MODEL_LIMIT_WINDOWS = {"seven_day_opus": "opus", "seven_day_sonnet": "sonnet"}
+# The refusal scope that blocks a slot for every model.
+ACCOUNT_REFUSAL = "account"
 # How long a refusal without a reported reset keeps its slot out.
 UNKNOWN_RESET_BLOCK_SECONDS = 60 * 60
 
@@ -155,30 +160,69 @@ def is_fresh(captured_at: float | None, now: float) -> bool:
     return captured_at is not None and 0 <= now - captured_at <= FRESH_SECONDS
 
 
-def read_refusals(path: Path, now: float) -> dict[str, float]:
-    """Slots a limit refused, by name, with the time each refusal ends; past ones dropped."""
+def refusal_scope(limit_window: str) -> str:
+    """What a refusal of ``limit_window`` blocks: one model's window, else the whole slot."""
+    return MODEL_LIMIT_WINDOWS.get(limit_window, ACCOUNT_REFUSAL)
+
+
+def read_refusals(path: Path, now: float, model_windows: Iterable[str] = ()) -> dict[str, float]:
+    """Slots a limit refused, by name, with the time each refusal ends; past ones dropped.
+
+    A refusal of a model window counts only when ``model_windows`` names it,
+    so an Opus refusal does not keep the slot from a Sonnet turn.
+    """
+    scopes = {ACCOUNT_REFUSAL, *model_windows}
+    refusals: dict[str, float] = {}
+    for slot, entry in _live_refusals(path, now).items():
+        ends = [until for scope, until in entry.items() if scope in scopes]
+        if ends:
+            refusals[slot] = max(ends)
+    return refusals
+
+
+def record_refusal(
+    path: Path,
+    slot: str,
+    resets_at: float | None,
+    now: float,
+    *,
+    scope: str = ACCOUNT_REFUSAL,
+) -> None:
+    """Rule ``slot`` out of later picks for ``scope`` until ``resets_at`` (or a default hour)."""
+    refusals = _live_refusals(path, now)
+    until = resets_at if resets_at is not None and resets_at > now else None
+    refusals.setdefault(slot, {})[scope] = (
+        until if until is not None else now + UNKNOWN_RESET_BLOCK_SECONDS
+    )
+    path.write_text(json.dumps(refusals, sort_keys=True), encoding="utf-8")
+
+
+def _live_refusals(path: Path, now: float) -> dict[str, dict[str, float]]:
+    """The refusals file as ``{slot: {scope: until}}``, without ended or malformed entries."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ValueError):
         return {}
     if not isinstance(raw, dict):
         return {}
-    return {
-        slot: float(until)
-        for slot, until in raw.items()
-        if isinstance(slot, str)
-        and isinstance(until, (int, float))
-        and not isinstance(until, bool)
-        and until > now
-    }
+    refusals: dict[str, dict[str, float]] = {}
+    for slot, entry in raw.items():
+        if not isinstance(slot, str) or not isinstance(entry, dict):
+            continue
+        live = {}
+        for scope, until in entry.items():
+            end = _timestamp_seconds(until)
+            if isinstance(scope, str) and end is not None and end > now:
+                live[scope] = end
+        if live:
+            refusals[slot] = live
+    return refusals
 
 
-def record_refusal(path: Path, slot: str, resets_at: float | None, now: float) -> None:
-    """Rule ``slot`` out of later picks until ``resets_at`` (or a default hour)."""
-    refusals = read_refusals(path, now)
-    until = resets_at if resets_at is not None and resets_at > now else None
-    refusals[slot] = until if until is not None else now + UNKNOWN_RESET_BLOCK_SECONDS
-    path.write_text(json.dumps(refusals, sort_keys=True), encoding="utf-8")
+def _timestamp_seconds(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
 
 
 def pick_slot(
@@ -195,13 +239,14 @@ def pick_slot(
         return None
     now = time.time() if now is None else now
     captured_at, readings = read_headroom(claude_dir)
+    extra = tuple(filter(None, [model_window(argv)]))
     ranked = rank_pick(
         slots,
         readings,
         captured_at,
         account_windows=ACCOUNT_WINDOWS,
-        extra_windows=tuple(filter(None, [model_window(argv)])),
-        blocked_until=read_refusals(refusals_file, now) if refusals_file else None,
+        extra_windows=extra,
+        blocked_until=read_refusals(refusals_file, now, extra) if refusals_file else None,
         now=now,
         rng=rng or random.Random(),
     )

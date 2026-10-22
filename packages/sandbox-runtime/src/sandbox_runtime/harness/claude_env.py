@@ -359,10 +359,16 @@ def clear_pool_pick(config_dir: Path) -> None:
         (config_dir / POOL_PICK_FILE).unlink(missing_ok=True)
 
 
-def record_pool_refusal(config_dir: Path, slot: str, resets_at: float | None) -> None:
-    """Keep ``slot`` out of this session's next picks until its window resets."""
+def record_pool_refusal(config_dir: Path, slot: str, window: str, resets_at: float | None) -> None:
+    """Keep ``slot`` out of this session's next picks the refused ``window`` covers, until it resets."""
     with contextlib.suppress(OSError):
-        claude_pool.record_refusal(config_dir / POOL_REFUSALS_FILE, slot, resets_at, time.time())
+        claude_pool.record_refusal(
+            config_dir / POOL_REFUSALS_FILE,
+            slot,
+            resets_at,
+            time.time(),
+            scope=claude_pool.refusal_scope(window),
+        )
 
 
 def read_pool_pick_slot(config_dir: Path) -> str | None:
