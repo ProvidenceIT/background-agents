@@ -2,6 +2,7 @@ import {
   CONTINUE_AT_RESET_BUFFER_MS,
   CONTINUE_AT_RESET_PROMPT,
 } from "@open-inspect/shared/types/session-api";
+import type { ScheduledContinueFailure } from "@open-inspect/shared/types/server-messages";
 import { AuthHomeTurnRefusedError } from "../auth-homes/turn-admission";
 import { UsageQuotaExceededError } from "../authorization/usage-quotas";
 import type { Logger } from "../logger";
@@ -48,7 +49,12 @@ export type ScheduleContinueOutcome =
 export interface ScheduledContinueDeps {
   repository: Pick<
     SessionCoreRepository,
-    "getScheduledContinue" | "setScheduledContinue" | "getLastTurnLimit" | "getSession"
+    | "getScheduledContinue"
+    | "setScheduledContinue"
+    | "getScheduledContinueFailure"
+    | "setScheduledContinueFailure"
+    | "getLastTurnLimit"
+    | "getSession"
   >;
   messageRepository: Pick<MessageRepository, "getPendingOrProcessingCount">;
   alarmScheduler: Pick<AlarmScheduler, "schedule">;
@@ -68,7 +74,9 @@ export interface ScheduledContinueDeps {
  * "Continue when it resets": one opted-in prompt per session, enqueued as the person
  * who asked once the last turn's limit window reopens. Persisted on the session row
  * and woken by the session's shared alarm, so it survives a restart. Any other
- * prompt, a new turn result, or closing the session drops it.
+ * prompt, a new turn result, or closing the session drops it. When it is due but
+ * cannot run (refused, the requester lost access, retries spent), the reason is
+ * kept for the session view until the session moves on.
  */
 export class SessionScheduledContinue {
   constructor(private readonly deps: ScheduledContinueDeps) {}
@@ -107,9 +115,10 @@ export class SessionScheduledContinue {
     this.store(null);
   }
 
-  /** Drop the schedule, if any, because something else moved the session on. */
+  /** Drop the schedule and any failure because something else moved the session on. */
   clear(reason: string): void {
-    if (!this.deps.repository.getScheduledContinue()) return;
+    const { repository } = this.deps;
+    if (!repository.getScheduledContinue() && !repository.getScheduledContinueFailure()) return;
     this.store(null);
     this.deps.log.info("scheduled_continue.cleared", {
       event: "scheduled_continue.cleared",
@@ -144,8 +153,14 @@ export class SessionScheduledContinue {
       await this.retry(current, "authorization_unavailable");
       return;
     }
-    const blockedAfterAuthorization =
-      authorization === "denied" ? "requester_cannot_collaborate" : this.blockedReason();
+    if (authorization === "denied") {
+      this.drop(current, "requester_cannot_collaborate", {
+        reason: "requester_cannot_collaborate",
+        detail: null,
+      });
+      return;
+    }
+    const blockedAfterAuthorization = this.blockedReason();
     if (blockedAfterAuthorization) {
       this.drop(current, blockedAfterAuthorization);
       return;
@@ -175,6 +190,10 @@ export class SessionScheduledContinue {
           requested_by_user_id: current.requestedByUserId,
           error: error instanceof Error ? error : String(error),
         });
+        // Refusals carry the message the prompt routes show the user.
+        if (!this.deps.repository.getScheduledContinue()) {
+          this.store(null, { reason: "refused", detail: (error as Error).message });
+        }
         return;
       }
       this.deps.log.warn("scheduled_continue.enqueue_failed", {
@@ -192,7 +211,10 @@ export class SessionScheduledContinue {
   private async retry(schedule: ScheduledContinue, reason: string): Promise<void> {
     const retries = (schedule.retries ?? 0) + 1;
     if (retries > CONTINUE_AT_RESET_MAX_RETRIES) {
-      this.drop(schedule, `${reason}_retries_exhausted`);
+      this.drop(schedule, `${reason}_retries_exhausted`, {
+        reason: "retries_exhausted",
+        detail: null,
+      });
       return;
     }
     const retryAtMs = this.deps.now() + CONTINUE_AT_RESET_RETRY_MS;
@@ -217,8 +239,12 @@ export class SessionScheduledContinue {
     return null;
   }
 
-  private drop(schedule: ScheduledContinue, reason: string): void {
-    this.store(null);
+  private drop(
+    schedule: ScheduledContinue,
+    reason: string,
+    failure?: Omit<ScheduledContinueFailure, "atMs">
+  ): void {
+    this.store(null, failure);
     this.deps.log.info("scheduled_continue.dropped", {
       event: "scheduled_continue.dropped",
       reason,
@@ -226,11 +252,18 @@ export class SessionScheduledContinue {
     });
   }
 
-  private store(schedule: ScheduledContinue | null): void {
+  /** Persist and announce the schedule; setting or clearing it also replaces the failure. */
+  private store(
+    schedule: ScheduledContinue | null,
+    failure?: Omit<ScheduledContinueFailure, "atMs">
+  ): void {
+    const storedFailure = failure ? { ...failure, atMs: this.deps.now() } : null;
     this.deps.repository.setScheduledContinue(schedule);
+    this.deps.repository.setScheduledContinueFailure(storedFailure);
     this.deps.messenger.broadcast({
       type: "scheduled_continue",
       scheduledContinueAtMs: schedule?.atMs ?? null,
+      scheduledContinueFailure: storedFailure,
     });
   }
 

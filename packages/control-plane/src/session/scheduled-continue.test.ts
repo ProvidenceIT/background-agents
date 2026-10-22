@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TurnLimit } from "@open-inspect/shared/types/sandbox-events";
-import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+import type {
+  ScheduledContinueFailure,
+  ServerMessage,
+} from "@open-inspect/shared/types/server-messages";
 import type { Logger } from "../logger";
 import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import type { ScheduledContinue } from "./session-core-repository";
@@ -43,6 +46,7 @@ function setup(
   const state = {
     now: NOW,
     stored: null as ScheduledContinue | null,
+    failure: null as ScheduledContinueFailure | null,
     limit: overrides.limit === undefined ? LIMIT : overrides.limit,
     status: overrides.status ?? "active",
     queued: overrides.queued ?? 0,
@@ -56,6 +60,10 @@ function setup(
       getScheduledContinue: () => state.stored,
       setScheduledContinue: (schedule) => {
         state.stored = schedule;
+      },
+      getScheduledContinueFailure: () => state.failure,
+      setScheduledContinueFailure: (failure) => {
+        state.failure = failure;
       },
       getLastTurnLimit: () => state.limit,
       getSession: () => ({ status: state.status }) as never,
@@ -99,7 +107,11 @@ describe("SessionScheduledContinue", () => {
     expect(scheduled.atMs()).toBe(RESET + 60_000);
     expect(armed).toEqual([RESET + 60_000]);
     expect(broadcasts).toEqual([
-      { type: "scheduled_continue", scheduledContinueAtMs: RESET + 60_000 },
+      {
+        type: "scheduled_continue",
+        scheduledContinueAtMs: RESET + 60_000,
+        scheduledContinueFailure: null,
+      },
     ]);
   });
 
@@ -138,8 +150,8 @@ describe("SessionScheduledContinue", () => {
 
     expect(state.stored).toBeNull();
     expect(broadcasts.slice(1)).toEqual([
-      { type: "scheduled_continue", scheduledContinueAtMs: null },
-      { type: "scheduled_continue", scheduledContinueAtMs: null },
+      { type: "scheduled_continue", scheduledContinueAtMs: null, scheduledContinueFailure: null },
+      { type: "scheduled_continue", scheduledContinueAtMs: null, scheduledContinueFailure: null },
     ]);
   });
 
@@ -151,7 +163,11 @@ describe("SessionScheduledContinue", () => {
     await scheduled.schedule(requester);
     scheduled.clear("prompt_enqueued");
     expect(state.stored).toBeNull();
-    expect(broadcasts.at(-1)).toEqual({ type: "scheduled_continue", scheduledContinueAtMs: null });
+    expect(broadcasts.at(-1)).toEqual({
+      type: "scheduled_continue",
+      scheduledContinueAtMs: null,
+      scheduledContinueFailure: null,
+    });
   });
 
   it("re-arms an early alarm and leaves the schedule in place", async () => {
@@ -184,7 +200,11 @@ describe("SessionScheduledContinue", () => {
       },
     ]);
     expect(state.stored).toBeNull();
-    expect(broadcasts.at(-1)).toEqual({ type: "scheduled_continue", scheduledContinueAtMs: null });
+    expect(broadcasts.at(-1)).toEqual({
+      type: "scheduled_continue",
+      scheduledContinueAtMs: null,
+      scheduledContinueFailure: null,
+    });
   });
 
   it.each([
@@ -320,6 +340,7 @@ describe("SessionScheduledContinue", () => {
     expect(broadcasts.at(-1)).toEqual({
       type: "scheduled_continue",
       scheduledContinueAtMs: retryAtMs,
+      scheduledContinueFailure: null,
     });
 
     state.now = retryAtMs;
@@ -377,6 +398,102 @@ describe("SessionScheduledContinue", () => {
 
     expect(enqueued).toEqual([]);
     expect(state.stored).toBeNull();
+  });
+
+  it("keeps the refusal for the session view when a due continue is refused", async () => {
+    const { scheduled, state, broadcasts } = setup({
+      enqueue: async () => {
+        throw new BudgetExhaustedError();
+      },
+    });
+    await scheduled.schedule(requester);
+    state.now = RESET + 60_000;
+
+    await scheduled.fireIfDue();
+
+    const failure = {
+      reason: "refused",
+      detail:
+        "Session cost limit reached. The session owner must raise or remove the limit to continue.",
+      atMs: RESET + 60_000,
+    };
+    expect(state.failure).toEqual(failure);
+    expect(broadcasts.at(-1)).toEqual({
+      type: "scheduled_continue",
+      scheduledContinueAtMs: null,
+      scheduledContinueFailure: failure,
+    });
+  });
+
+  it("keeps why a due continue was dropped for a requester who lost access", async () => {
+    const { scheduled, state, broadcasts } = setup({ authorization: "denied" });
+    await scheduled.schedule(requester);
+    state.now = RESET + 60_000;
+
+    await scheduled.fireIfDue();
+
+    const failure = { reason: "requester_cannot_collaborate", detail: null, atMs: RESET + 60_000 };
+    expect(state.failure).toEqual(failure);
+    expect(broadcasts.at(-1)).toEqual({
+      type: "scheduled_continue",
+      scheduledContinueAtMs: null,
+      scheduledContinueFailure: failure,
+    });
+  });
+
+  it("keeps why a due continue was dropped once its retries are spent", async () => {
+    const { scheduled, state } = setup({
+      enqueue: async () => {
+        throw new Error("D1_ERROR: network connection lost");
+      },
+    });
+    await scheduled.schedule(requester);
+    state.now = RESET + 60_000;
+
+    for (let attempt = 0; attempt <= CONTINUE_AT_RESET_MAX_RETRIES; attempt += 1) {
+      await scheduled.fireIfDue();
+      if (attempt < CONTINUE_AT_RESET_MAX_RETRIES) state.now += CONTINUE_AT_RESET_RETRY_MS;
+    }
+
+    expect(state.failure).toEqual({
+      reason: "retries_exhausted",
+      detail: null,
+      atMs: RESET + 60_000 + CONTINUE_AT_RESET_MAX_RETRIES * CONTINUE_AT_RESET_RETRY_MS,
+    });
+  });
+
+  it("keeps no failure when the session moved on before the continue was due", async () => {
+    const { scheduled, state } = setup();
+    await scheduled.schedule(requester);
+    Object.assign(state, { queued: 1, now: RESET + 60_000 });
+
+    await scheduled.fireIfDue();
+
+    expect(state.stored).toBeNull();
+    expect(state.failure).toBeNull();
+  });
+
+  it.each([
+    [
+      "a prompt is enqueued",
+      (scheduled: SessionScheduledContinue) => scheduled.clear("prompt_enqueued"),
+    ],
+    [
+      "the user schedules again",
+      (scheduled: SessionScheduledContinue) => scheduled.schedule(requester),
+    ],
+    ["the user cancels", (scheduled: SessionScheduledContinue) => scheduled.cancel()],
+  ])("forgets the failure when %s", async (_label, act) => {
+    const { scheduled, state, broadcasts } = setup({ authorization: "denied" });
+    await scheduled.schedule(requester);
+    state.now = RESET + 60_000;
+    await scheduled.fireIfDue();
+    state.now = NOW + 1;
+
+    await act(scheduled);
+
+    expect(state.failure).toBeNull();
+    expect(broadcasts.at(-1)).toMatchObject({ scheduledContinueFailure: null });
   });
 
   it("re-arms a persisted schedule after a restart", async () => {

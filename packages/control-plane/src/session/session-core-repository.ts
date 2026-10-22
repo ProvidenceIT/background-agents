@@ -1,6 +1,10 @@
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { turnLimitSchema, type TurnLimit } from "@open-inspect/shared/types/sandbox-events";
+import {
+  scheduledContinueFailureSchema,
+  type ScheduledContinueFailure,
+} from "@open-inspect/shared/types/server-messages";
 import { z } from "zod";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
 import type { SqlStorage, TransactionSync } from "./sql-storage";
@@ -34,6 +38,9 @@ export const scheduledContinueSchema = z.object({
 export type ScheduledContinue = z.infer<typeof scheduledContinueSchema>;
 
 const scheduledContinueRowSchema = z.object({ scheduled_continue: z.string().nullable() });
+const scheduledContinueFailureRowSchema = z.object({
+  scheduled_continue_failure: z.string().nullable(),
+});
 
 /** Data for upserting a session. */
 export interface UpsertSessionData {
@@ -206,6 +213,33 @@ export class SessionCoreRepository {
     this.sql.exec(
       `UPDATE session SET scheduled_continue = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
       schedule ? JSON.stringify(schedule) : null
+    );
+  }
+
+  /** A stored value that no longer parses reads as no failure. */
+  getScheduledContinueFailure(): ScheduledContinueFailure | null {
+    const row = this.sql
+      .exec(`SELECT scheduled_continue_failure FROM session LIMIT 1`)
+      .toArray()[0];
+    if (row === undefined) return null;
+    const parsed = scheduledContinueFailureRowSchema.safeParse(row);
+    if (!parsed.success) {
+      throw new SessionStorageIntegrityError("Malformed persisted scheduled continue failure row");
+    }
+    const stored = parsed.data.scheduled_continue_failure;
+    if (!stored) return null;
+    try {
+      const failure = scheduledContinueFailureSchema.safeParse(JSON.parse(stored));
+      return failure.success ? failure.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  setScheduledContinueFailure(failure: ScheduledContinueFailure | null): void {
+    this.sql.exec(
+      `UPDATE session SET scheduled_continue_failure = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
+      failure ? JSON.stringify(failure) : null
     );
   }
 

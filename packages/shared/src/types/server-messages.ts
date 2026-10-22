@@ -13,6 +13,18 @@ import { sandboxShutdownSchema, shutdownRecoveryActionSchema } from "./sandbox-s
 import { clientRequestIdSchema } from "./prompts";
 import { sessionVisibilitySchema } from "./teams";
 
+/**
+ * Why an opted-in "continue when it resets" did not run when it was due: its prompt was
+ * refused (`detail` is the refusal), the person who scheduled it may no longer collaborate,
+ * or the session could not queue it after every retry.
+ */
+export const scheduledContinueFailureSchema = z.object({
+  reason: z.enum(["refused", "requester_cannot_collaborate", "retries_exhausted"]),
+  detail: z.string().nullable(),
+  atMs: z.number().int().nonnegative(),
+});
+export type ScheduledContinueFailure = z.infer<typeof scheduledContinueFailureSchema>;
+
 export const promptQueueItemSchema = z.object({
   messageId: z.string(),
   content: z.string(),
@@ -59,6 +71,11 @@ const sessionStateSchema = z.object({
    * none is scheduled. Absent from producers that predate it.
    */
   scheduledContinueAtMs: z.number().int().nonnegative().nullable().optional(),
+  /**
+   * Why the last scheduled continue did not run; null once anything moves the session on
+   * (a prompt, a turn result, a new schedule, closing it). Absent from producers that predate it.
+   */
+  scheduledContinueFailure: scheduledContinueFailureSchema.nullable().optional(),
   totalCost: z.number().optional(),
   maxSessionCostUsd: z.number().nullable().optional(),
   budgetExhausted: z.boolean().optional(),
@@ -226,6 +243,8 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("scheduled_continue"),
     scheduledContinueAtMs: z.number().int().nonnegative().nullable(),
+    /** Absent from producers that predate it; read as null. */
+    scheduledContinueFailure: scheduledContinueFailureSchema.nullable().optional(),
   }),
   z.object({
     type: z.literal("budget_status"),

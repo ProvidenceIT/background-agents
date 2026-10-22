@@ -111,6 +111,7 @@ export class SessionSnapshotReader {
       forkedFromSessionId: this.deps.sessionCoreRepository.getForkedFromSessionId(),
       lastTurnLimit: this.deps.sessionCoreRepository.getLastTurnLimit(),
       scheduledContinueAtMs: this.deps.sessionCoreRepository.getScheduledContinue()?.atMs ?? null,
+      scheduledContinueFailure: this.deps.sessionCoreRepository.getScheduledContinueFailure(),
       totalCost: session.total_cost ?? 0,
       maxSessionCostUsd: session.max_cost_usd,
       budgetExhausted: session.budget_exhausted === 1,

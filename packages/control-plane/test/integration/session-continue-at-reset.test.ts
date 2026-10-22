@@ -176,6 +176,42 @@ describe("continue when the limit resets", () => {
     expect(await storedSchedule(stub)).toBeNull();
   });
 
+  it("shows why a due continue was refused until someone prompts", async () => {
+    const { name, stub } = await seedLimitedSession(Date.now() + 3_600_000);
+    expect((await continueAtReset(name, "POST")).status).toBe(200);
+    await makeDue(stub);
+    await queryDO(stub, "UPDATE session SET budget_exhausted = 1");
+
+    await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
+
+    expect(await messageContents(stub)).toEqual([]);
+    expect(await storedSchedule(stub)).toBeNull();
+    const response = await serviceFetch(`${BASE}/sessions/${name}`, {
+      as: { userId: MEMBER, role: "member" },
+    });
+    const { session } = await response.json<SessionSnapshot>();
+    expect(session.scheduledContinueAtMs).toBeNull();
+    expect(session.scheduledContinueFailure).toEqual({
+      reason: "refused",
+      detail:
+        "Session cost limit reached. The session owner must raise or remove the limit to continue.",
+      atMs: expect.any(Number),
+    });
+
+    await queryDO(stub, "UPDATE session SET budget_exhausted = 0");
+    const prompted = await serviceFetch(`${BASE}/sessions/${name}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ content: "Try a different approach" }),
+      as: { userId: MEMBER, role: "member" },
+    });
+    expect(prompted.status).toBe(200);
+    const after = await serviceFetch(`${BASE}/sessions/${name}`, {
+      as: { userId: MEMBER, role: "member" },
+    });
+    expect((await after.json<SessionSnapshot>()).session.scheduledContinueFailure).toBeNull();
+    await waitForSandboxStatus(stub, "failed");
+  });
+
   it("leaves a schedule that is not yet due and re-arms for it", async () => {
     const resetsAtMs = Date.now() + 3_600_000;
     const { name, stub } = await seedLimitedSession(resetsAtMs);

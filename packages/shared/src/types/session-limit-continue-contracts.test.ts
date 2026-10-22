@@ -123,4 +123,26 @@ describe("continue when it resets", () => {
       })
     ).toEqual({ type: "scheduled_continue", scheduledContinueAtMs: 1_790_000_060_000 });
   });
+
+  it("parses why a scheduled continue did not run, and rejects an unknown reason", () => {
+    const failure = { reason: "refused", detail: "Usage quota reached.", atMs: 1_790_000_060_000 };
+    expect(
+      serverMessageSchema.parse({
+        type: "scheduled_continue",
+        scheduledContinueAtMs: null,
+        scheduledContinueFailure: failure,
+      })
+    ).toEqual({
+      type: "scheduled_continue",
+      scheduledContinueAtMs: null,
+      scheduledContinueFailure: failure,
+    });
+    expect(
+      serverMessageSchema.safeParse({
+        type: "scheduled_continue",
+        scheduledContinueAtMs: null,
+        scheduledContinueFailure: { ...failure, reason: "lost" },
+      }).success
+    ).toBe(false);
+  });
 });
