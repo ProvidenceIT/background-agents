@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS session (
   environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   forked_from_session_id TEXT,                      -- Source session of a fork; independent of parent_session_id
   last_turn_limit TEXT,                             -- JSON TurnLimit that stopped the latest turn; NULL once cleared
+  scheduled_continue TEXT,                          -- JSON opted-in continue at the limit's reset; NULL when none
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   CHECK (
@@ -767,6 +768,13 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     run: (sql) => {
       runMigration(sql, `ALTER TABLE session ADD COLUMN forked_from_session_id TEXT`);
       runMigration(sql, `ALTER TABLE session ADD COLUMN last_turn_limit TEXT`);
+    },
+  },
+  {
+    id: 58,
+    description: "Record an opted-in continue at the limit's reset",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN scheduled_continue TEXT`);
     },
   },
 ];

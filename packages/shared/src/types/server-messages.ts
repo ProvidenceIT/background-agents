@@ -54,6 +54,11 @@ const sessionStateSchema = z.object({
    * a new prompt starts processing. Absent from producers that predate it.
    */
   lastTurnLimit: turnLimitSchema.nullable().optional(),
+  /**
+   * When an opted-in "continue when it resets" prompt is due (epoch ms); null when
+   * none is scheduled. Absent from producers that predate it.
+   */
+  scheduledContinueAtMs: z.number().int().nonnegative().nullable().optional(),
   totalCost: z.number().optional(),
   maxSessionCostUsd: z.number().nullable().optional(),
   budgetExhausted: z.boolean().optional(),
@@ -217,6 +222,11 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sandbox_restored"), message: z.string() }),
   z.object({ type: z.literal("sandbox_warning"), message: z.string() }),
   z.object({ type: z.literal("processing_status"), isProcessing: z.boolean() }),
+  /** The session's scheduled continue changed: set, replaced, cancelled, fired or dropped. */
+  z.object({
+    type: z.literal("scheduled_continue"),
+    scheduledContinueAtMs: z.number().int().nonnegative().nullable(),
+  }),
   z.object({
     type: z.literal("budget_status"),
     totalCost: z.number(),

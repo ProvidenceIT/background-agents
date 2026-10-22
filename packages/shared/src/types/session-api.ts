@@ -3,7 +3,8 @@ import { z } from "zod";
 import { sessionSkillSelectionSchema } from "./skills";
 import type { AgentResponse } from "./artifacts";
 import { sessionRepositoriesInputSchema } from "./repositories";
-import type { EventResponse } from "./sandbox-events";
+import { subscriptionSlotSchema, type EventResponse } from "./sandbox-events";
+import { MAX_SESSION_SUBSCRIPTION_SLOTS } from "./session-subscription";
 import { MAX_WEB_PROMPT_CHARS, promptContentSchema } from "./prompts";
 import { modelProviderSelectionsSchema } from "./provider-accounts";
 import { triggerKindSchema } from "./auth-homes";
@@ -463,6 +464,12 @@ export const forkSessionRequestSchema = z.strictObject({
   model: z.string().min(1).optional(),
   reasoningEffort: z.string().min(1).optional(),
   title: z.string().trim().min(1).optional(),
+  /**
+   * The pool slot the fork prefers (`claude-3`). Absent or null picks the slot
+   * with the most headroom, as every session does. Must be one of the slots
+   * GET /sessions/:id/fork/subscription-slots lists for the fork's harness.
+   */
+  subscriptionSlot: subscriptionSlotSchema.nullable().optional(),
 });
 export type ForkSessionRequest = z.infer<typeof forkSessionRequestSchema>;
 
@@ -479,3 +486,47 @@ export const forkHandoffResponseSchema = z.object({
   handoff: z.string().max(FORK_HANDOFF_MAX_CHARS),
 });
 export type ForkHandoffResponse = z.infer<typeof forkHandoffResponseSchema>;
+
+/**
+ * One slot of the caller's subscription home a fork may prefer. `percentRemaining`
+ * is the slot's tightest headroom window when the control plane knows it, else null.
+ * `lastUsedAt` is when a turn on that home last settled on the slot (epoch ms).
+ */
+export const forkSubscriptionSlotSchema = z.strictObject({
+  slot: subscriptionSlotSchema,
+  percentRemaining: z.number().int().min(0).max(100).nullable(),
+  lastUsedAt: z.number().int().nonnegative().nullable(),
+});
+export type ForkSubscriptionSlot = z.infer<typeof forkSubscriptionSlotSchema>;
+
+/**
+ * Response of GET /sessions/:id/fork/subscription-slots?harness=<id>: the slots a fork
+ * on that harness may prefer, sorted by slot name. Empty when the harness has no
+ * pinnable pool or the caller has no home for it; offer a choice only for two or more.
+ */
+export const forkSubscriptionSlotsResponseSchema = z.strictObject({
+  harness: harnessIdSchema,
+  slots: z.array(forkSubscriptionSlotSchema).max(MAX_SESSION_SUBSCRIPTION_SLOTS),
+});
+export type ForkSubscriptionSlotsResponse = z.infer<typeof forkSubscriptionSlotsResponseSchema>;
+
+/** Error code of a fork whose subscriptionSlot is not one the caller may prefer. */
+export const SUBSCRIPTION_SLOT_UNAVAILABLE = "subscription_slot_unavailable" as const;
+
+/** How long after a limit's reset a scheduled continue fires, so the window is open. */
+export const CONTINUE_AT_RESET_BUFFER_MS = 60_000;
+
+/** The prompt a scheduled continue enqueues as the person who scheduled it. */
+export const CONTINUE_AT_RESET_PROMPT = "Continue where you stopped.";
+
+/** Error code of POST /sessions/:id/continue-at-reset when the last turn has no future reset. */
+export const NO_FUTURE_RESET = "no_future_reset" as const;
+
+/**
+ * Response of POST and DELETE /sessions/:id/continue-at-reset (both take no body):
+ * when the session continues on its own, or null when nothing is scheduled.
+ */
+export const continueAtResetResponseSchema = z.strictObject({
+  scheduledContinueAtMs: z.number().int().nonnegative().nullable(),
+});
+export type ContinueAtResetResponse = z.infer<typeof continueAtResetResponseSchema>;

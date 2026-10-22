@@ -396,6 +396,27 @@ describe("applyMigrations", () => {
     }
   });
 
+  it("adds the scheduled continue column to an existing session", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 58);
+    expect(typeof migration?.run).toBe("function");
+
+    const db = new DatabaseSync(":memory:");
+    const storage = createNodeSqlStorage(db);
+    try {
+      db.exec("CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT)");
+      db.exec("INSERT INTO session (id, title) VALUES ('s-1', 'Fix the parser')");
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(storage.sql);
+      expect(() => run(storage.sql)).not.toThrow();
+
+      expect(db.prepare("SELECT scheduled_continue FROM session").all()).toEqual([
+        { scheduled_continue: null },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("removes persisted hook output tails without touching malformed event data", () => {
     const migration = MIGRATIONS.find((entry) => entry.id === 53);
     expect(typeof migration?.run).toBe("function");
