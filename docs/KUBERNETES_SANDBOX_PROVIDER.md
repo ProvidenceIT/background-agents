@@ -262,7 +262,9 @@ volume on the node that holds the subscriber's own provider login. The provider 
 at `/home/sandbox/.sf-auth` in the sandbox container only (nothing in a session writes there), sets
 `SF_AUTH_HOME` and `SF_AUTH_HOME_PROVIDERS`, labels the pod
 `openinspect.dev/auth-home-owner=<name>`, and records the claim and the owner's user id as
-annotations (hints only) on the workspace claim and pod. The control plane never reads the volume.
+annotations (hints only) on the workspace claim and pod. The control plane never reads the volume. A
+session forked onto a chosen Claude pool slot also gets `SF_AUTH_HOME_PREFERRED_SLOT=<slot>` (a slot
+name, never a token); the runtime uses that slot first unless it is refused or exhausted.
 
 A user can register a home only on a claim an operator assigned to them
 (`PUT /auth-home-claims/<claim>` with `{"ownerUserId": ...}`, permission `auth_homes.assign`), and
