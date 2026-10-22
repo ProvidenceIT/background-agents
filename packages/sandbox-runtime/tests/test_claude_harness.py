@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,8 @@ from sandbox_runtime.harness.claude import (
     mcp_server_options,
     reasoning_options,
 )
-from sandbox_runtime.harness.claude_env import POOL_PICK_FILE, ClaudeAuthMode
+from sandbox_runtime.harness.claude_env import POOL_PICK_FILE, POOL_REFUSALS_FILE, ClaudeAuthMode
+from sandbox_runtime.harness.claude_pool import read_refusals
 from sandbox_runtime.harness.claude_translate import AUTHENTICATION_FAILED_MESSAGE
 from tests.claude_fakes import (
     FakeCredentialClient,
@@ -234,6 +236,9 @@ class TestAuthHome:
             limit=SubscriptionLimit(window="five_hour", resets_at=1_790_000_000.0),
         )
         assert h.harness.subscription_slot == "claude-5"
+
+        refusals = h.config.config_dir / POOL_REFUSALS_FILE
+        assert list(read_refusals(refusals, time.time())) == ["claude-5"]
 
         _, second = await _run(h.harness, HarnessPrompt(message_id="m2", text="Continue"))
         assert second == TurnOutcome.ok(message_cost_usd=0.1)

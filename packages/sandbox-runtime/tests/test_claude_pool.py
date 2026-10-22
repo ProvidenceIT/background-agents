@@ -10,6 +10,7 @@ from pathlib import Path
 from sandbox_runtime.auth_home import AuthHomeSecretRedactor, auth_home_boot_report
 from sandbox_runtime.harness.claude_env import (
     POOL_PICK_FILE,
+    POOL_REFUSALS_FILE,
     ClaudeAuthMode,
     auth_home_has_claude_token,
     write_clean_env_wrapper,
@@ -17,11 +18,14 @@ from sandbox_runtime.harness.claude_env import (
 from sandbox_runtime.harness.claude_pool import (
     EXHAUSTED_PERCENT,
     FRESH_SECONDS,
+    UNKNOWN_RESET_BLOCK_SECONDS,
     Window,
     model_window,
     pick_slot,
     pool_slots,
     rank_pick,
+    read_refusals,
+    record_refusal,
 )
 
 NOW = 1_800_000_000.0
@@ -252,6 +256,42 @@ class TestRankPick:
         assert ranked is not None and (ranked.slot, ranked.reason) == ("b", "exhausted")
         assert rank_pick([], {}, None, **args) is None
 
+    def test_a_refused_slot_is_passed_over_until_its_reset(self, tmp_path: Path) -> None:
+        home = _home(tmp_path, ["claude-1", "claude-5"])
+        refusals = tmp_path / "refused.json"
+        record_refusal(refusals, "claude-5", NOW + 600, NOW)
+        picks = {
+            pick_slot(
+                home / "claude", [], refusals_file=refusals, now=NOW, rng=random.Random(seed)
+            ).slot
+            for seed in range(20)
+        }
+        assert picks == {"claude-1"}
+        later = {
+            pick_slot(
+                home / "claude", [], refusals_file=refusals, now=NOW + 601, rng=random.Random(s)
+            ).slot
+            for s in range(20)
+        }
+        assert later == {"claude-1", "claude-5"}
+
+    def test_refusals_merge_and_one_without_a_reset_lasts_the_default(self, tmp_path: Path) -> None:
+        refusals = tmp_path / "refused.json"
+        record_refusal(refusals, "claude-1", NOW + 600, NOW)
+        record_refusal(refusals, "claude-2", None, NOW)
+        record_refusal(refusals, "claude-3", NOW - 1, NOW)
+        assert read_refusals(refusals, NOW) == {
+            "claude-1": NOW + 600,
+            "claude-2": NOW + UNKNOWN_RESET_BLOCK_SECONDS,
+            "claude-3": NOW + UNKNOWN_RESET_BLOCK_SECONDS,
+        }
+        assert read_refusals(refusals, NOW + 700) == {
+            "claude-2": NOW + UNKNOWN_RESET_BLOCK_SECONDS,
+            "claude-3": NOW + UNKNOWN_RESET_BLOCK_SECONDS,
+        }
+        refusals.write_text("not json")
+        assert read_refusals(refusals, NOW) == {}
+
     def test_the_module_still_runs_standalone(self, tmp_path: Path) -> None:
         source = Path(__file__).parents[1] / "src/sandbox_runtime/harness/claude_pool.py"
         (tmp_path / "standalone_pool.py").write_text(source.read_text())
@@ -322,6 +362,17 @@ class TestWrapper:
             "percentRemaining": 80,
         }
         assert "sk-ant" not in pick_file.read_text()
+
+    def test_the_wrapper_passes_over_a_slot_this_session_saw_refused(self, tmp_path: Path) -> None:
+        home = _home(tmp_path, ["claude-1", "claude-5"])
+        config = tmp_path / "cfg"
+        config.mkdir()
+        far = datetime.now(UTC).timestamp() + 3600
+        (config / POOL_REFUSALS_FILE).write_text(json.dumps({"claude-5": far}))
+        for _ in range(5):
+            child, pick_file = self._run(tmp_path, home)
+            assert child["token"] == _token("claude-1")
+            assert json.loads(pick_file.read_text())["slot"] == "claude-1"
 
     def test_the_wrapper_and_its_picker_copy_hold_no_token(self, tmp_path: Path) -> None:
         home = _home(tmp_path, ["claude-1"])

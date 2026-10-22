@@ -48,6 +48,7 @@ from .claude_env import (
     clear_pool_pick,
     harness_env,
     read_pool_pick_slot,
+    record_pool_refusal,
     resolve_api_key_credential,
     write_clean_env_wrapper,
 )
@@ -516,6 +517,9 @@ class ClaudeHarness:
         finally:
             if state.limit is not None:
                 self._repick_slot = True
+                slot = self.subscription_slot
+                if slot is not None:
+                    record_pool_refusal(self.config.config_dir, slot, state.limit.resets_at)
         if state.limit is not None and not outcome.success and not outcome.cancelled:
             # A refused turn can also end by timeout or transport loss; the
             # limit is still the cause the user needs to see.
