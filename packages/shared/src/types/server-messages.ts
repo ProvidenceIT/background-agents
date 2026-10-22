@@ -14,13 +14,29 @@ import { clientRequestIdSchema } from "./prompts";
 import { sessionVisibilitySchema } from "./teams";
 
 /**
+ * Why a due continue's prompt was refused, as a code. Every viewer of the session sees it,
+ * so it never carries the refusal's own message (a quota refusal describes the requester's
+ * usage).
+ */
+export const scheduledContinueRefusalSchema = z.enum([
+  "usage_quota_exceeded",
+  "auth_home_refused",
+  "budget_exhausted",
+  "session_not_promptable",
+  "queue_full",
+  "request_conflict",
+  "harness_model_incompatible",
+]);
+export type ScheduledContinueRefusal = z.infer<typeof scheduledContinueRefusalSchema>;
+
+/**
  * Why an opted-in "continue when it resets" did not run when it was due: its prompt was
- * refused (`detail` is the refusal), the person who scheduled it may no longer collaborate,
+ * refused (`refusal` says why), the person who scheduled it may no longer collaborate,
  * or the session could not queue it after every retry.
  */
 export const scheduledContinueFailureSchema = z.object({
   reason: z.enum(["refused", "requester_cannot_collaborate", "retries_exhausted"]),
-  detail: z.string().nullable(),
+  refusal: scheduledContinueRefusalSchema.nullable(),
   atMs: z.number().int().nonnegative(),
 });
 export type ScheduledContinueFailure = z.infer<typeof scheduledContinueFailureSchema>;

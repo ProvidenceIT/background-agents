@@ -807,7 +807,7 @@ describe("sessionSocketReducer", () => {
     it("keeps why a scheduled continue did not run until the next change", () => {
       const failure = {
         reason: "refused" as const,
-        detail: "Usage quota reached.",
+        refusal: "usage_quota_exceeded" as const,
         atMs: 1_800_000_060_000,
       };
       const failed = reduce(

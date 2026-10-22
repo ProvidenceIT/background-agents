@@ -411,18 +411,54 @@ describe("SessionScheduledContinue", () => {
 
     await scheduled.fireIfDue();
 
-    const failure = {
-      reason: "refused",
-      detail:
-        "Session cost limit reached. The session owner must raise or remove the limit to continue.",
-      atMs: RESET + 60_000,
-    };
+    const failure = { reason: "refused", refusal: "budget_exhausted", atMs: RESET + 60_000 };
     expect(state.failure).toEqual(failure);
     expect(broadcasts.at(-1)).toEqual({
       type: "scheduled_continue",
       scheduledContinueAtMs: null,
       scheduledContinueFailure: failure,
     });
+  });
+
+  it("keeps only the code of a refusal that describes the requester's own quota", async () => {
+    const quotaRefusal = new UsageQuotaExceededError({
+      quota: {
+        id: "quota-1",
+        scopeKind: "user",
+        scopeId: "member-1",
+        period: "day",
+        maxTurns: 800,
+        maxCostUsd: null,
+        maxTokens: null,
+        maxRunningSandboxes: null,
+        action: "block",
+        createdBy: "owner",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      window: { period: "day", startAt: 0, endAt: 1 },
+      usage: { turns: 812, tokens: 0, costUsd: 0 },
+      exceeded: ["turns"],
+    });
+    expect(quotaRefusal.message).toContain("812 of 800");
+    const { scheduled, state, broadcasts } = setup({
+      enqueue: async () => {
+        throw quotaRefusal;
+      },
+    });
+    await scheduled.schedule(requester);
+    state.now = RESET + 60_000;
+
+    await scheduled.fireIfDue();
+
+    const failure = { reason: "refused", refusal: "usage_quota_exceeded", atMs: RESET + 60_000 };
+    expect(state.failure).toEqual(failure);
+    expect(broadcasts.at(-1)).toEqual({
+      type: "scheduled_continue",
+      scheduledContinueAtMs: null,
+      scheduledContinueFailure: failure,
+    });
+    expect(JSON.stringify(broadcasts)).not.toContain("812");
   });
 
   it("keeps why a due continue was dropped for a requester who lost access", async () => {
@@ -432,7 +468,7 @@ describe("SessionScheduledContinue", () => {
 
     await scheduled.fireIfDue();
 
-    const failure = { reason: "requester_cannot_collaborate", detail: null, atMs: RESET + 60_000 };
+    const failure = { reason: "requester_cannot_collaborate", refusal: null, atMs: RESET + 60_000 };
     expect(state.failure).toEqual(failure);
     expect(broadcasts.at(-1)).toEqual({
       type: "scheduled_continue",
@@ -457,7 +493,7 @@ describe("SessionScheduledContinue", () => {
 
     expect(state.failure).toEqual({
       reason: "retries_exhausted",
-      detail: null,
+      refusal: null,
       atMs: RESET + 60_000 + CONTINUE_AT_RESET_MAX_RETRIES * CONTINUE_AT_RESET_RETRY_MS,
     });
   });

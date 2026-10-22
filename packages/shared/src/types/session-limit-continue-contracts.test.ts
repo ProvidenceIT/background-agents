@@ -125,7 +125,11 @@ describe("continue when it resets", () => {
   });
 
   it("parses why a scheduled continue did not run, and rejects an unknown reason", () => {
-    const failure = { reason: "refused", detail: "Usage quota reached.", atMs: 1_790_000_060_000 };
+    const failure = {
+      reason: "refused",
+      refusal: "usage_quota_exceeded",
+      atMs: 1_790_000_060_000,
+    };
     expect(
       serverMessageSchema.parse({
         type: "scheduled_continue",
@@ -142,6 +146,13 @@ describe("continue when it resets", () => {
         type: "scheduled_continue",
         scheduledContinueAtMs: null,
         scheduledContinueFailure: { ...failure, reason: "lost" },
+      }).success
+    ).toBe(false);
+    expect(
+      serverMessageSchema.safeParse({
+        type: "scheduled_continue",
+        scheduledContinueAtMs: null,
+        scheduledContinueFailure: { ...failure, refusal: "Usage quota reached: you used 812" },
       }).success
     ).toBe(false);
   });

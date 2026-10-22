@@ -193,8 +193,7 @@ describe("continue when the limit resets", () => {
     expect(session.scheduledContinueAtMs).toBeNull();
     expect(session.scheduledContinueFailure).toEqual({
       reason: "refused",
-      detail:
-        "Session cost limit reached. The session owner must raise or remove the limit to continue.",
+      refusal: "budget_exhausted",
       atMs: expect.any(Number),
     });
 

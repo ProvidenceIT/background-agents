@@ -2,7 +2,10 @@ import {
   CONTINUE_AT_RESET_BUFFER_MS,
   CONTINUE_AT_RESET_PROMPT,
 } from "@open-inspect/shared/types/session-api";
-import type { ScheduledContinueFailure } from "@open-inspect/shared/types/server-messages";
+import type {
+  ScheduledContinueFailure,
+  ScheduledContinueRefusal,
+} from "@open-inspect/shared/types/server-messages";
 import { AuthHomeTurnRefusedError } from "../auth-homes/turn-admission";
 import { UsageQuotaExceededError } from "../authorization/usage-quotas";
 import type { Logger } from "../logger";
@@ -28,17 +31,20 @@ export const CONTINUE_AT_RESET_RETRY_MS = 60_000;
 /** How many such retries a due continue gets before it is dropped. */
 export const CONTINUE_AT_RESET_MAX_RETRIES = 30;
 
-/** Enqueue failures that answer the same on a retry: the continue is dropped, not retried. */
-function isLastingRefusal(error: unknown): boolean {
-  return (
-    error instanceof AuthHomeTurnRefusedError ||
-    error instanceof UsageQuotaExceededError ||
-    error instanceof BudgetExhaustedError ||
-    error instanceof SessionNotPromptableError ||
-    error instanceof PromptQueueFullError ||
-    error instanceof PromptRequestConflictError ||
-    error instanceof HarnessModelIncompatibleError
-  );
+/**
+ * Enqueue failures that answer the same on a retry: the continue is dropped, not retried.
+ * Only the code is kept, never the error's message: a quota or home refusal describes the
+ * requester's own usage, and the failure is shown to everyone who views the session.
+ */
+function lastingRefusal(error: unknown): ScheduledContinueRefusal | null {
+  if (error instanceof UsageQuotaExceededError) return "usage_quota_exceeded";
+  if (error instanceof AuthHomeTurnRefusedError) return "auth_home_refused";
+  if (error instanceof BudgetExhaustedError) return "budget_exhausted";
+  if (error instanceof SessionNotPromptableError) return "session_not_promptable";
+  if (error instanceof PromptQueueFullError) return "queue_full";
+  if (error instanceof PromptRequestConflictError) return "request_conflict";
+  if (error instanceof HarnessModelIncompatibleError) return "harness_model_incompatible";
+  return null;
 }
 
 export type ScheduleContinueOutcome =
@@ -156,7 +162,7 @@ export class SessionScheduledContinue {
     if (authorization === "denied") {
       this.drop(current, "requester_cannot_collaborate", {
         reason: "requester_cannot_collaborate",
-        detail: null,
+        refusal: null,
       });
       return;
     }
@@ -184,15 +190,16 @@ export class SessionScheduledContinue {
         requested_by_user_id: current.requestedByUserId,
       });
     } catch (error) {
-      if (isLastingRefusal(error)) {
+      const refusal = lastingRefusal(error);
+      if (refusal) {
         this.deps.log.warn("scheduled_continue.refused", {
           event: "scheduled_continue.refused",
           requested_by_user_id: current.requestedByUserId,
+          refusal,
           error: error instanceof Error ? error : String(error),
         });
-        // Refusals carry the message the prompt routes show the user.
         if (!this.deps.repository.getScheduledContinue()) {
-          this.store(null, { reason: "refused", detail: (error as Error).message });
+          this.store(null, { reason: "refused", refusal });
         }
         return;
       }
@@ -213,7 +220,7 @@ export class SessionScheduledContinue {
     if (retries > CONTINUE_AT_RESET_MAX_RETRIES) {
       this.drop(schedule, `${reason}_retries_exhausted`, {
         reason: "retries_exhausted",
-        detail: null,
+        refusal: null,
       });
       return;
     }

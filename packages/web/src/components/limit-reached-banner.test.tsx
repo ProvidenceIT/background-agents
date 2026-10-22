@@ -319,15 +319,19 @@ describe("LimitReachedBanner", () => {
 
     it.each([
       [
-        { reason: "refused", detail: "Usage quota reached.", atMs: SCHEDULED_AT_MS },
-        "The scheduled continue did not run: Usage quota reached.",
+        { reason: "refused", refusal: "usage_quota_exceeded", atMs: SCHEDULED_AT_MS },
+        "The scheduled continue did not run: the person who scheduled it has reached a usage quota.",
       ],
       [
-        { reason: "requester_cannot_collaborate", detail: null, atMs: SCHEDULED_AT_MS },
+        { reason: "refused", refusal: "budget_exhausted", atMs: SCHEDULED_AT_MS },
+        "The scheduled continue did not run: the session cost limit was reached.",
+      ],
+      [
+        { reason: "requester_cannot_collaborate", refusal: null, atMs: SCHEDULED_AT_MS },
         "The scheduled continue did not run: the person who scheduled it can no longer work in this session.",
       ],
       [
-        { reason: "retries_exhausted", detail: null, atMs: SCHEDULED_AT_MS },
+        { reason: "retries_exhausted", refusal: null, atMs: SCHEDULED_AT_MS },
         "The scheduled continue did not run: the session could not queue it.",
       ],
     ] as const)("announces a scheduled continue that did not run (%o)", (failure, text) => {

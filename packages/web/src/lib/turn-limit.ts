@@ -1,5 +1,8 @@
 import type { TurnLimit, TurnLimitWindow } from "@open-inspect/shared/types/sandbox-events";
-import type { ScheduledContinueFailure } from "@open-inspect/shared/types/server-messages";
+import type {
+  ScheduledContinueFailure,
+  ScheduledContinueRefusal,
+} from "@open-inspect/shared/types/server-messages";
 
 /** The prompt the banner's Continue button sends through the ordinary prompt path. */
 export const CONTINUE_AFTER_LIMIT_PROMPT = "Continue where you stopped.";
@@ -100,11 +103,33 @@ export function describeScheduledContinue(
   return `Continues automatically at ${formatLimitClock(scheduledContinueAtMs, nowMs, options)}.`;
 }
 
+/** Shown to every viewer, so it names the kind of refusal and no one's usage figures. */
+function describeRefusal(refusal: ScheduledContinueRefusal | null): string {
+  switch (refusal) {
+    case "usage_quota_exceeded":
+      return "the person who scheduled it has reached a usage quota.";
+    case "auth_home_refused":
+      return "the subscription that runs this session refused the turn.";
+    case "budget_exhausted":
+      return "the session cost limit was reached.";
+    case "session_not_promptable":
+      return "the session can no longer take prompts.";
+    case "queue_full":
+      return "the session's prompt queue was full.";
+    case "request_conflict":
+      return "its prompt clashed with another request.";
+    case "harness_model_incompatible":
+      return "the session's model no longer works with its agent.";
+    case null:
+      return "its prompt was refused.";
+  }
+}
+
 /** Why the opted-in continue did not run when it was due. */
 export function describeScheduledContinueFailure(failure: ScheduledContinueFailure): string {
   switch (failure.reason) {
     case "refused":
-      return `The scheduled continue did not run: ${failure.detail ?? "its prompt was refused."}`;
+      return `The scheduled continue did not run: ${describeRefusal(failure.refusal)}`;
     case "requester_cannot_collaborate":
       return "The scheduled continue did not run: the person who scheduled it can no longer work in this session.";
     case "retries_exhausted":
