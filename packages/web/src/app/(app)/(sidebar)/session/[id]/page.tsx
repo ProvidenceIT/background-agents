@@ -539,6 +539,7 @@ function SessionContent({
           onContinue={canContinueAfterLimit ? continueAfterLimit : undefined}
           onFork={onFork}
           scheduledContinueAtMs={sessionState?.scheduledContinueAtMs}
+          scheduledContinueFailure={sessionState?.scheduledContinueFailure}
           onScheduleContinue={canScheduleContinue ? continueAtReset.schedule : undefined}
           onCancelScheduledContinue={capabilities.collaborate ? continueAtReset.cancel : undefined}
           isProcessing={isProcessing}

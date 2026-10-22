@@ -41,7 +41,7 @@ describe("LimitReachedBanner", () => {
 
     rerender(<LimitReachedBanner limit={LIMIT} isProcessing={false} />);
 
-    expect(screen.getByRole("status")).toBe(liveRegion);
+    expect(screen.getAllByRole("status")[0]).toBe(liveRegion);
     expect(liveRegion).toHaveTextContent(
       "Claude subscription limit reached (five-hour window, slot claude-5). The conversation and workspace are saved."
     );
@@ -81,7 +81,9 @@ describe("LimitReachedBanner", () => {
     const banner = screen.getByRole("region");
     act(() => vi.advanceTimersByTime(2 * 60_000));
     expect(banner).toHaveTextContent("Resets at 09:00 (in 2 min).");
-    expect(screen.getByRole("status")).not.toHaveTextContent("Resets at");
+    for (const liveRegion of screen.getAllByRole("status")) {
+      expect(liveRegion).not.toHaveTextContent("Resets at");
+    }
     act(() => vi.advanceTimersByTime(2 * 60_000 + LIMIT_COUNTDOWN_TICK_MS));
     expect(banner).toHaveTextContent("The limit has reset.");
     expect(banner).not.toHaveTextContent("Resets at");
@@ -240,6 +242,60 @@ describe("LimitReachedBanner", () => {
       );
       expect(html).not.toContain("Continues automatically");
       expect(html).not.toContain("Continue when it resets");
+    });
+
+    it("announces the schedule and its cancel from a region mounted with the banner", () => {
+      const { rerender } = render(
+        <LimitReachedBanner limit={LIMIT} isProcessing={false} onScheduleContinue={ok} />
+      );
+      const [, notice] = screen.getAllByRole("status");
+      expect(notice).toBeEmptyDOMElement();
+
+      rerender(
+        <LimitReachedBanner
+          limit={LIMIT}
+          isProcessing={false}
+          scheduledContinueAtMs={SCHEDULED_AT_MS}
+          onScheduleContinue={ok}
+        />
+      );
+      expect(screen.getAllByRole("status")[1]).toBe(notice);
+      expect(notice).toHaveTextContent("Continues automatically at 09:01.");
+
+      rerender(<LimitReachedBanner limit={LIMIT} isProcessing={false} onScheduleContinue={ok} />);
+      expect(notice).toBeEmptyDOMElement();
+    });
+
+    it.each([
+      [
+        { reason: "refused", detail: "Usage quota reached.", atMs: SCHEDULED_AT_MS },
+        "The scheduled continue did not run: Usage quota reached.",
+      ],
+      [
+        { reason: "requester_cannot_collaborate", detail: null, atMs: SCHEDULED_AT_MS },
+        "The scheduled continue did not run: the person who scheduled it can no longer work in this session.",
+      ],
+      [
+        { reason: "retries_exhausted", detail: null, atMs: SCHEDULED_AT_MS },
+        "The scheduled continue did not run: the session could not queue it.",
+      ],
+    ] as const)("announces a scheduled continue that did not run (%o)", (failure, text) => {
+      const { rerender } = render(
+        <LimitReachedBanner
+          limit={LIMIT}
+          isProcessing={false}
+          scheduledContinueAtMs={SCHEDULED_AT_MS}
+        />
+      );
+      const [, notice] = screen.getAllByRole("status");
+
+      rerender(
+        <LimitReachedBanner limit={LIMIT} isProcessing={false} scheduledContinueFailure={failure} />
+      );
+
+      expect(screen.getAllByRole("status")[1]).toBe(notice);
+      expect(notice).toHaveTextContent(text);
+      expect(screen.getByRole("region")).toHaveTextContent(text);
     });
 
     it("reports a refused schedule and a failed cancel", async () => {

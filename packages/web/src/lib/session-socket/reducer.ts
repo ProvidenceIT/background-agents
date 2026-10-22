@@ -357,6 +357,7 @@ function reduceServerMessage(
       return updateSessionState(state, (prev) => ({
         ...prev,
         scheduledContinueAtMs: message.scheduledContinueAtMs,
+        scheduledContinueFailure: message.scheduledContinueFailure ?? null,
       }));
 
     case "budget_status":

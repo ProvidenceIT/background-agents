@@ -1,4 +1,5 @@
 import type { TurnLimit, TurnLimitWindow } from "@open-inspect/shared/types/sandbox-events";
+import type { ScheduledContinueFailure } from "@open-inspect/shared/types/server-messages";
 
 /** The prompt the banner's Continue button sends through the ordinary prompt path. */
 export const CONTINUE_AFTER_LIMIT_PROMPT = "Continue where you stopped.";
@@ -97,4 +98,16 @@ export function describeScheduledContinue(
   options: TurnLimitFormatOptions = {}
 ): string {
   return `Continues automatically at ${formatLimitClock(scheduledContinueAtMs, nowMs, options)}.`;
+}
+
+/** Why the opted-in continue did not run when it was due. */
+export function describeScheduledContinueFailure(failure: ScheduledContinueFailure): string {
+  switch (failure.reason) {
+    case "refused":
+      return `The scheduled continue did not run: ${failure.detail ?? "its prompt was refused."}`;
+    case "requester_cannot_collaborate":
+      return "The scheduled continue did not run: the person who scheduled it can no longer work in this session.";
+    case "retries_exhausted":
+      return "The scheduled continue did not run: the session could not queue it.";
+  }
 }

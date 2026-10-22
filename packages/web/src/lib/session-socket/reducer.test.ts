@@ -803,6 +803,30 @@ describe("sessionSocketReducer", () => {
       );
       expect(cleared.sessionState?.scheduledContinueAtMs).toBeNull();
     });
+
+    it("keeps why a scheduled continue did not run until the next change", () => {
+      const failure = {
+        reason: "refused" as const,
+        detail: "Usage quota reached.",
+        atMs: 1_800_000_060_000,
+      };
+      const failed = reduce(
+        subscribedState(),
+        serverMessage({
+          type: "scheduled_continue",
+          scheduledContinueAtMs: null,
+          scheduledContinueFailure: failure,
+        })
+      );
+      expect(failed.sessionState?.scheduledContinueFailure).toEqual(failure);
+
+      const rescheduled = reduce(
+        failed,
+        serverMessage({ type: "scheduled_continue", scheduledContinueAtMs: 1_800_000_120_000 })
+      );
+      expect(rescheduled.sessionState?.scheduledContinueFailure).toBeNull();
+      expect(rescheduled.sessionState?.scheduledContinueAtMs).toBe(1_800_000_120_000);
+    });
   });
 
   describe("events_appended", () => {

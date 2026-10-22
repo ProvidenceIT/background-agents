@@ -2,7 +2,13 @@
 
 import { useEffect, useState } from "react";
 import type { TurnLimit } from "@open-inspect/shared/types/sandbox-events";
-import { describeScheduledContinue, describeTurnLimit, turnLimitSummary } from "@/lib/turn-limit";
+import type { ScheduledContinueFailure } from "@open-inspect/shared/types/server-messages";
+import {
+  describeScheduledContinue,
+  describeScheduledContinueFailure,
+  describeTurnLimit,
+  turnLimitSummary,
+} from "@/lib/turn-limit";
 
 /** How often the reset countdown re-renders; it shows whole minutes. */
 export const LIMIT_COUNTDOWN_TICK_MS = 15_000;
@@ -28,6 +34,8 @@ interface LimitReachedBannerProps {
   onFork?: () => void;
   /** When the opted-in continue is due (epoch ms); null or absent when none is scheduled. */
   scheduledContinueAtMs?: number | null;
+  /** Why the last scheduled continue did not run; null or absent when it did or none was due. */
+  scheduledContinueFailure?: ScheduledContinueFailure | null;
   /** Schedules the continue for after the reset; leave unset when the viewer cannot collaborate. */
   onScheduleContinue?: () => Promise<ContinueAfterLimitResult>;
   /** Cancels the scheduled continue; leave unset when the viewer cannot collaborate. */
@@ -77,6 +85,7 @@ function LimitBanner({
   onContinue,
   onFork,
   scheduledContinueAtMs = null,
+  scheduledContinueFailure = null,
   onScheduleContinue,
   onCancelScheduledContinue,
   isProcessing,
@@ -91,6 +100,9 @@ function LimitBanner({
     nowMs === null || scheduledContinueAtMs === null
       ? null
       : describeScheduledContinue(scheduledContinueAtMs, nowMs);
+  const continueNotice =
+    scheduled ??
+    (scheduledContinueFailure ? describeScheduledContinueFailure(scheduledContinueFailure) : null);
   const resetAhead = nowMs !== null && limit.resetsAtMs !== null && limit.resetsAtMs > nowMs;
 
   const run = async (action: BannerAction, handler?: () => Promise<ContinueAfterLimitResult>) => {
@@ -115,7 +127,10 @@ function LimitBanner({
       <p className="min-w-0 flex-1">
         <span className="font-medium">{summary}</span>
         {reset && <> {reset}</>} The conversation and workspace are saved.
-        {scheduled && <span className="font-medium"> {scheduled}</span>}
+        {/* Mounted with the banner, so a schedule, a cancel or a failure is announced. */}
+        <span role="status" className="font-medium">
+          {continueNotice && ` ${continueNotice}`}
+        </span>
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <button
