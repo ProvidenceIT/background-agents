@@ -1,4 +1,4 @@
-import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxEvent, TurnLimit } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
 import type { BackgroundTasks } from "../../platform-ports";
 import type { CallbackNotificationService } from "../callback-notification-service";
@@ -48,7 +48,8 @@ export class SandboxExecutionEventHandler {
       messageId: string,
       settledAt: number,
       subscriptionSlot: string | null
-    ) => void = () => {}
+    ) => void = () => {},
+    private readonly setLastTurnLimit: (limit: TurnLimit | null) => void = () => {}
   ) {}
 
   /**
@@ -75,7 +76,8 @@ export class SandboxExecutionEventHandler {
         context.processingMessage?.id === event.messageId
           ? this.messageRepository.recordMessageCompletion(event, context.now, "processing")
           : null;
-      if (!completion) this.messageRepository.clearMessageAwaitingStopConfirmation(event.messageId);
+      if (completion) this.setLastTurnLimit(event.success ? null : (event.limit ?? null));
+      else this.messageRepository.clearMessageAwaitingStopConfirmation(event.messageId);
       return {
         completion,
         budgetTransition: this.budget.observeExecutionCost(event, context.now),

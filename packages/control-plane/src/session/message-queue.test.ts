@@ -225,6 +225,7 @@ function buildQueue(
       awaitingStop = { id, deadline };
     }),
     listPendingMessagesWithCreatedAt: vi.fn((): Array<{ id: string; created_at: number }> => []),
+    setLastTurnLimit: vi.fn(),
   };
 
   const attachmentRepository = {
@@ -1603,6 +1604,27 @@ describe("SessionMessageQueue", () => {
       type: "prompt_queue_updated",
       promptQueue: expect.any(Array),
     });
+  });
+
+  it("clears the last turn limit when a prompt starts processing", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-continue" }));
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.setLastTurnLimit).toHaveBeenCalledWith(null);
+  });
+
+  it("keeps the last turn limit when the prompt claim is lost", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-continue" }));
+    h.repository.startMessageProcessing.mockReturnValue(false);
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.setLastTurnLimit).not.toHaveBeenCalled();
   });
 
   it("tells the sandbox lifecycle a prompt was dispatched only once the send succeeds", async () => {

@@ -64,6 +64,7 @@ const initRequestSchema = z.object({
   parentSessionId: z.string().nullable().optional(),
   spawnSource: spawnSourceSchema.optional(),
   spawnDepth: z.number().optional(),
+  forkedFromSessionId: z.string().nullable().optional(),
   codeServerEnabled: z.boolean().optional(),
   vncEnabled: z.boolean().optional(),
   /**
@@ -199,6 +200,7 @@ export class SessionInitHandler {
           : null,
         maxCostUsd: normalizedSandboxSettings?.maxSessionCostUsd ?? null,
         environmentId: body.environmentId ?? null,
+        forkedFromSessionId: body.forkedFromSessionId ?? null,
         createdAt: now,
         updatedAt: now,
       });
