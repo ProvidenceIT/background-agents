@@ -617,7 +617,50 @@ describe("forking onto a chosen subscription slot", () => {
     ).toEqual({ count: 0 });
   });
 
-  it("refuses a slot of a home the caller cannot use", async () => {
+  it("refuses a slot only another home spent, even when the source session ran on it", async () => {
+    const { name } = await seedSource();
+    const sourceRow = await env.DB.prepare(
+      "UPDATE sessions SET auth_home_id = 'ah_member' WHERE id = ?"
+    )
+      .bind(name)
+      .run();
+    expect(sourceRow.meta.changes).toBe(1);
+    await env.DB.prepare("UPDATE user_auth_homes SET owner_user_ids = ? WHERE id = 'ah_member'")
+      .bind(JSON.stringify([OTHER_MEMBER]))
+      .run();
+    await new UserAuthHomeStore(env.DB).register({
+      id: "ah_member_new",
+      ownerUserIds: [MEMBER],
+      pvcName: "sf-home-member-new",
+      nodeName: "node-1",
+      providers: ["anthropic"],
+    });
+
+    expect(await (await listSlots(name, "?harness=claude")).json()).toEqual({
+      harness: "claude",
+      slots: [],
+    });
+    const response = await fork(name, {
+      forkRequestId: crypto.randomUUID(),
+      handoff: "Continue.",
+      subscriptionSlot: "claude-2",
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Subscription slot unavailable",
+      code: "subscription_slot_unavailable",
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM sessions WHERE forked_from_session_id = ?"
+      )
+        .bind(name)
+        .first()
+    ).toEqual({ count: 0 });
+  });
+
+  it("refuses the fork outright for a caller left with no home", async () => {
     const { name } = await seedSource();
     await env.DB.prepare("UPDATE user_auth_homes SET owner_user_ids = ? WHERE id = 'ah_member'")
       .bind(JSON.stringify([OTHER_MEMBER]))
