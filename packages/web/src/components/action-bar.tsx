@@ -14,6 +14,7 @@ import {
   LinkIcon,
   GitHubIcon,
   ChevronUpIcon,
+  BranchIcon,
 } from "@/components/ui/icons";
 import { Badge } from "@/components/ui/badge";
 import { prBadgeVariant } from "@/components/ui/badge-variants";
@@ -34,6 +35,7 @@ export function ActionBar({
   primaryRepo,
   onArchive,
   onUnarchive,
+  onFork,
   capabilities,
 }: ActionBarProps) {
   const { previewArtifact, previewUrl, prLinks, mediaCount } = resolveSessionActions(
@@ -131,6 +133,12 @@ export function ActionBar({
               <LinkIcon className="w-4 h-4" />
               Copy link
             </DropdownMenuItem>
+            {onFork && (
+              <DropdownMenuItem onClick={onFork}>
+                <BranchIcon className="w-4 h-4" />
+                Fork…
+              </DropdownMenuItem>
+            )}
             {prLinks.length === 1 && (
               <DropdownMenuItem className="hidden md:flex" asChild>
                 <a href={prLinks[0].url} target="_blank" rel="noopener noreferrer">

@@ -62,6 +62,14 @@ import { useSessionSnapshot, useRefreshSessionSnapshot } from "./session-snapsho
 import { useSessionRename } from "@/hooks/use-session-rename";
 import { SandboxShutdownBanner } from "@/components/sandbox-shutdown-banner";
 import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
+import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
+import {
+  LimitReachedBanner,
+  type ContinueAfterLimitResult,
+} from "@/components/limit-reached-banner";
+import { ForkSessionDialog } from "@/components/fork-session-dialog";
+import { ForkedFromLink } from "@/components/forked-from-link";
+import { CONTINUE_AFTER_LIMIT_PROMPT } from "@/lib/turn-limit";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -188,6 +196,30 @@ function SessionContent({
     ready && capabilities.collaborate && !sessionState?.budgetExhausted && !sandboxBlockReason,
     shortcuts["send-prompt"]
   );
+  const [forkDialogOpen, setForkDialogOpen] = useState(false);
+  const openForkDialog = useCallback(() => setForkDialogOpen(true), []);
+  const onFork = capabilities.collaborate ? openForkDialog : undefined;
+  const canContinueAfterLimit =
+    ready &&
+    capabilities.collaborate &&
+    isSessionPromptable(sessionState?.status ?? DEFAULT_SESSION_STATUS) &&
+    !sessionState?.budgetExhausted &&
+    !sandboxBlockReason &&
+    modelAvailability.status === "available";
+  const continueAfterLimit = useCallback(async (): Promise<ContinueAfterLimitResult> => {
+    const result = await sendPrompt(CONTINUE_AFTER_LIMIT_PROMPT, selectedModel, reasoningEffort);
+    if (result.ok) return { ok: true };
+    return {
+      ok: false,
+      message:
+        result.message ??
+        (result.reason === "timeout"
+          ? "Sending the continue prompt timed out."
+          : result.reason === "disconnected"
+            ? "Reconnect before continuing."
+            : "The continue prompt was rejected."),
+    };
+  }, [reasoningEffort, selectedModel, sendPrompt]);
   const [cancellingPromptIds, setCancellingPromptIds] = useState<ReadonlySet<string>>(new Set());
   const cancellingPromptIdsRef = useRef(new Set<string>());
   const handleRemoveQueuedPrompt = useCallback(
@@ -398,6 +430,7 @@ function SessionContent({
             primaryRepo,
             onArchive: handleArchive,
             onUnarchive: handleUnarchive,
+            onFork,
             capabilities,
             harness: sessionHarness,
           }}
@@ -472,11 +505,18 @@ function SessionContent({
           primaryRepo,
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
+          onFork,
           capabilities,
         }}
         optimisticTitle={optimisticTitle}
         renameSession={renameSession}
         capabilities={capabilities}
+      />
+
+      <ForkedFromLink
+        sourceSessionId={
+          sessionState?.forkedFromSessionId ?? initialSnapshot.session.forkedFromSessionId
+        }
       />
 
       {/* Connection error banner */}
@@ -497,6 +537,29 @@ function SessionContent({
         <SandboxShutdownBanner
           shutdown={sessionState?.sandboxPreservation}
           onRecover={capabilities.lifecycle && ready ? recoverShutdown : undefined}
+        />
+      )}
+
+      {capabilities.read && (
+        <LimitReachedBanner
+          limit={sessionState?.lastTurnLimit}
+          onContinue={canContinueAfterLimit ? continueAfterLimit : undefined}
+          onFork={onFork}
+          isProcessing={isProcessing}
+        />
+      )}
+
+      {onFork && (
+        <ForkSessionDialog
+          open={forkDialogOpen}
+          onOpenChange={setForkDialogOpen}
+          source={{
+            id: sessionId,
+            title: optimisticTitle ?? sessionState?.title ?? initialSnapshot.session.title,
+            harness: sessionHarness,
+            model: sessionState?.model,
+            reasoningEffort: sessionState?.reasoningEffort,
+          }}
         />
       )}
 
