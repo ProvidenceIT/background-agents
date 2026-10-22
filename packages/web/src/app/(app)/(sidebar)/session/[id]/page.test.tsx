@@ -379,7 +379,19 @@ it("continues after a subscription limit through the prompt path", async () => {
     "Continue where you stopped.",
     "anthropic/claude-opus-5",
     expect.anything(),
+    undefined,
+    expect.any(String),
   ]);
+});
+
+it("holds Continue while a prompt waits in the queue", () => {
+  collaboratorSocket({
+    promptQueue: [
+      { messageId: "message-1", content: "Continue where you stopped.", status: "pending" },
+    ],
+  });
+  render(<SessionPage />);
+  expect(screen.getByRole("button", { name: "Queued" })).toBeDisabled();
 });
 
 it("hides the limit banner when the last turn hit no limit", () => {
