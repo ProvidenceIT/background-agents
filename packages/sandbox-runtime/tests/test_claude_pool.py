@@ -54,14 +54,17 @@ def _home(tmp_path: Path, slots: list[str], *, single: bool = False) -> Path:
 
 
 def _headroom(
-    home: Path, readings: dict[str, dict[str, int | tuple[int, float]]], *, age: float = 60
+    home: Path, readings: dict[str, dict[str, int | tuple[int, float | None]]], *, age: float = 60
 ) -> None:
     slots = {}
     for slot, windows in readings.items():
         entries = []
         for window_id, value in windows.items():
             percent, resets = value if isinstance(value, tuple) else (value, NOW + 3600)
-            entries.append({"id": window_id, "percentRemaining": percent, "resetsAt": _iso(resets)})
+            entry: dict[str, object] = {"id": window_id, "percentRemaining": percent}
+            if resets is not None:
+                entry["resetsAt"] = _iso(resets)
+            entries.append(entry)
         slots[slot] = {"windows": entries}
     (home / "claude" / "pool" / "headroom.json").write_text(
         json.dumps({"capturedAt": _iso(NOW - age), "slots": slots})
@@ -432,6 +435,19 @@ class TestPreferredSlot:
         )
         assert {(p.slot, p.reason) for p in self._pick(home, "claude-2")} == {
             ("claude-1", "spread")
+        }
+
+    def test_a_fresh_low_preferred_slot_without_a_reset_falls_back(self, tmp_path: Path) -> None:
+        home = _home(tmp_path, ["claude-1", "claude-2"])
+        _headroom(
+            home,
+            {
+                "claude-1": {"five_hour": (90, None)},
+                "claude-2": {"five_hour": (EXHAUSTED_PERCENT - 3, None)},
+            },
+        )
+        assert {(p.slot, p.reason, p.percent_remaining) for p in self._pick(home, "claude-2")} == {
+            ("claude-1", "ranked", 90)
         }
 
     def test_when_every_slot_is_exhausted_the_preference_does_not_override(

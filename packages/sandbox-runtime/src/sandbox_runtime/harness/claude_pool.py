@@ -19,7 +19,8 @@ Rules, in order:
    A refusal this session recorded rules its slot out the same way; a
    refusal of a model window (``seven_day_opus``) only for that model.
    A preferred slot (a session pinned to one subscription) is used whenever
-   this rule leaves it open; otherwise the rules below pick as usual.
+   this rule leaves it open and a fresh snapshot does not read it at or
+   below ``EXHAUSTED_PERCENT``; otherwise the rules below pick as usual.
 2. With a fresh snapshot, slots with a reading rank by their tightest
    window: five-hour, week, and a model window the ``--model`` argument
    names (``fable`` for ``claude-fable-5-1``). One is chosen at random from
@@ -282,7 +283,8 @@ def rank_pick(
     window), and ``extra_windows`` the model windows that bound the choice
     too. ``blocked_until`` rules a slot out until the given time, on top of
     the snapshot (the caller's own exhaustion marks). ``preferred`` wins
-    whenever it is one of ``slots`` and rule 1 leaves it open.
+    whenever it is one of ``slots``, rule 1 leaves it open and a fresh
+    snapshot does not read it as exhausted.
     """
     names = list(slots)
     if not names:
@@ -312,10 +314,14 @@ def rank_pick(
     def tightest(slot: str) -> int:
         return min(w.percent_remaining for w in relevant(slot))
 
+    def fresh_reading(slot: str) -> int | None:
+        return tightest(slot) if fresh and any(counts(w) for w in relevant(slot)) else None
+
     open_slots = [slot for slot in names if exhausted_until(slot) is None]
     if preferred in open_slots:
-        read = fresh and any(counts(w) for w in relevant(preferred))
-        return Ranked(preferred, "preferred", tightest(preferred) if read else None)
+        reading = fresh_reading(preferred)
+        if reading is None or reading > EXHAUSTED_PERCENT:
+            return Ranked(preferred, "preferred", reading)
     if not open_slots:
         slot = min(names, key=lambda s: (exhausted_until(s) or now, s))
         return Ranked(slot, "exhausted", 0)
