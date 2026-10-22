@@ -162,6 +162,20 @@ describe("continue when the limit resets", () => {
     expect(await snapshotScheduledAt(name)).toBeNull();
   });
 
+  it("drops a due continue once the requester is suspended", async () => {
+    const { name, stub } = await seedLimitedSession(Date.now() + 3_600_000);
+    expect((await continueAtReset(name, "POST")).status).toBe(200);
+    await makeDue(stub);
+    await env.DB.prepare("UPDATE users SET suspended_at = ? WHERE id = ?")
+      .bind(Date.now(), MEMBER)
+      .run();
+
+    await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
+
+    expect(await messageContents(stub)).toEqual([]);
+    expect(await storedSchedule(stub)).toBeNull();
+  });
+
   it("leaves a schedule that is not yet due and re-arms for it", async () => {
     const resetsAtMs = Date.now() + 3_600_000;
     const { name, stub } = await seedLimitedSession(resetsAtMs);
