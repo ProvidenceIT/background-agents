@@ -157,22 +157,17 @@ function lastCompletion(
   return null;
 }
 
-/**
- * The branch a fork of this repository starts from: the source's pushed work
- * branch, or its base branch when nothing was pushed.
- */
-export function forkStartBranch(repository: ForkRepository): string {
-  return repository.branchName ?? repository.baseBranch;
-}
-
+// The fork keeps the source's base branch, which is also its pull request
+// target; the pushed work branch may be deleted once its pull request merges,
+// so the agent picks it up itself instead of the sandbox booting from it.
 function repositoryLine(repository: ForkRepository): string {
   const name = `${repository.repoOwner}/${repository.repoName}`;
   const base = repository.baseBranch;
   const work = repository.branchName;
   if (!work) {
-    return `- ${name}: starts from base branch \`${base}\`. Nothing was pushed, so unpushed work from the original sandbox is not here.`;
+    return `- ${name}: base branch \`${base}\`. Nothing was pushed, so unpushed work from the original sandbox is not here.`;
   }
-  return `- ${name}: starts from \`${work}\`, the branch the original session pushed its work to. Pull requests from this session target \`${base}\`, the original base branch.`;
+  return `- ${name}: base branch \`${base}\`; the original session pushed its work to \`${work}\`. Continue from it with \`git fetch origin ${work} && git reset --hard FETCH_HEAD\`. If that branch no longer exists (for example it was merged and deleted), stay on \`${base}\` and check whether the work already landed there. Pull requests from this session target \`${base}\` from this session's own branch, never \`${work}\`.`;
 }
 
 /**

@@ -120,7 +120,7 @@ describe("session fork routes", () => {
     const { handoff } = await response.json<ForkHandoffResponse>();
     expect(handoff).toContain('# Handoff from "Fix the parser"');
     expect(handoff).toContain(
-      "- acme/web-app: starts from `oi/fix-parser`, the branch the original session pushed its work to. Pull requests from this session target `main`, the original base branch."
+      "- acme/web-app: base branch `main`; the original session pushed its work to `oi/fix-parser`. Continue from it with `git fetch origin oi/fix-parser && git reset --hard FETCH_HEAD`."
     );
     expect(handoff).toContain("## Original request\n\n> Fix the quote handling in the parser");
     expect(handoff).toContain(
@@ -132,7 +132,7 @@ describe("session fork routes", () => {
     expect(handoff).toContain(FORK_CONSENT_LINE);
   });
 
-  it("creates a private fork on the pushed branch, enqueues the handoff, and replays", async () => {
+  it("creates a private fork on the source's base branch, enqueues the handoff, and replays", async () => {
     const { name } = await seedSource();
     const forkRequestId = crypto.randomUUID();
 
@@ -153,7 +153,7 @@ describe("session fork routes", () => {
       ownerTeamId: null,
       parentSessionId: null,
       spawnDepth: 0,
-      baseBranch: "oi/fix-parser",
+      baseBranch: "main",
       model: "anthropic/claude-opus-4-6",
       harness: "claude",
     });
@@ -177,7 +177,7 @@ describe("session fork routes", () => {
     expect((await snapshot.json<SessionSnapshot>()).session).toMatchObject({
       forkedFromSessionId: name,
       parentSessionId: null,
-      repositories: [expect.objectContaining({ baseBranch: "oi/fix-parser", branchName: null })],
+      repositories: [expect.objectContaining({ baseBranch: "main", branchName: null })],
     });
 
     const replay = await fork(name, { forkRequestId, handoff: "Something else" });
