@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { hydrateRoot, type Root } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TurnLimit } from "@open-inspect/shared/types/sandbox-events";
 import { LIMIT_COUNTDOWN_TICK_MS, LimitReachedBanner } from "./limit-reached-banner";
@@ -50,6 +52,28 @@ describe("LimitReachedBanner", () => {
     expect(screen.getByRole("region", { name: "Subscription limit reached" })).toHaveTextContent(
       "Claude subscription limit reached (five-hour window, slot claude-5). Resets at 09:00 (in 4 min). The conversation and workspace are saved."
     );
+  });
+
+  it("renders the reset clock only in the browser, so hydration cannot disagree", () => {
+    const html = renderToString(<LimitReachedBanner limit={LIMIT} isProcessing={false} />);
+    expect(html).toContain("Claude subscription limit reached (five-hour window, slot claude-5).");
+    expect(html).not.toContain("Resets at");
+
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    document.body.appendChild(container);
+    const onRecoverableError = vi.fn();
+    let root: Root | undefined;
+    act(() => {
+      root = hydrateRoot(container, <LimitReachedBanner limit={LIMIT} isProcessing={false} />, {
+        onRecoverableError,
+      });
+    });
+
+    expect(onRecoverableError).not.toHaveBeenCalled();
+    expect(screen.getByRole("region")).toHaveTextContent("Resets at 09:00 (in 4 min).");
+    act(() => root?.unmount());
+    container.remove();
   });
 
   it("counts down and reports the reset once it passes", () => {

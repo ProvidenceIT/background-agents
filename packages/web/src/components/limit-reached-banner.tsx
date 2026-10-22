@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { TurnLimit } from "@open-inspect/shared/types/sandbox-events";
-import { describeTurnLimit } from "@/lib/turn-limit";
+import { describeTurnLimit, turnLimitSummary } from "@/lib/turn-limit";
 
 /** How often the reset countdown re-renders; it shows whole minutes. */
 export const LIMIT_COUNTDOWN_TICK_MS = 15_000;
@@ -29,9 +29,7 @@ export function LimitReachedBanner({ limit, ...props }: LimitReachedBannerProps)
       {/* Mounted empty before any limit: screen readers announce changes inside an existing live
           region, not a region inserted with its text already in it. */}
       <p role="status" className="sr-only">
-        {limit
-          ? `${describeTurnLimit(limit, Date.now()).summary} The conversation and workspace are saved.`
-          : ""}
+        {limit ? `${turnLimitSummary(limit)} The conversation and workspace are saved.` : ""}
       </p>
       {/* A new limit gets fresh pending/error state. */}
       {limit && (
@@ -41,11 +39,16 @@ export function LimitReachedBanner({ limit, ...props }: LimitReachedBannerProps)
   );
 }
 
-function useNowMs(resetsAtMs: number | null): number {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const counting = resetsAtMs !== null && nowMs < resetsAtMs;
+/**
+ * The clock the countdown reads; null until mounted, so the server render (its own clock and
+ * time zone) never disagrees with the browser's during hydration.
+ */
+function useNowMs(resetsAtMs: number | null): number | null {
+  const [nowMs, setNowMs] = useState<number | null>(null);
+  const counting = nowMs === null || (resetsAtMs !== null && nowMs < resetsAtMs);
   useEffect(() => {
     if (!counting) return;
+    setNowMs(Date.now());
     const interval = setInterval(() => setNowMs(Date.now()), LIMIT_COUNTDOWN_TICK_MS);
     return () => clearInterval(interval);
   }, [counting]);
@@ -62,7 +65,8 @@ function LimitBanner({
   const nowMs = useNowMs(limit.resetsAtMs);
   const [continuing, setContinuing] = useState(false);
   const [continueError, setContinueError] = useState<string | null>(null);
-  const { summary, reset } = describeTurnLimit(limit, nowMs);
+  const summary = turnLimitSummary(limit);
+  const reset = nowMs === null ? null : describeTurnLimit(limit, nowMs).reset;
 
   const handleContinue = async () => {
     if (!onContinue || continuing) return;

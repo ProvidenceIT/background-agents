@@ -64,17 +64,22 @@ function formatResetClock(resetsAtMs: number, nowMs: number, options: TurnLimitF
   }).format(resetsAtMs);
 }
 
-export function describeTurnLimit(
-  limit: TurnLimit,
-  nowMs: number,
-  options: TurnLimitFormatOptions = {}
-): TurnLimitDescription {
+/** What was hit; unlike the reset, it does not depend on the clock or time zone. */
+export function turnLimitSummary(limit: TurnLimit): string {
   const provider = PROVIDER_LABELS[limit.harness] ?? limit.harness;
   const details = [
     WINDOW_LABELS[limit.window],
     limit.subscriptionSlot ? `slot ${limit.subscriptionSlot}` : null,
   ].filter((part): part is string => part !== null);
-  const summary = `${provider} subscription limit reached${details.length ? ` (${details.join(", ")})` : ""}.`;
+  return `${provider} subscription limit reached${details.length ? ` (${details.join(", ")})` : ""}.`;
+}
+
+export function describeTurnLimit(
+  limit: TurnLimit,
+  nowMs: number,
+  options: TurnLimitFormatOptions = {}
+): TurnLimitDescription {
+  const summary = turnLimitSummary(limit);
 
   if (limit.resetsAtMs === null) return { summary, reset: null };
   if (limit.resetsAtMs <= nowMs) return { summary, reset: "The limit has reset." };
