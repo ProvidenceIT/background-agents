@@ -294,6 +294,18 @@ describe("continue when the limit resets", () => {
     expect(await storedSchedule(stub)).toBeNull();
   });
 
+  it("clears the schedule when the session is cancelled", async () => {
+    const { name, stub } = await seedLimitedSession(Date.now() + 3_600_000);
+    expect((await continueAtReset(name, "POST")).status).toBe(200);
+
+    expect((await stub.fetch("http://internal/internal/cancel", { method: "POST" })).status).toBe(
+      200
+    );
+
+    expect(await storedSchedule(stub)).toBeNull();
+    expect(await snapshotScheduledAt(name)).toBeNull();
+  });
+
   it("clears the schedule when a turn completes", async () => {
     const { name, stub } = await seedLimitedSession(Date.now() + 3_600_000);
     expect((await continueAtReset(name, "POST")).status).toBe(200);
