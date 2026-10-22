@@ -214,6 +214,27 @@ describe("session fork routes", () => {
     await waitForSandboxStatus(forkStub, "failed");
   });
 
+  it("runs the fork on the harness, model and effort the caller picked", async () => {
+    const { name } = await seedSource();
+
+    const response = await fork(name, {
+      forkRequestId: crypto.randomUUID(),
+      handoff: "Continue.",
+      harness: "opencode",
+      model: "anthropic/claude-sonnet-4-6",
+      reasoningEffort: "low",
+    });
+
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<ForkSessionResponse>();
+    expect(await store.get(sessionId)).toMatchObject({
+      harness: "opencode",
+      model: "anthropic/claude-sonnet-4-6",
+      reasoningEffort: "low",
+    });
+    await waitForSandboxStatus(env.SESSION.get(env.SESSION.idFromName(sessionId)), "failed");
+  });
+
   it("retries a fork that failed before its runtime claimed it", async () => {
     const { name } = await seedSource();
     const forkRequestId = crypto.randomUUID();
