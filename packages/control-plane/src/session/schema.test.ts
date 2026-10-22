@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { applyMigrations, initSchema, MIGRATIONS, SCHEMA_SQL } from "./schema";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
+import { SessionCoreRepository } from "./session-core-repository";
 
 /**
  * Create a mock SqlStorage that tracks calls and supports per-query data.
@@ -360,6 +361,36 @@ describe("applyMigrations", () => {
           }),
         ])
       );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("adds fork lineage and the last turn limit to an existing session", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 57);
+    expect(typeof migration?.run).toBe("function");
+
+    const db = new DatabaseSync(":memory:");
+    const storage = createNodeSqlStorage(db);
+    try {
+      db.exec("CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT)");
+      db.exec("INSERT INTO session (id, title) VALUES ('s-1', 'Fix the parser')");
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(storage.sql);
+      expect(() => run(storage.sql)).not.toThrow();
+
+      const repository = new SessionCoreRepository(storage.sql, storage.transactionSync);
+      expect(repository.getForkedFromSessionId()).toBeNull();
+      expect(repository.getLastTurnLimit()).toBeNull();
+      const limit = {
+        kind: "subscription_limit",
+        window: "five_hour",
+        resetsAtMs: 1_792_667_614_000,
+        subscriptionSlot: "claude-5",
+        harness: "claude",
+      } as const;
+      repository.setLastTurnLimit(limit);
+      expect(repository.getLastTurnLimit()).toEqual(limit);
     } finally {
       db.close();
     }
