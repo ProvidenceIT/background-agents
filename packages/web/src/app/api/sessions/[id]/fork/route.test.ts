@@ -8,6 +8,7 @@ import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { POST } from "./route";
 import { GET as getHandoff } from "./handoff/route";
+import { GET as getSubscriptionSlots } from "./subscription-slots/route";
 
 const FORK_REQUEST_ID = "6f1c2a4e-9b7d-4c1e-8a2f-0d3b5e7f9a1c";
 
@@ -127,6 +128,99 @@ describe("session fork API routes", () => {
     await expect(response.json()).resolves.toEqual({ handoff: "# Handoff\n\nGoal: ship it." });
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
       "/sessions/session-1/fork/handoff",
+      undefined
+    );
+  });
+  it("proxies a chosen subscription slot", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json(
+        { sessionId: "session-2", forkedFromSessionId: "session-1", created: true },
+        { status: 201 }
+      )
+    );
+
+    await postFork({
+      forkRequestId: FORK_REQUEST_ID,
+      harness: "claude",
+      subscriptionSlot: "claude-3",
+    });
+
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/sessions/session-1/fork", {
+      method: "POST",
+      body: JSON.stringify({
+        forkRequestId: FORK_REQUEST_ID,
+        harness: "claude",
+        subscriptionSlot: "claude-3",
+      }),
+    });
+  });
+
+  it("rejects a malformed subscription slot before proxying", async () => {
+    const response = await postFork({ forkRequestId: FORK_REQUEST_ID, subscriptionSlot: "../x" });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatch(/^subscriptionSlot: /);
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+  });
+
+  it("relays an unavailable subscription slot as 400 with its code", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json(
+        { error: "Subscription slot unavailable", code: "subscription_slot_unavailable" },
+        { status: 400 }
+      )
+    );
+
+    const response = await postFork({
+      forkRequestId: FORK_REQUEST_ID,
+      subscriptionSlot: "claude-9",
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Subscription slot unavailable",
+      code: "subscription_slot_unavailable",
+    });
+  });
+
+  it("lists the subscription slots for the requested harness", async () => {
+    const slots = {
+      harness: "claude",
+      slots: [
+        { slot: "claude-1", percentRemaining: null, lastUsedAt: 1_790_000_000_000 },
+        { slot: "claude-2", percentRemaining: 72, lastUsedAt: null },
+      ],
+    };
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json(slots));
+
+    const response = await getSubscriptionSlots(
+      new NextRequest(
+        "http://localhost/api/sessions/session-1/fork/subscription-slots?harness=claude&x=1"
+      ),
+      { params: Promise.resolve({ id: "session-1" }) }
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(slots);
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/sessions/session-1/fork/subscription-slots?harness=claude",
+      undefined
+    );
+  });
+
+  it("relays the control plane's 400 for a missing harness", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "harness is required" }, { status: 400 })
+    );
+
+    const response = await getSubscriptionSlots(
+      new NextRequest("http://localhost/api/sessions/session-1/fork/subscription-slots"),
+      { params: Promise.resolve({ id: "session-1" }) }
+    );
+
+    expect(response.status).toBe(400);
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/sessions/session-1/fork/subscription-slots",
       undefined
     );
   });
