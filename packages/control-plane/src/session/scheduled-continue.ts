@@ -2,15 +2,43 @@ import {
   CONTINUE_AT_RESET_BUFFER_MS,
   CONTINUE_AT_RESET_PROMPT,
 } from "@open-inspect/shared/types/session-api";
+import { AuthHomeTurnRefusedError } from "../auth-homes/turn-admission";
+import { UsageQuotaExceededError } from "../authorization/usage-quotas";
 import type { Logger } from "../logger";
 import type { AlarmScheduler } from "../platform-ports";
 import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
+import {
+  BudgetExhaustedError,
+  HarnessModelIncompatibleError,
+  PromptQueueFullError,
+  PromptRequestConflictError,
+  SessionNotPromptableError,
+} from "./message-queue";
 import type { MessageRepository } from "./message-repository";
 import type { SessionMessenger } from "./messenger";
 import type { ScheduledContinue, SessionCoreRepository } from "./session-core-repository";
 
-/** How long a due continue waits before asking again when authorization cannot be read. */
+/**
+ * How long a due continue waits before trying again after a passing failure: authorization
+ * that cannot be read, or an enqueue that failed for any reason but a refusal.
+ */
 export const CONTINUE_AT_RESET_RETRY_MS = 60_000;
+
+/** How many such retries a due continue gets before it is dropped. */
+export const CONTINUE_AT_RESET_MAX_RETRIES = 30;
+
+/** Enqueue failures that answer the same on a retry: the continue is dropped, not retried. */
+function isLastingRefusal(error: unknown): boolean {
+  return (
+    error instanceof AuthHomeTurnRefusedError ||
+    error instanceof UsageQuotaExceededError ||
+    error instanceof BudgetExhaustedError ||
+    error instanceof SessionNotPromptableError ||
+    error instanceof PromptQueueFullError ||
+    error instanceof PromptRequestConflictError ||
+    error instanceof HarnessModelIncompatibleError
+  );
+}
 
 export type ScheduleContinueOutcome =
   | { kind: "scheduled"; atMs: number }
@@ -113,13 +141,7 @@ export class SessionScheduledContinue {
     const current = this.deps.repository.getScheduledContinue();
     if (!current || current.createdAtMs !== schedule.createdAtMs) return;
     if (authorization === "unavailable") {
-      const retryAtMs = this.deps.now() + CONTINUE_AT_RESET_RETRY_MS;
-      this.store({ ...current, atMs: retryAtMs });
-      await this.arm(retryAtMs);
-      this.deps.log.warn("scheduled_continue.retry", {
-        event: "scheduled_continue.retry",
-        retry_at_ms: retryAtMs,
-      });
+      await this.retry(current, "authorization_unavailable");
       return;
     }
     const blockedAfterAuthorization =
@@ -147,12 +169,41 @@ export class SessionScheduledContinue {
         requested_by_user_id: current.requestedByUserId,
       });
     } catch (error) {
-      this.deps.log.warn("scheduled_continue.refused", {
-        event: "scheduled_continue.refused",
+      if (isLastingRefusal(error)) {
+        this.deps.log.warn("scheduled_continue.refused", {
+          event: "scheduled_continue.refused",
+          requested_by_user_id: current.requestedByUserId,
+          error: error instanceof Error ? error : String(error),
+        });
+        return;
+      }
+      this.deps.log.warn("scheduled_continue.enqueue_failed", {
+        event: "scheduled_continue.enqueue_failed",
         requested_by_user_id: current.requestedByUserId,
         error: error instanceof Error ? error : String(error),
       });
+      // Restore only while nothing else has moved the session on during the enqueue.
+      if (this.deps.repository.getScheduledContinue() || this.blockedReason()) return;
+      await this.retry(current, "enqueue_failed");
     }
+  }
+
+  /** Try a due continue again later, or drop it once its retries are spent. */
+  private async retry(schedule: ScheduledContinue, reason: string): Promise<void> {
+    const retries = (schedule.retries ?? 0) + 1;
+    if (retries > CONTINUE_AT_RESET_MAX_RETRIES) {
+      this.drop(schedule, `${reason}_retries_exhausted`);
+      return;
+    }
+    const retryAtMs = this.deps.now() + CONTINUE_AT_RESET_RETRY_MS;
+    this.store({ ...schedule, atMs: retryAtMs, retries });
+    await this.arm(retryAtMs);
+    this.deps.log.warn("scheduled_continue.retry", {
+      event: "scheduled_continue.retry",
+      reason,
+      retries,
+      retry_at_ms: retryAtMs,
+    });
   }
 
   /** Why a due continue must not run now, or null when it may. */

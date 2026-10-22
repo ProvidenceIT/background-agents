@@ -28,6 +28,8 @@ export const scheduledContinueSchema = z.object({
   /** Their participant id, the prompt's author. */
   authorId: z.string().min(1),
   createdAtMs: z.number().int().nonnegative(),
+  /** Retries so far after a passing failure when it was due; absent before the first. */
+  retries: z.number().int().nonnegative().optional(),
 });
 export type ScheduledContinue = z.infer<typeof scheduledContinueSchema>;
 

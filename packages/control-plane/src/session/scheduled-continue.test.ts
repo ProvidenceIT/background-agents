@@ -4,7 +4,14 @@ import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { Logger } from "../logger";
 import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import type { ScheduledContinue } from "./session-core-repository";
-import { CONTINUE_AT_RESET_RETRY_MS, SessionScheduledContinue } from "./scheduled-continue";
+import { AuthHomeTurnRefusedError } from "../auth-homes/turn-admission";
+import { UsageQuotaExceededError } from "../authorization/usage-quotas";
+import { BudgetExhaustedError, SandboxPromptBlockedError } from "./message-queue";
+import {
+  CONTINUE_AT_RESET_MAX_RETRIES,
+  CONTINUE_AT_RESET_RETRY_MS,
+  SessionScheduledContinue,
+} from "./scheduled-continue";
 
 const NOW = 1_790_000_000_000;
 const RESET = NOW + 3_600_000;
@@ -235,16 +242,140 @@ describe("SessionScheduledContinue", () => {
     expect(armed.at(-1)).toBe(RESET + 60_000 + CONTINUE_AT_RESET_RETRY_MS);
   });
 
-  it("drops a continue whose enqueue is refused", async () => {
-    const { scheduled, state } = setup({
+  it.each([
+    ["the session budget", () => new BudgetExhaustedError()],
+    [
+      "the home",
+      () =>
+        new AuthHomeTurnRefusedError({
+          reason: "kind_disabled",
+          provider: "anthropic",
+          message: "Prompts are disabled on this home.",
+        }),
+    ],
+    [
+      "the usage quota",
+      () =>
+        new UsageQuotaExceededError({
+          quota: {
+            id: "quota-1",
+            scopeKind: "team",
+            scopeId: "team-1",
+            period: "month",
+            maxTurns: null,
+            maxCostUsd: 50,
+            maxTokens: null,
+            maxRunningSandboxes: null,
+            action: "block",
+            createdBy: "owner",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          window: { period: "month", startAt: 0, endAt: 1 },
+          usage: { turns: 10, tokens: 0, costUsd: 50 },
+          exceeded: ["cost"],
+        }),
+    ],
+  ])("drops a continue whose enqueue %s refuses", async (_label, refusal) => {
+    const { scheduled, state, armed } = setup({
       enqueue: async () => {
-        throw new Error("Usage quota reached");
+        throw refusal();
       },
     });
     await scheduled.schedule(requester);
     state.now = RESET + 60_000;
 
     await expect(scheduled.fireIfDue()).resolves.toBeUndefined();
+    expect(state.stored).toBeNull();
+    expect(armed).toEqual([RESET + 60_000]);
+  });
+
+  it.each([
+    ["a sandbox recovery hold", () => new SandboxPromptBlockedError("Sandbox needs recovery")],
+    ["a database error", () => new Error("D1_ERROR: network connection lost")],
+  ])("retries a continue whose enqueue fails on %s", async (_label, failure) => {
+    let calls = 0;
+    const enqueued: EnqueuePromptRequest[] = [];
+    const { scheduled, state, armed, broadcasts } = setup({
+      enqueue: async (request) => {
+        calls += 1;
+        if (calls === 1) throw failure();
+        enqueued.push(request);
+      },
+    });
+    await scheduled.schedule(requester);
+    state.now = RESET + 60_000;
+
+    await scheduled.fireIfDue();
+
+    const retryAtMs = RESET + 60_000 + CONTINUE_AT_RESET_RETRY_MS;
+    expect(state.stored).toEqual({
+      atMs: retryAtMs,
+      requestedByUserId: "user-1",
+      authorId: "user-1",
+      createdAtMs: NOW,
+      retries: 1,
+    });
+    expect(armed.at(-1)).toBe(retryAtMs);
+    expect(broadcasts.at(-1)).toEqual({
+      type: "scheduled_continue",
+      scheduledContinueAtMs: retryAtMs,
+    });
+
+    state.now = retryAtMs;
+    await scheduled.fireIfDue();
+
+    expect(enqueued.map((request) => request.content)).toEqual(["Continue where you stopped."]);
+    expect(state.stored).toBeNull();
+  });
+
+  it("drops a continue whose enqueue keeps failing once its retries are spent", async () => {
+    let calls = 0;
+    const { scheduled, state, armed } = setup({
+      enqueue: async () => {
+        calls += 1;
+        throw new Error("D1_ERROR: network connection lost");
+      },
+    });
+    await scheduled.schedule(requester);
+    state.now = RESET + 60_000;
+
+    for (let attempt = 0; attempt <= CONTINUE_AT_RESET_MAX_RETRIES; attempt += 1) {
+      await scheduled.fireIfDue();
+      state.now += CONTINUE_AT_RESET_RETRY_MS;
+    }
+
+    expect(calls).toBe(CONTINUE_AT_RESET_MAX_RETRIES + 1);
+    expect(state.stored).toBeNull();
+    expect(armed).toHaveLength(CONTINUE_AT_RESET_MAX_RETRIES + 1);
+  });
+
+  it("does not restore a failed continue once a prompt landed during the enqueue", async () => {
+    const { scheduled, state } = setup({
+      enqueue: async () => {
+        state.queued = 1;
+        throw new Error("D1_ERROR: network connection lost");
+      },
+    });
+    await scheduled.schedule(requester);
+    state.now = RESET + 60_000;
+
+    await scheduled.fireIfDue();
+
+    expect(state.stored).toBeNull();
+  });
+
+  it("stops retrying unreadable authorization once its retries are spent", async () => {
+    const { scheduled, state, enqueued } = setup({ authorization: "unavailable" });
+    await scheduled.schedule(requester);
+    state.now = RESET + 60_000;
+
+    for (let attempt = 0; attempt <= CONTINUE_AT_RESET_MAX_RETRIES; attempt += 1) {
+      await scheduled.fireIfDue();
+      state.now += CONTINUE_AT_RESET_RETRY_MS;
+    }
+
+    expect(enqueued).toEqual([]);
     expect(state.stored).toBeNull();
   });
 
