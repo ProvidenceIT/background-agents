@@ -34,6 +34,9 @@ import {
   slackGlobalSettingsSchema,
   slackRepoSettingsSchema,
   integrationSettingsSchemas,
+  notificationSettingsSchema,
+  resolveNotificationSettings,
+  NOTIFICATION_DEFAULTS,
   slackIntegrationSettingsRoutingResponseSchema,
   validateSandboxChildSessionLimits,
   validateSandboxResourceLimits,
@@ -639,5 +642,47 @@ describe("matchRoutingRules", () => {
 
   it("returns an empty array when no keyword is present", () => {
     expect(matchRoutingRules("just a normal message", rules)).toEqual([]);
+  });
+});
+
+describe("notification settings", () => {
+  it("is off until someone turns it on", () => {
+    expect(NOTIFICATION_DEFAULTS).toEqual({
+      enabled: false,
+      mode: "off",
+      channels: { teams: true },
+      skipMotionSessions: true,
+    });
+    expect(resolveNotificationSettings(undefined)).toEqual(NOTIFICATION_DEFAULTS);
+    expect(resolveNotificationSettings({})).toEqual(NOTIFICATION_DEFAULTS);
+  });
+
+  it("fills unset fields from the defaults", () => {
+    expect(resolveNotificationSettings({ enabled: true, mode: "shadow" })).toEqual({
+      ...NOTIFICATION_DEFAULTS,
+      enabled: true,
+      mode: "shadow",
+    });
+    expect(
+      resolveNotificationSettings({ channels: { teams: false }, skipMotionSessions: false })
+    ).toMatchObject({ channels: { teams: false }, skipMotionSessions: false });
+  });
+
+  it("is a global-only, closed setting", () => {
+    expect(notificationSettingsSchema.safeParse({ mode: "loud" }).success).toBe(false);
+    expect(notificationSettingsSchema.safeParse({ channels: { telegram: true } }).success).toBe(
+      false
+    );
+    expect(
+      integrationSettingsSchemas.notifications.global.safeParse({
+        defaults: { enabled: true, mode: "live" },
+      }).success
+    ).toBe(true);
+    expect(
+      integrationSettingsSchemas.notifications.global.safeParse({ enabledRepos: ["a/b"] }).success
+    ).toBe(false);
+    expect(integrationSettingsSchemas.notifications.repo.safeParse({ enabled: true }).success).toBe(
+      false
+    );
   });
 });

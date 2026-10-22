@@ -241,6 +241,10 @@
     "./memory-tools": {
       "import": "./dist/memory-tools.js",
       "types": "./dist/memory-tools.d.ts"
+    },
+    "./notices": {
+      "import": "./dist/notices.js",
+      "types": "./dist/notices.d.ts"
     }
   },
   "scripts": {

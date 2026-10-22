@@ -5,7 +5,8 @@ import { escapeRegExp } from "../regex";
 import { z } from "zod";
 import { teamSettingsSchema } from "./teams";
 
-export type IntegrationId = "github" | "linear" | "code-server" | "vnc" | "sandbox" | "slack";
+export type IntegrationId =
+  "github" | "linear" | "code-server" | "vnc" | "sandbox" | "slack" | "notifications";
 
 /** Enforces the common shape for all integration configurations. */
 export interface IntegrationEntry<
@@ -621,6 +622,50 @@ export function matchRoutingRules(message: string, rules: SlackRoutingRule[]): S
 }
 
 /**
+ * Session notices to the owner (see `../notices.ts`). `mode` stages a rollout:
+ * `shadow` records each notice it would send and sends nothing, `live` sends.
+ * Global only: who is told is the owner, whatever the repository.
+ */
+export const notificationModeSchema = z.enum(["off", "shadow", "live"]);
+export type NotificationMode = z.infer<typeof notificationModeSchema>;
+
+export const notificationSettingsSchema = z.strictObject({
+  enabled: z.boolean().optional(),
+  mode: notificationModeSchema.optional(),
+  channels: z.strictObject({ teams: z.boolean().optional() }).optional(),
+  /** Leave sessions motion started to motion, which tells its own users. */
+  skipMotionSessions: z.boolean().optional(),
+});
+export type NotificationSettings = z.infer<typeof notificationSettingsSchema>;
+
+export interface ResolvedNotificationSettings {
+  enabled: boolean;
+  mode: NotificationMode;
+  channels: { teams: boolean };
+  skipMotionSessions: boolean;
+}
+
+export const NOTIFICATION_DEFAULTS: ResolvedNotificationSettings = {
+  enabled: false,
+  mode: "off",
+  channels: { teams: true },
+  skipMotionSessions: true,
+};
+
+export function resolveNotificationSettings(
+  settings: NotificationSettings | undefined
+): ResolvedNotificationSettings {
+  return {
+    enabled: settings?.enabled ?? NOTIFICATION_DEFAULTS.enabled,
+    mode: settings?.mode ?? NOTIFICATION_DEFAULTS.mode,
+    channels: {
+      teams: settings?.channels?.teams ?? NOTIFICATION_DEFAULTS.channels.teams,
+    },
+    skipMotionSessions: settings?.skipMotionSessions ?? NOTIFICATION_DEFAULTS.skipMotionSessions,
+  };
+}
+
+/**
  * Integrations that accept environment-level setting overrides — the top layer
  * of the resolution chain (global defaults → primary-repo overrides →
  * environment overrides). Limited to the settings the session-scoped
@@ -674,6 +719,13 @@ export const integrationSettingsSchemas = {
     global: z.strictObject({
       enabledRepos: z.never().optional(),
       defaults: teamSettingsSchema.optional(),
+    }),
+    repo: z.strictObject({}),
+  },
+  notifications: {
+    global: z.strictObject({
+      enabledRepos: z.never().optional(),
+      defaults: notificationSettingsSchema.optional(),
     }),
     repo: z.strictObject({}),
   },
@@ -838,5 +890,10 @@ export const INTEGRATION_DEFINITIONS: {
     id: "slack",
     name: "Slack",
     description: "Agent-driven Slack notifications and mention policy",
+  },
+  {
+    id: "notifications",
+    name: "Session notices",
+    description: "Tell a session's owner on Teams when the session finishes or needs them",
   },
 ];
