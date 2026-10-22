@@ -412,6 +412,10 @@ Automations:
   at boot from `claude/expires_at`; never the token.
 - `auth_home_notices`: one row per notice owed to a home owner (the T-14d Claude expiry notice and
   the weekly digest), claimed before it is posted so each goes out at most once.
+- `session_notices`: the session notice outbox (`src/notifications`). One row per settled root
+  session's status revision, channel and recipient, written when the `notifications` integration is
+  on (`shadow` rows are never sent) and drained each minute in `live` mode. The payload is the
+  closed `NoticeEnvelope`: never a title, prompt, agent text, error string or cost.
 - `subscription_sharing`: the single-row (`id = 'global'`) workspace policy, `household` (default,
   read when the row is absent) or `owner_only`, managed by `/subscription-sharing`.
 - `auth_home_leases` and `auth_home_lease_queue`: the Codex seat, one running Codex session per home
