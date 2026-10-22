@@ -7,6 +7,7 @@ import type {
   SessionState,
   SessionTimelineEvent,
 } from "@open-inspect/shared/types/server-messages";
+import type { TurnLimit } from "@open-inspect/shared/types/sandbox-events";
 import { toUiArtifact } from "./artifact-metadata";
 import { applyBootProgress, endBootPhase, seedSandboxBoot, type SandboxBoot } from "./boot-phase";
 import { collapseReplayTokenEvents, toUiSandboxEvent } from "./event-log";
@@ -187,6 +188,18 @@ function applySessionBranchUpdate(
   };
 }
 
+/**
+ * Mirrors the control plane's `lastTurnLimit` rule for live completions, which arrive without a
+ * fresh snapshot: a failed turn that hit a limit sets it, a successful turn clears it.
+ */
+function nextTurnLimit(
+  current: TurnLimit | null,
+  event: Extract<SandboxEvent, { type: "execution_complete" }>
+): TurnLimit | null {
+  if (event.success) return null;
+  return event.limit ?? current;
+}
+
 function updateSessionState(
   state: SessionSocketState,
   update: (prev: SessionState) => SessionState
@@ -338,6 +351,8 @@ function reduceServerMessage(
       return updateSessionState(state, (prev) => ({
         ...prev,
         isProcessing: message.isProcessing,
+        // A prompt that starts processing supersedes the limit the last turn hit.
+        ...(message.isProcessing ? { lastTurnLimit: null } : {}),
       }));
 
     case "budget_status":
@@ -382,10 +397,18 @@ export function sessionSocketReducer(
 
     case "events_appended": {
       let boot = state.boot;
+      let lastTurnLimit = state.sessionState?.lastTurnLimit ?? null;
       for (const event of action.events) {
         if (event.type === "boot_progress") boot = applyBootProgress(boot, event);
+        if (event.type === "execution_complete") {
+          lastTurnLimit = nextTurnLimit(lastTurnLimit, event);
+        }
       }
-      return { ...state, events: [...state.events, ...action.events], boot };
+      return updateSessionState(
+        { ...state, events: [...state.events, ...action.events], boot },
+        (prev) =>
+          (prev.lastTurnLimit ?? null) === lastTurnLimit ? prev : { ...prev, lastTurnLimit }
+      );
     }
 
     case "history_requested":
