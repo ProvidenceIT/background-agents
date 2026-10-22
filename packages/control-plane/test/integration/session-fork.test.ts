@@ -40,10 +40,12 @@ async function seedSource(): Promise<{ name: string; stub: DurableObjectStub }> 
     repoName: "web-app",
     repoId: 12345,
     defaultBranch: "main",
+    model: "anthropic/claude-opus-4-6",
     userId: MEMBER,
     canonicalUserId: MEMBER,
   });
   await waitForSandboxStatus(stub, "failed");
+  await queryDO(stub, "UPDATE session SET harness = 'claude'");
   await queryDO(stub, "UPDATE session_repositories SET branch_name = 'oi/fix-parser'");
   const [owner] = await queryDO<{ id: string }>(
     stub,
@@ -130,11 +132,7 @@ describe("session fork routes", () => {
   });
 
   it("creates a private fork on the source's base branch, enqueues the handoff, and replays", async () => {
-    const { name, stub } = await seedSource();
-    const [sourceSession] = await queryDO<{ model: string; harness: string }>(
-      stub,
-      "SELECT model, harness FROM session"
-    );
+    const { name } = await seedSource();
     const forkRequestId = crypto.randomUUID();
 
     const response = await fork(name, { forkRequestId, handoff: "Continue the parser fix." });
@@ -155,8 +153,8 @@ describe("session fork routes", () => {
       parentSessionId: null,
       spawnDepth: 0,
       baseBranch: "main",
-      model: sourceSession.model,
-      harness: sourceSession.harness,
+      model: "anthropic/claude-opus-4-6",
+      harness: "claude",
     });
     expect(
       await env.DB.prepare(
