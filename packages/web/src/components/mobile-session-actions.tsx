@@ -22,6 +22,7 @@ import {
 import {
   ArchiveIcon,
   BoxIcon,
+  BranchIcon,
   FolderIcon,
   GitPrIcon,
   GlobeIcon,
@@ -153,6 +154,12 @@ export function MobileSessionActions({
               <LinkIcon className="w-4 h-4" />
               Copy link
             </DropdownMenuItem>
+            {actions.onFork && (
+              <DropdownMenuItem onClick={actions.onFork}>
+                <BranchIcon className="w-4 h-4" />
+                Fork…
+              </DropdownMenuItem>
+            )}
             {actions.capabilities.lifecycle && <DropdownMenuSeparator />}
             {actions.capabilities.lifecycle && (
               <DropdownMenuItem

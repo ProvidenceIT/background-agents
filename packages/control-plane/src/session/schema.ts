@@ -109,6 +109,8 @@ CREATE TABLE IF NOT EXISTS session (
   max_cost_usd REAL,                                -- Mutable effective session cost limit; NULL = unlimited
   budget_exhausted INTEGER NOT NULL DEFAULT 0,      -- Pauses prompt admission and dispatch
   environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
+  forked_from_session_id TEXT,                      -- Source session of a fork; independent of parent_session_id
+  last_turn_limit TEXT,                             -- JSON TurnLimit that stopped the latest turn; NULL once cleared
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   CHECK (
@@ -758,6 +760,14 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 56,
     description: "Retain rejected sandbox startup cleanup intent",
     run: "ALTER TABLE sandbox ADD COLUMN startup_rejected INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    id: 57,
+    description: "Record fork lineage and the limit that stopped the latest turn",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN forked_from_session_id TEXT`);
+      runMigration(sql, `ALTER TABLE session ADD COLUMN last_turn_limit TEXT`);
+    },
   },
 ];
 

@@ -2,7 +2,7 @@ import { DEFAULT_HARNESS, harnessIdSchema } from "../harnesses";
 import { z } from "zod";
 import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
-import { sandboxBootPhaseSchema, sandboxEventSchema } from "./sandbox-events";
+import { sandboxBootPhaseSchema, sandboxEventSchema, turnLimitSchema } from "./sandbox-events";
 import {
   sandboxStatusSchema,
   sessionCapabilitiesSchema,
@@ -47,6 +47,13 @@ const sessionStateSchema = z.object({
   reasoningEffort: z.string().optional(),
   isProcessing: z.boolean().optional(),
   parentSessionId: z.string().nullable().optional(),
+  /** The session this one was forked from; unrelated to parentSessionId (no child quota). */
+  forkedFromSessionId: z.string().nullable().optional(),
+  /**
+   * The limit that stopped the latest turn. Null once a later turn succeeds or
+   * a new prompt starts processing. Absent from producers that predate it.
+   */
+  lastTurnLimit: turnLimitSchema.nullable().optional(),
   totalCost: z.number().optional(),
   maxSessionCostUsd: z.number().nullable().optional(),
   budgetExhausted: z.boolean().optional(),

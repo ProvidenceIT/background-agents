@@ -7,8 +7,11 @@ import {
   getValidHarnessOrDefault,
 } from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
-import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
-import type { SessionStatus } from "@open-inspect/shared/types/sessions";
+import type {
+  CreateSessionInput,
+  CreateSessionResponse,
+} from "@open-inspect/shared/types/session-api";
+import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import {
@@ -31,7 +34,7 @@ import {
   SessionExternalRefTakenError,
   type SessionExternalRef,
 } from "../session/external-ref";
-import { SessionIndexStore } from "../db/session-index";
+import { SessionIndexStore, type SessionForkOrigin } from "../db/session-index";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
@@ -241,6 +244,62 @@ export async function handleCreateSession(
     if (replay) return replay;
   }
 
+  const outcome = await createNewSession(request, env, ctx, {
+    body,
+    resolvedUserId,
+    participantUserId: enforced.participantUserId,
+    spawnSource: enforced.spawnSource ?? undefined,
+    externalRef: ref,
+  });
+  if (outcome instanceof Response) return outcome;
+  if (outcome.kind === "init_failed") {
+    if (outcome.cause instanceof SessionExternalRefTakenError && ref) {
+      // A concurrent attempt with the same ref won the unique index.
+      return (
+        (await replayExternalRef(env, ctx, ref, resolvedUserId, true)) ?? externalRefInProgress()
+      );
+    }
+    return error("Failed to create session", 500);
+  }
+
+  const result: CreateSessionResponse = {
+    sessionId: outcome.sessionId,
+    status: "created",
+    ...(ref ? { replayed: false } : {}),
+  };
+
+  return json(result, 201);
+}
+
+/** Everything a new root session needs beyond its validated create body. */
+export interface NewSessionSpec {
+  body: CreateSessionInput;
+  /** The admitted canonical user; owns the session. */
+  resolvedUserId: string;
+  participantUserId: string;
+  spawnSource: SpawnSource | undefined;
+  externalRef: SessionExternalRef | null;
+  fork?: SessionForkOrigin | null;
+}
+
+export type NewSessionOutcome =
+  | { kind: "created"; sessionId: string }
+  /** The index row may exist (marked failed); `cause` says why init threw. */
+  | { kind: "init_failed"; sessionId: string; cause: unknown };
+
+/**
+ * Create a root session for an admitted user: target authorization, SCM
+ * enrichment, provider auth, admission, skills, memory, and initialization.
+ * Shared by `POST /sessions` and forks so both resolve these the same way.
+ * A Response is a refusal; nothing was created.
+ */
+export async function createNewSession(
+  request: Request,
+  env: Env,
+  ctx: RequestContext,
+  spec: NewSessionSpec
+): Promise<Response | NewSessionOutcome> {
+  const { body, resolvedUserId } = spec;
   let repositoryContext: RepositoryPair | null;
   try {
     repositoryContext = normalizeOptionalRepositoryPair(body, INVALID_SESSION_REQUEST_BODY_ERROR);
@@ -316,8 +375,7 @@ export async function handleCreateSession(
     defaultBranch = resolved.defaultBranch;
   }
 
-  const participantUserId = enforced.participantUserId;
-  const spawnSource = enforced.spawnSource ?? undefined;
+  const { participantUserId, spawnSource } = spec;
 
   const userStore = new UserStore(ctx.db);
   // The trigger actor is the admitted user (web login, Teams sender, GitHub
@@ -482,34 +540,22 @@ export async function handleCreateSession(
     workItemAuthorUserId: trigger.workItemAuthorUserId,
     authHomeId: admission.authHomeId,
     authHomeSelection: admission.authHomeSelection,
-    externalRef: ref,
+    externalRef: spec.externalRef,
+    fork: spec.fork ?? null,
   };
 
   try {
     await initializeSession(env, input, ctx);
-  } catch (e) {
-    if (e instanceof SessionExternalRefTakenError && ref) {
-      // A concurrent attempt with the same ref won the unique index.
-      return (
-        (await replayExternalRef(env, ctx, ref, resolvedUserId, true)) ?? externalRefInProgress()
-      );
-    }
+  } catch (cause) {
     logger.error("Failed to initialize session", {
-      error: e instanceof Error ? e.message : String(e),
+      error: cause instanceof Error ? cause.message : String(cause),
       session_id: sessionId,
       trace_id: ctx.trace_id,
     });
-    return error("Failed to create session", 500);
+    return { kind: "init_failed", sessionId, cause };
   }
   await admission.recordCreated(sessionId);
-
-  const result: CreateSessionResponse = {
-    sessionId,
-    status: "created",
-    ...(ref ? { replayed: false } : {}),
-  };
-
-  return json(result, 201);
+  return { kind: "created", sessionId };
 }
 
 export const sessionCreateRoutes = new Hono<ControlPlaneHonoEnv>();

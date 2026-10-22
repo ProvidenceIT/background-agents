@@ -91,6 +91,32 @@ const messageSandboxEventBaseSchema = sandboxEventBaseSchema.extend({
 const stepIdSchema = z.string().min(1).optional();
 export const subscriptionSlotSchema = z.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
 
+export const TURN_LIMIT_WINDOWS = [
+  "five_hour",
+  "seven_day",
+  "seven_day_opus",
+  "seven_day_sonnet",
+  "overage",
+  "unknown",
+] as const;
+export const turnLimitWindowSchema = z.enum(TURN_LIMIT_WINDOWS);
+export type TurnLimitWindow = z.infer<typeof turnLimitWindowSchema>;
+
+/**
+ * Why a failed turn stopped when the provider refused it for a usage limit.
+ * `resetsAtMs` is null when the provider did not say when the window resets.
+ * `harness` is a plain string so a runtime newer than this schema cannot get
+ * its terminal event dropped at the parse layer.
+ */
+export const turnLimitSchema = z.object({
+  kind: z.literal("subscription_limit"),
+  window: turnLimitWindowSchema,
+  resetsAtMs: z.number().int().nonnegative().nullable(),
+  subscriptionSlot: subscriptionSlotSchema.nullable(),
+  harness: z.string().min(1),
+});
+export type TurnLimit = z.infer<typeof turnLimitSchema>;
+
 export const sandboxGenerationSchema = z.object({
   sandboxId: z.string().min(1),
   createdAt: z.number().int().positive(),
@@ -209,6 +235,8 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
      * for a Claude home with one token). A slot name only, never an account identity.
      */
     subscriptionSlot: subscriptionSlotSchema.optional(),
+    /** Set only on a failed turn the provider refused for a usage limit. */
+    limit: turnLimitSchema.optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("context_compacted"),

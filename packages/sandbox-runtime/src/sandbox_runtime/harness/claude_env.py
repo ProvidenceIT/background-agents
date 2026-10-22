@@ -31,6 +31,7 @@ import os
 import re
 import stat
 import sys
+import time
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -72,6 +73,8 @@ WRAPPER_NAME: Final = "claude-clean-env"
 # in the child's config dir (slot name and headroom, never a token).
 POOL_MODULE_NAME: Final = "sf_claude_pool"
 POOL_PICK_FILE: Final = "sf-claude-pool-pick.json"
+# Slots a subscription limit refused this session, until their reset.
+POOL_REFUSALS_FILE: Final = "sf-claude-pool-refused.json"
 # A slot is a directory name under claude/pool/ (or ``default``); anything else
 # in the pick file is not reported.
 _POOL_SLOT_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
@@ -265,8 +268,11 @@ def write_clean_env_wrapper(
             "import time",
             "from pathlib import Path",
             "sys.dont_write_bytecode = True",
+            f"REFUSALS_FILE_NAME = {POOL_REFUSALS_FILE!r}",
             f"import {POOL_MODULE_NAME} as pool",
-            "pick = pool.pick_slot(Path(TOKEN_FILE).parent, sys.argv[1:])",
+            f"config_dir = env.get({CONFIG_DIR_ENV_VAR!r})",
+            "refusals = Path(config_dir, REFUSALS_FILE_NAME) if config_dir else None",
+            "pick = pool.pick_slot(Path(TOKEN_FILE).parent, sys.argv[1:], refusals_file=refusals)",
             "token = ''",
             "if pick is not None:",
             "    try:",
@@ -277,7 +283,6 @@ def write_clean_env_wrapper(
             f"    sys.stderr.write({AUTH_HOME_TOKEN_MISSING + chr(10)!r})",
             "    sys.exit(78)",
             # Which subscription this child spends, by slot name only.
-            f"config_dir = env.get({CONFIG_DIR_ENV_VAR!r})",
             "if config_dir:",
             "    try:",
             "        Path(config_dir, PICK_FILE_NAME).write_text(json.dumps({",
@@ -352,6 +357,18 @@ def clear_pool_pick(config_dir: Path) -> None:
     """Forget the last pick so a reconnect cannot report a previous child's slot."""
     with contextlib.suppress(OSError):
         (config_dir / POOL_PICK_FILE).unlink(missing_ok=True)
+
+
+def record_pool_refusal(config_dir: Path, slot: str, window: str, resets_at: float | None) -> None:
+    """Keep ``slot`` out of this session's next picks the refused ``window`` covers, until it resets."""
+    with contextlib.suppress(OSError):
+        claude_pool.record_refusal(
+            config_dir / POOL_REFUSALS_FILE,
+            slot,
+            resets_at,
+            time.time(),
+            scope=claude_pool.refusal_scope(window),
+        )
 
 
 def read_pool_pick_slot(config_dir: Path) -> str | None:

@@ -715,6 +715,65 @@ describe("sessionSocketReducer", () => {
     });
   });
 
+  describe("lastTurnLimit", () => {
+    const limit = {
+      kind: "subscription_limit" as const,
+      window: "five_hour" as const,
+      resetsAtMs: 1_800_000_000_000,
+      subscriptionSlot: "claude-5",
+      harness: "claude",
+    };
+    const completion = (success: boolean, extra: Partial<SandboxEvent> = {}): SandboxEvent =>
+      ({
+        type: "execution_complete",
+        messageId: "msg-1",
+        success,
+        sandboxId: "sb-1",
+        timestamp: 2,
+        ...extra,
+      }) as SandboxEvent;
+
+    it("is set by a failed completion that carries a limit", () => {
+      const state = reduce(subscribedState(), {
+        type: "events_appended",
+        events: [completion(false, { error: "rate limited", limit } as Partial<SandboxEvent>)],
+      });
+      expect(state.sessionState?.lastTurnLimit).toEqual(limit);
+    });
+
+    it("is cleared by a later successful completion", () => {
+      const state = reduce(
+        subscribedState({ session: createSessionState({ lastTurnLimit: limit }) }),
+        { type: "events_appended", events: [completion(true)] }
+      );
+      expect(state.sessionState?.lastTurnLimit).toBeNull();
+    });
+
+    it("is cleared by a failed completion without a limit, as the control plane does", () => {
+      const state = reduce(
+        subscribedState({ session: createSessionState({ lastTurnLimit: limit }) }),
+        { type: "events_appended", events: [completion(false)] }
+      );
+      expect(state.sessionState?.lastTurnLimit).toBeNull();
+    });
+
+    it("is cleared when a new prompt starts processing", () => {
+      const state = reduce(
+        subscribedState({ session: createSessionState({ lastTurnLimit: limit }) }),
+        serverMessage({ type: "processing_status", isProcessing: true })
+      );
+      expect(state.sessionState?.lastTurnLimit).toBeNull();
+    });
+
+    it("stays when processing stops", () => {
+      const state = reduce(
+        subscribedState({ session: createSessionState({ lastTurnLimit: limit }) }),
+        serverMessage({ type: "processing_status", isProcessing: false })
+      );
+      expect(state.sessionState?.lastTurnLimit).toEqual(limit);
+    });
+  });
+
   describe("events_appended", () => {
     it("appends events in order", () => {
       const events: SandboxEvent[] = [

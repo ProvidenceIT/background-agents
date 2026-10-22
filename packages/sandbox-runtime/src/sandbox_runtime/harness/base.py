@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -80,6 +80,44 @@ class HarnessPrompt:
     max_duration_seconds: float | None = None
 
 
+# The windows the control plane accepts in ``execution_complete.limit``; it
+# rejects the whole event on any other value, so unknown windows map to "unknown".
+SUBSCRIPTION_LIMIT_WINDOWS: Final = frozenset(
+    {"five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "overage", "unknown"}
+)
+
+
+@dataclass(frozen=True)
+class SubscriptionLimit:
+    """A subscription usage window that refused the turn."""
+
+    window: str
+    # Epoch seconds, as the vendor reports it.
+    resets_at: float | None = None
+
+    @classmethod
+    def of(cls, window: object, resets_at: object = None) -> SubscriptionLimit:
+        known = window if window in SUBSCRIPTION_LIMIT_WINDOWS else "unknown"
+        reset = (
+            float(resets_at)
+            if isinstance(resets_at, (int, float))
+            and not isinstance(resets_at, bool)
+            and resets_at > 0
+            else None
+        )
+        return cls(window=str(known), resets_at=reset)
+
+    def wire(self, *, harness: str, subscription_slot: str | None) -> dict[str, Any]:
+        """The ``limit`` object of a failed ``execution_complete``."""
+        return {
+            "kind": "subscription_limit",
+            "window": self.window,
+            "resetsAtMs": None if self.resets_at is None else int(self.resets_at * 1000),
+            "subscriptionSlot": subscription_slot,
+            "harness": harness,
+        }
+
+
 @dataclass(frozen=True)
 class TurnOutcome:
     """What one ``run_prompt`` call produced, for runtime terminal selection."""
@@ -88,20 +126,29 @@ class TurnOutcome:
     error: str | None = None
     cancelled: bool = False
     message_cost_usd: float | None = None
+    limit: SubscriptionLimit | None = None
 
     def __post_init__(self) -> None:
         if self.cancelled and self.success:
             raise ValueError("a cancelled turn cannot also be a success")
         if not self.success and not self.error:
             raise ValueError("a failed turn must carry an error message")
+        if self.success and self.limit is not None:
+            raise ValueError("only a failed turn carries a subscription limit")
 
     @classmethod
     def ok(cls, *, message_cost_usd: float | None = None) -> TurnOutcome:
         return cls(success=True, message_cost_usd=message_cost_usd)
 
     @classmethod
-    def failed(cls, error: str, *, message_cost_usd: float | None = None) -> TurnOutcome:
-        return cls(success=False, error=error, message_cost_usd=message_cost_usd)
+    def failed(
+        cls,
+        error: str,
+        *,
+        message_cost_usd: float | None = None,
+        limit: SubscriptionLimit | None = None,
+    ) -> TurnOutcome:
+        return cls(success=False, error=error, message_cost_usd=message_cost_usd, limit=limit)
 
 
 class HarnessStartError(RuntimeError):

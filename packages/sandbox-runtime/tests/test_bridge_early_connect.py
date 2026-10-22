@@ -19,7 +19,14 @@ from sandbox_runtime import boot_attach as boot_attach_module
 from sandbox_runtime import bridge as bridge_module
 from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.git_signing import GitSigningError
-from sandbox_runtime.harness import DETERMINISTIC_FAILURE_EXIT_CODE, HarnessStartError
+from sandbox_runtime.harness import (
+    DEFAULT_HARNESS_ID,
+    DETERMINISTIC_FAILURE_EXIT_CODE,
+    HarnessId,
+    HarnessStartError,
+    SubscriptionLimit,
+    TurnOutcome,
+)
 from tests.conftest import ScriptedHarness
 
 
@@ -136,12 +143,15 @@ class OpeningHarness(ScriptedHarness):
         return True
 
 
-def _bridge(tmp_path, monkeypatch, *, factory=None, early_connect=True) -> AgentBridge:
+def _bridge(
+    tmp_path, monkeypatch, *, factory=None, early_connect=True, harness_id=DEFAULT_HARNESS_ID
+) -> AgentBridge:
     bridge = AgentBridge(
         sandbox_id="test-sandbox",
         session_id="test-session",
         control_plane_url="http://localhost:8787",
         auth_token="test-token",
+        harness_id=harness_id,
         early_connect=early_connect,
         harness_factory=factory,
     )
@@ -516,6 +526,62 @@ class TestCommandsWhileBooting:
 
         assert "subscriptionSlot" not in without
         assert spent["subscriptionSlot"] == "claude-3"
+
+    async def test_a_turn_refused_by_a_subscription_limit_reports_it(self, tmp_path, monkeypatch):
+        class RefusedHarness(ScriptedHarness):
+            id = HarnessId.CLAUDE
+            subscription_slot = "claude-5"
+
+            async def run_prompt(self, prompt, emit):
+                self.prompts.append(prompt)
+                return TurnOutcome.failed(
+                    "Claude usage limit reached",
+                    message_cost_usd=0.25,
+                    limit=SubscriptionLimit.of("five_hour", 1_790_000_000),
+                )
+
+        bridge = _bridge(
+            tmp_path,
+            monkeypatch,
+            factory=RefusedHarness,
+            early_connect=False,
+            harness_id=HarnessId.CLAUDE,
+        )
+        bridge._send_event = AsyncMock()
+        bridge.git_signing.refresh = AsyncMock()
+
+        terminal = await bridge._handle_prompt(_agent_prompt("msg-1"))
+
+        assert terminal == {
+            "type": "execution_complete",
+            "messageId": "msg-1",
+            "success": False,
+            "error": "Claude usage limit reached",
+            "messageCostUsd": 0.25,
+            "subscriptionSlot": "claude-5",
+            "limit": {
+                "kind": "subscription_limit",
+                "window": "five_hour",
+                "resetsAtMs": 1_790_000_000_000,
+                "subscriptionSlot": "claude-5",
+                "harness": "claude",
+            },
+        }
+
+    async def test_an_ordinary_failure_carries_no_limit(self, tmp_path, monkeypatch):
+        async def failing(_message_id, _text):
+            yield {"type": "error", "error": "boom"}
+
+        bridge = _bridge(
+            tmp_path, monkeypatch, factory=lambda: ScriptedHarness(failing), early_connect=False
+        )
+        bridge._send_event = AsyncMock()
+        bridge.git_signing.refresh = AsyncMock()
+
+        terminal = await bridge._handle_prompt(_agent_prompt("msg-1"))
+
+        assert terminal["success"] is False
+        assert "limit" not in terminal
 
     async def test_an_unheld_prompt_gets_what_is_left_of_the_whole_budget(
         self, tmp_path, monkeypatch

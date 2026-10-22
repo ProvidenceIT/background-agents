@@ -27,6 +27,7 @@ type SessionPromptComposerProps = {
     primaryRepo?: { repoOwner: string; repoName: string } | null;
     onArchive: () => void | Promise<void>;
     onUnarchive: () => void | Promise<void>;
+    onFork?: () => void;
     capabilities: SessionCapabilities;
     /** Agent harness the session runs on; fixed at create. */
     harness: HarnessId;
@@ -113,6 +114,7 @@ export function SessionPromptComposer({
             primaryRepo={session.primaryRepo}
             onArchive={session.onArchive}
             onUnarchive={session.onUnarchive}
+            onFork={session.onFork}
             capabilities={session.capabilities}
           />
         </div>

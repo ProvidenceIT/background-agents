@@ -1,5 +1,7 @@
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
+import { turnLimitSchema, type TurnLimit } from "@open-inspect/shared/types/sandbox-events";
+import { z } from "zod";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
 import type { SqlStorage, TransactionSync } from "./sql-storage";
 import {
@@ -12,6 +14,10 @@ import {
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 const sessionCostRowSchema = sessionRowSchema.pick({ total_cost: true });
+const sessionForkRowSchema = z.object({
+  forked_from_session_id: z.string().nullable(),
+  last_turn_limit: z.string().nullable(),
+});
 
 /** Data for upserting a session. */
 export interface UpsertSessionData {
@@ -36,6 +42,8 @@ export interface UpsertSessionData {
   maxCostUsd?: number | null;
   /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
   environmentId?: string | null;
+  /** The session this one was forked from; null for every non-fork. */
+  forkedFromSessionId?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -89,8 +97,8 @@ export class SessionCoreRepository {
       // max_cost_usd is seeded on insert but absent from the update clause: once
       // setSessionBudget has written a live limit, it is working state like
       // branch_name and total_cost, and a repeated init must not reset it.
-      `INSERT INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, harness, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, max_cost_usd, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, harness, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, forked_from_session_id, max_cost_usd, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET
          session_name = excluded.session_name,
          title = excluded.title,
@@ -109,6 +117,7 @@ export class SessionCoreRepository {
          vnc_enabled = excluded.vnc_enabled,
          sandbox_settings = excluded.sandbox_settings,
          environment_id = excluded.environment_id,
+         forked_from_session_id = excluded.forked_from_session_id,
          created_at = excluded.created_at,
          updated_at = excluded.updated_at`,
       data.id,
@@ -129,10 +138,46 @@ export class SessionCoreRepository {
       data.vncEnabled ? 1 : 0,
       data.sandboxSettings ?? null,
       data.environmentId ?? null,
+      data.forkedFromSessionId ?? null,
       data.maxCostUsd ?? null,
       data.createdAt,
       data.updatedAt
     );
+  }
+
+  getForkedFromSessionId(): string | null {
+    return this.getForkRow()?.forked_from_session_id ?? null;
+  }
+
+  /** A stored value that no longer parses reads as no limit rather than failing the read. */
+  getLastTurnLimit(): TurnLimit | null {
+    const stored = this.getForkRow()?.last_turn_limit;
+    if (!stored) return null;
+    try {
+      const parsed = turnLimitSchema.safeParse(JSON.parse(stored));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  setLastTurnLimit(limit: TurnLimit | null): void {
+    this.sql.exec(
+      `UPDATE session SET last_turn_limit = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
+      limit ? JSON.stringify(limit) : null
+    );
+  }
+
+  private getForkRow(): z.infer<typeof sessionForkRowSchema> | null {
+    const row = this.sql
+      .exec(`SELECT forked_from_session_id, last_turn_limit FROM session LIMIT 1`)
+      .toArray()[0];
+    if (row === undefined) return null;
+    const parsed = sessionForkRowSchema.safeParse(row);
+    if (!parsed.success) {
+      throw new SessionStorageIntegrityError("Malformed persisted session fork row");
+    }
+    return parsed.data;
   }
 
   updateSessionRepoId(repoId: number): void {

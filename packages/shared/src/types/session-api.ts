@@ -443,3 +443,39 @@ export interface ChildSessionDetail {
   finalResponse?: ChildSessionFinalResponse | null;
   trajectory?: ChildSessionTrajectory;
 }
+
+/** Upper bound on the handoff draft the server builds for a fork. */
+export const FORK_HANDOFF_MAX_CHARS = 40_000;
+
+/** Client-chosen idempotency key for POST /sessions/:id/fork, unique per source session. */
+export const forkRequestIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/);
+
+/**
+ * Request body for POST /sessions/:id/fork. Omitted harness/model/reasoningEffort
+ * default to the source session's; an omitted handoff is built by the server.
+ */
+export const forkSessionRequestSchema = z.strictObject({
+  forkRequestId: forkRequestIdSchema,
+  handoff: promptContentSchema
+    .refine((value) => value.trim().length > 0, { message: "handoff must not be blank" })
+    .optional(),
+  harness: harnessIdSchema.optional(),
+  model: z.string().min(1).optional(),
+  reasoningEffort: z.string().min(1).optional(),
+  title: z.string().trim().min(1).optional(),
+});
+export type ForkSessionRequest = z.infer<typeof forkSessionRequestSchema>;
+
+/** `created` is false when the forkRequestId replayed an earlier fork of the same source. */
+export const forkSessionResponseSchema = z.object({
+  sessionId: z.string().min(1),
+  forkedFromSessionId: z.string().min(1),
+  created: z.boolean(),
+});
+export type ForkSessionResponse = z.infer<typeof forkSessionResponseSchema>;
+
+/** Response of GET /sessions/:id/fork/handoff: at most FORK_HANDOFF_MAX_CHARS. */
+export const forkHandoffResponseSchema = z.object({
+  handoff: z.string().max(FORK_HANDOFF_MAX_CHARS),
+});
+export type ForkHandoffResponse = z.infer<typeof forkHandoffResponseSchema>;

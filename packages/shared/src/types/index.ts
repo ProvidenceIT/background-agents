@@ -192,8 +192,8 @@ export {
 
 export { sandboxShutdownSchema } from "./sandbox-shutdown";
 export type { SandboxShutdownState } from "./sandbox-shutdown";
-export { tokenUsageSchema } from "./sandbox-events";
-export type { TokenUsage } from "./sandbox-events";
+export { tokenUsageSchema, turnLimitSchema } from "./sandbox-events";
+export type { TokenUsage, TurnLimit, TurnLimitWindow } from "./sandbox-events";
 export { normalizeTokenUsage, stepUsageSchema } from "./usage";
 export type { NormalizedTokenUsage, StepUsage } from "./usage";
 export type {

@@ -119,6 +119,8 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "GET /sessions/:id/children owner=200",
   "GET /sessions/:id/children/:childId owner=404",
   "POST /sessions/:id/children/:childId/cancel owner=404",
+  "GET /sessions/:id/fork/handoff owner=200",
+  "POST /sessions/:id/fork owner=400",
   "POST /sessions/:id/slack-notify owner=400",
   "GET /repos owner=500",
   "PUT /repos/:owner/:name/metadata owner=200",
@@ -364,6 +366,8 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "GET /sessions/:id/children/:childId anonymous=401",
   "POST /sessions/:id/children/:childId/cancel anonymous=401",
   "POST /sessions/:id/children/:childId/prompt anonymous=401",
+  "GET /sessions/:id/fork/handoff anonymous=401",
+  "POST /sessions/:id/fork anonymous=401",
   "POST /sessions/:id/slack-notify anonymous=401",
   "GET /repos anonymous=401",
   "PUT /repos/:owner/:name/metadata anonymous=401",
@@ -655,6 +659,8 @@ exports[`route admission sentinel > conceals all team item routes from another t
   "GET /sessions/:id/children other-team=404",
   "GET /sessions/:id/children/:childId other-team=404",
   "POST /sessions/:id/children/:childId/cancel other-team=404",
+  "GET /sessions/:id/fork/handoff other-team=404",
+  "POST /sessions/:id/fork other-team=404",
   "POST /sessions/:id/slack-notify other-team=404",
 ]
 `;
@@ -699,6 +705,8 @@ exports[`route admission sentinel > reports action denials for a same-team Viewe
   "GET /sessions/:id/children same-team-viewer=200",
   "GET /sessions/:id/children/:childId same-team-viewer=200",
   "POST /sessions/:id/children/:childId/cancel same-team-viewer=403",
+  "GET /sessions/:id/fork/handoff same-team-viewer=200",
+  "POST /sessions/:id/fork same-team-viewer=403",
   "POST /sessions/:id/slack-notify same-team-viewer=403",
 ]
 `;
