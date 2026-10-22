@@ -43,7 +43,9 @@ export class SessionStatusService {
     private readonly sessionIndex: SessionIndexProjections,
     private readonly statusProjection: Pick<SessionStatusProjectionStore, "project">,
     /** Reaches the parent session's runtime for the child rollup. */
-    private readonly sessions: SessionRuntimeClient
+    private readonly sessions: SessionRuntimeClient,
+    /** Told once the session is archived or cancelled, after the local write. */
+    private readonly onClosed: () => void = () => {}
   ) {}
 
   /**
@@ -85,6 +87,7 @@ export class SessionStatusService {
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     this.repository.updateSessionStatus(session.id, status, updatedAt);
+    if (status === "archived" || status === "cancelled") this.onClosed();
     return this.projectTransition(
       session,
       publicSessionId,
@@ -173,6 +176,7 @@ export class SessionStatusService {
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     this.repository.updateSessionStatus(session.id, "cancelled", updatedAt);
     terminalizeUnfinishedMessages();
+    this.onClosed();
     await this.projectTransition(
       session,
       publicSessionId,

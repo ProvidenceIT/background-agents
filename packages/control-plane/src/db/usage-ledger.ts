@@ -30,6 +30,20 @@ const totalsRowSchema = z.object({
   cost_usd: z.number(),
 });
 
+const homeSlotRowSchema = z.object({
+  slot: z.string(),
+  last_used_at: z.number(),
+});
+
+/** Slot names in numeric order, so `claude-2` sorts before `claude-10`. */
+const slotNameCollator = new Intl.Collator("en", { numeric: true });
+
+/** One pool slot a home's settled turns spent, and when it last did. */
+export interface HomeSubscriptionSlot {
+  slot: string;
+  lastUsedAt: number;
+}
+
 const slotRowSchema = z.object({
   slot: z.string(),
   turns: z.number(),
@@ -144,5 +158,38 @@ export class UsageLedgerStore {
         lastUsedAt: row.last_used_at,
       };
     });
+  }
+
+  /**
+   * The pool slots the settled turns of every session bound to `homeId` spent, sorted
+   * by slot name. `harness` splits Claude and Codex slots as in `slotsForSession`. The
+   * control plane keeps no slot registry, so a slot appears once a turn has spent it.
+   */
+  async slotsForHome(
+    homeId: string,
+    harness: { only?: string; except?: string } = {}
+  ): Promise<HomeSubscriptionSlot[]> {
+    const only = harness.only ?? null;
+    const except = harness.except ?? null;
+    const { results } = await this.db
+      .prepare(
+        `SELECT l.subscription_slot AS slot, MAX(l.settled_at) AS last_used_at
+         FROM usage_ledger l
+         JOIN sessions s ON s.id = l.session_id
+         WHERE s.auth_home_id = ? AND l.subscription_slot IS NOT NULL
+           AND (? IS NULL OR l.harness = ?)
+           AND (? IS NULL OR l.harness IS NULL OR l.harness <> ?)
+         GROUP BY l.subscription_slot
+         ORDER BY last_used_at DESC, slot
+         LIMIT ?`
+      )
+      .bind(homeId, only, only, except, except, MAX_SESSION_SUBSCRIPTION_SLOTS)
+      .all();
+    return results
+      .map((raw) => {
+        const row = homeSlotRowSchema.parse(raw);
+        return { slot: row.slot, lastUsedAt: row.last_used_at };
+      })
+      .sort((a, b) => slotNameCollator.compare(a.slot, b.slot));
   }
 }

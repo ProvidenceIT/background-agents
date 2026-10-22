@@ -563,6 +563,20 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     return decision.allowed ? { kind: "allowed" } : { kind: "denied", reason: decision.reason };
   }
 
+  /**
+   * The decision `authorizeClientCommand` makes, for a user with no socket: work the
+   * session does on someone's behalf re-checks them first. Closes nothing.
+   */
+  async authorizeUser(
+    userId: string,
+    action: SessionAction
+  ): Promise<"allowed" | "denied" | "unavailable"> {
+    const resolution = await this.deps.resolveSessionViewer(userId);
+    if (resolution.kind === "unavailable") return "unavailable";
+    if (resolution.kind !== "valid" || !this.decide(resolution, "read").allowed) return "denied";
+    return this.decide(resolution, action).allowed ? "allowed" : "denied";
+  }
+
   /** Observe only allowed reads; a hypothetical denial must never revoke the lease. */
   private observeShadowReadDenial(
     ws: SessionWebSocket,

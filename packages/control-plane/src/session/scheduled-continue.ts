@@ -1,0 +1,198 @@
+import {
+  CONTINUE_AT_RESET_BUFFER_MS,
+  CONTINUE_AT_RESET_PROMPT,
+} from "@open-inspect/shared/types/session-api";
+import type { Logger } from "../logger";
+import type { AlarmScheduler } from "../platform-ports";
+import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
+import type { MessageRepository } from "./message-repository";
+import type { SessionMessenger } from "./messenger";
+import type { ScheduledContinue, SessionCoreRepository } from "./session-core-repository";
+
+/** How long a due continue waits before asking again when authorization cannot be read. */
+export const CONTINUE_AT_RESET_RETRY_MS = 60_000;
+
+export type ScheduleContinueOutcome =
+  | { kind: "scheduled"; atMs: number }
+  /** The last turn hit no limit, or its reset is unknown or already past. */
+  | { kind: "no_future_reset" };
+
+export interface ScheduledContinueDeps {
+  repository: Pick<
+    SessionCoreRepository,
+    "getScheduledContinue" | "setScheduledContinue" | "getLastTurnLimit" | "getSession"
+  >;
+  messageRepository: Pick<MessageRepository, "getPendingOrProcessingCount">;
+  alarmScheduler: Pick<AlarmScheduler, "schedule">;
+  messenger: Pick<SessionMessenger, "broadcast">;
+  /** The session's own collaborate check for a user with no socket. */
+  authorizeUser: (
+    userId: string,
+    action: "collaborate"
+  ) => Promise<"allowed" | "denied" | "unavailable">;
+  /** The API enqueue path: turn admission on the home, then the queue. */
+  enqueuePrompt: (request: EnqueuePromptRequest) => Promise<unknown>;
+  now: () => number;
+  log: Logger;
+}
+
+/**
+ * "Continue when it resets": one opted-in prompt per session, enqueued as the person
+ * who asked once the last turn's limit window reopens. Persisted on the session row
+ * and woken by the session's shared alarm, so it survives a restart. Any other
+ * prompt, a new turn result, or closing the session drops it.
+ */
+export class SessionScheduledContinue {
+  constructor(private readonly deps: ScheduledContinueDeps) {}
+
+  /** When the session continues on its own, or null. */
+  atMs(): number | null {
+    return this.deps.repository.getScheduledContinue()?.atMs ?? null;
+  }
+
+  /** Schedule (or replace) the continue for the current limit's reset. */
+  async schedule(requester: {
+    requestedByUserId: string;
+    authorId: string;
+  }): Promise<ScheduleContinueOutcome> {
+    const now = this.deps.now();
+    const resetsAtMs = this.deps.repository.getLastTurnLimit()?.resetsAtMs ?? null;
+    if (resetsAtMs === null || resetsAtMs <= now) return { kind: "no_future_reset" };
+    const schedule: ScheduledContinue = {
+      atMs: resetsAtMs + CONTINUE_AT_RESET_BUFFER_MS,
+      requestedByUserId: requester.requestedByUserId,
+      authorId: requester.authorId,
+      createdAtMs: now,
+    };
+    this.store(schedule);
+    await this.arm(schedule.atMs);
+    this.deps.log.info("scheduled_continue.set", {
+      event: "scheduled_continue.set",
+      at_ms: schedule.atMs,
+      requested_by_user_id: schedule.requestedByUserId,
+    });
+    return { kind: "scheduled", atMs: schedule.atMs };
+  }
+
+  /** Cancel at the user's request; answers the same whether or not one was scheduled. */
+  cancel(): void {
+    this.store(null);
+  }
+
+  /** Drop the schedule, if any, because something else moved the session on. */
+  clear(reason: string): void {
+    if (!this.deps.repository.getScheduledContinue()) return;
+    this.store(null);
+    this.deps.log.info("scheduled_continue.cleared", {
+      event: "scheduled_continue.cleared",
+      reason,
+    });
+  }
+
+  /** Re-arm the alarm after the runtime restarts. */
+  async rearm(): Promise<void> {
+    const schedule = this.deps.repository.getScheduledContinue();
+    if (schedule) await this.arm(schedule.atMs);
+  }
+
+  /** Alarm delivery: enqueue the continue when it is due and still wanted. */
+  async fireIfDue(): Promise<void> {
+    const schedule = this.deps.repository.getScheduledContinue();
+    if (!schedule) return;
+    if (schedule.atMs > this.deps.now()) {
+      await this.arm(schedule.atMs);
+      return;
+    }
+    const blocked = this.blockedReason();
+    if (blocked) {
+      this.drop(schedule, blocked);
+      return;
+    }
+    const authorization = await this.deps.authorizeUser(schedule.requestedByUserId, "collaborate");
+    // A cancel, a replacement or a manual prompt may have landed during the await.
+    const current = this.deps.repository.getScheduledContinue();
+    if (!current || current.createdAtMs !== schedule.createdAtMs) return;
+    if (authorization === "unavailable") {
+      const retryAtMs = this.deps.now() + CONTINUE_AT_RESET_RETRY_MS;
+      this.store({ ...current, atMs: retryAtMs });
+      await this.arm(retryAtMs);
+      this.deps.log.warn("scheduled_continue.retry", {
+        event: "scheduled_continue.retry",
+        retry_at_ms: retryAtMs,
+      });
+      return;
+    }
+    const blockedAfterAuthorization =
+      authorization === "denied" ? "requester_cannot_collaborate" : this.blockedReason();
+    if (blockedAfterAuthorization) {
+      this.drop(current, blockedAfterAuthorization);
+      return;
+    }
+
+    this.store(null);
+    try {
+      await this.deps.enqueuePrompt({
+        turn: {
+          triggerKind: "prompt",
+          channel: "prompt",
+          requestId: `continue-at-reset:${current.createdAtMs}`,
+        },
+        content: CONTINUE_AT_RESET_PROMPT,
+        authorId: current.authorId,
+        canonicalUserId: current.requestedByUserId,
+        source: "web",
+      });
+      this.deps.log.info("scheduled_continue.fired", {
+        event: "scheduled_continue.fired",
+        requested_by_user_id: current.requestedByUserId,
+      });
+    } catch (error) {
+      this.deps.log.warn("scheduled_continue.refused", {
+        event: "scheduled_continue.refused",
+        requested_by_user_id: current.requestedByUserId,
+        error: error instanceof Error ? error : String(error),
+      });
+    }
+  }
+
+  /** Why a due continue must not run now, or null when it may. */
+  private blockedReason(): string | null {
+    const status = this.deps.repository.getSession()?.status;
+    if (status === undefined || status === "archived" || status === "cancelled") {
+      return "session_closed";
+    }
+    if (!this.deps.repository.getLastTurnLimit()) return "limit_cleared";
+    if (this.deps.messageRepository.getPendingOrProcessingCount() > 0) return "session_busy";
+    return null;
+  }
+
+  private drop(schedule: ScheduledContinue, reason: string): void {
+    this.store(null);
+    this.deps.log.info("scheduled_continue.dropped", {
+      event: "scheduled_continue.dropped",
+      reason,
+      requested_by_user_id: schedule.requestedByUserId,
+    });
+  }
+
+  private store(schedule: ScheduledContinue | null): void {
+    this.deps.repository.setScheduledContinue(schedule);
+    this.deps.messenger.broadcast({
+      type: "scheduled_continue",
+      scheduledContinueAtMs: schedule?.atMs ?? null,
+    });
+  }
+
+  /** The schedule is persisted first, so a failed arm is recovered by `rearm` or the next alarm. */
+  private async arm(atMs: number): Promise<void> {
+    try {
+      await this.deps.alarmScheduler.schedule(atMs);
+    } catch (error) {
+      this.deps.log.warn("scheduled_continue.arm_failed", {
+        event: "scheduled_continue.arm_failed",
+        at_ms: atMs,
+        error: error instanceof Error ? error : String(error),
+      });
+    }
+  }
+}

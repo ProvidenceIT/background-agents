@@ -159,6 +159,8 @@ import {
   type SessionUpgradeAdmission,
 } from "./connection-authenticator";
 import { SessionSnapshotReader } from "./snapshot-reader";
+import { SessionScheduledContinue } from "./scheduled-continue";
+import { ContinueAtResetHandler } from "./http/handlers/continue-at-reset.handler";
 import { SessionAccessReader } from "./sandbox-access-reader";
 import { createSessionScopedLogger } from "./session-logger";
 import { SessionDiffStore } from "./diffs/store";
@@ -486,7 +488,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     new SessionStatusProjectionStore(db),
     // Parent notifications have no request of their own: each is one hop
     // under this child's trace, with its own request id.
-    createSessionRuntimeClientForTrace(env, durableObjectId)
+    createSessionRuntimeClientForTrace(env, durableObjectId),
+    () => scheduledContinue.clear("session_closed")
   );
 
   const titleService = new SessionTitleService({
@@ -650,7 +653,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           requestId,
         });
       },
-    })
+    }),
+    (reason) => scheduledContinue.clear(reason)
   );
 
   // Tier 7 — services over the queue and lifecycle.
@@ -721,7 +725,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       titleService.applySessionTitleUpdate(title, { onlyIfUnset: true });
     },
     recordSettledTurn,
-    (limit) => sessionCoreRepository.setLastTurnLimit(limit)
+    (limit) => {
+      sessionCoreRepository.setLastTurnLimit(limit);
+      scheduledContinue.clear("turn_completed");
+    }
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(
     sessionCoreRepository,
@@ -1029,8 +1036,22 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     log,
   });
 
+  const scheduledContinue = new SessionScheduledContinue({
+    repository: sessionCoreRepository,
+    messageRepository,
+    alarmScheduler,
+    messenger,
+    authorizeUser: (userId, action) => connectionAuthenticator.authorizeUser(userId, action),
+    enqueuePrompt: (request) => messageQueue.enqueuePromptFromApi(request),
+    now: () => Date.now(),
+    log,
+  });
+  const continueAtResetHandler = new ContinueAtResetHandler(scheduledContinue);
+
   // Internal HTTP route table (transport wiring only).
   const routes = createSessionInternalRoutes({
+    scheduleContinueAtReset: (request) => continueAtResetHandler.schedule(request),
+    cancelContinueAtReset: () => continueAtResetHandler.cancel(),
     init: (request, _url, requestLog) => sessionInitHandler.init(request, requestLog),
     state: () => sessionLifecycleHandler.getState(),
     snapshot: () => snapshotReader.handleSnapshot(),
@@ -1139,6 +1160,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           await wsManager.expireAuthorizationLeases(Date.now());
           await alarmHandler.handle();
           await codexSeat.poll();
+          await scheduledContinue.fireIfDue();
         },
         () => alarmScheduler.rearmPending()
       ),
@@ -1177,6 +1199,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
             await alarmScheduler.rehydrate();
             await lifecycleManager.rearmRejectedStartupCleanupAlarm();
             await terminalMessageProjection.rearm();
+            await scheduledContinue.rearm();
           },
           {
             name: "alarm.rehydrate",

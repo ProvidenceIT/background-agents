@@ -774,6 +774,37 @@ describe("sessionSocketReducer", () => {
     });
   });
 
+  describe("scheduledContinueAtMs", () => {
+    it("is seeded by the page snapshot and the subscribed snapshot", () => {
+      expect(
+        createSessionSocketState(
+          createSnapshot({
+            session: createSessionState({ scheduledContinueAtMs: 1_800_000_060_000 }),
+          })
+        ).sessionState?.scheduledContinueAtMs
+      ).toBe(1_800_000_060_000);
+      expect(
+        subscribedState({
+          session: createSessionState({ scheduledContinueAtMs: 1_800_000_060_000 }),
+        }).sessionState?.scheduledContinueAtMs
+      ).toBe(1_800_000_060_000);
+    });
+
+    it("follows scheduled_continue messages", () => {
+      const scheduled = reduce(
+        subscribedState(),
+        serverMessage({ type: "scheduled_continue", scheduledContinueAtMs: 1_800_000_060_000 })
+      );
+      expect(scheduled.sessionState?.scheduledContinueAtMs).toBe(1_800_000_060_000);
+
+      const cleared = reduce(
+        scheduled,
+        serverMessage({ type: "scheduled_continue", scheduledContinueAtMs: null })
+      );
+      expect(cleared.sessionState?.scheduledContinueAtMs).toBeNull();
+    });
+  });
+
   describe("events_appended", () => {
     it("appends events in order", () => {
       const events: SandboxEvent[] = [

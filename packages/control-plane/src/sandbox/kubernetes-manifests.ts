@@ -73,6 +73,7 @@ const AUTH_HOME_VOLUME = "sf-auth";
 const AUTH_HOME_ENV = {
   path: "SF_AUTH_HOME",
   providers: "SF_AUTH_HOME_PROVIDERS",
+  preferredSlot: "SF_AUTH_HOME_PREFERRED_SLOT",
 } as const;
 
 /** The home's name: `sf-home-bram` -> `bram`. The claim name is validated upstream. */
@@ -405,6 +406,9 @@ export function buildSandboxPod(input: SandboxPodInput): Record<string, unknown>
       { name: AUTH_HOME_ENV.path, value: AUTH_HOME_MOUNT_PATH },
       { name: AUTH_HOME_ENV.providers, value: input.authHome.providers.join(",") }
     );
+    if (input.authHome.preferredSlot) {
+      env.push({ name: AUTH_HOME_ENV.preferredSlot, value: input.authHome.preferredSlot });
+    }
   }
 
   const volumes: Array<Record<string, unknown>> = [

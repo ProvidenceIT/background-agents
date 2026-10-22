@@ -118,6 +118,11 @@ export interface SandboxAuthHome {
    * read-only, since the agent shares the sandbox with the files.
    */
   writable?: boolean;
+  /**
+   * The home's Claude pool slot the runtime tries first (`SF_AUTH_HOME_PREFERRED_SLOT`),
+   * falling back to its own pick when that slot is refused or exhausted. A name only.
+   */
+  preferredSlot?: string;
 }
 
 /**

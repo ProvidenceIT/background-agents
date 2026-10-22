@@ -7,9 +7,10 @@ import {
   getValidHarnessOrDefault,
 } from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
-import type {
-  CreateSessionInput,
-  CreateSessionResponse,
+import {
+  SUBSCRIPTION_SLOT_UNAVAILABLE,
+  type CreateSessionInput,
+  type CreateSessionResponse,
 } from "@open-inspect/shared/types/session-api";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { generateId } from "../auth/crypto";
@@ -62,6 +63,7 @@ import {
   requirePermission,
   type ServiceActorClaimsResult,
 } from "./shared";
+import { pinnableSubscriptionSlots } from "./fork-subscription-slots";
 
 const logger = createLogger("router:session-create");
 const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
@@ -280,6 +282,8 @@ export interface NewSessionSpec {
   spawnSource: SpawnSource | undefined;
   externalRef: SessionExternalRef | null;
   fork?: SessionForkOrigin | null;
+  /** A pool slot of the bound home to try first; refused unless the home has spent it. */
+  preferredSubscriptionSlot?: string | null;
 }
 
 export type NewSessionOutcome =
@@ -482,6 +486,18 @@ export async function createNewSession(
     workItemAuthorUserId: trigger.workItemAuthorUserId,
   });
   if (admission.kind === "refused") return newSessionRefusalResponse(admission.refusal);
+  const preferredSubscriptionSlot = spec.preferredSubscriptionSlot ?? null;
+  if (
+    preferredSubscriptionSlot !== null &&
+    !(await pinnableSubscriptionSlots(ctx.db, harness, admission.authHomeId)).some(
+      ({ slot }) => slot === preferredSubscriptionSlot
+    )
+  ) {
+    return json(
+      { error: "Subscription slot unavailable", code: SUBSCRIPTION_SLOT_UNAVAILABLE },
+      400
+    );
+  }
 
   let managedSkillsManifest;
   try {
@@ -542,6 +558,7 @@ export async function createNewSession(
     authHomeSelection: admission.authHomeSelection,
     externalRef: spec.externalRef,
     fork: spec.fork ?? null,
+    preferredSubscriptionSlot,
   };
 
   try {

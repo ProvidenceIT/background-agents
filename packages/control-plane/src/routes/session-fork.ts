@@ -1,10 +1,17 @@
 import { Hono } from "hono";
+import {
+  filterModelsForHarness,
+  harnessIdSchema,
+  harnessSupportsModel,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { isValidModel, VALID_MODELS } from "@open-inspect/shared/models";
 import {
   createSessionInputSchema,
   forkSessionRequestSchema,
   type ForkHandoffResponse,
   type ForkSessionResponse,
+  type ForkSubscriptionSlotsResponse,
 } from "@open-inspect/shared/types/session-api";
 import { sessionSnapshotSchema } from "@open-inspect/shared/types/server-messages";
 import { admit } from "../routing/admit";
@@ -13,6 +20,7 @@ import {
   applyIdentityEnforcement,
   requireAdmittedCanonicalUserId,
 } from "../routing/identity-enforcement";
+import { bindSessionAuthHome } from "../auth-homes/session-binding";
 import { turnTriggerKind } from "../auth-homes/turn-admission";
 import {
   SessionForkTakenError,
@@ -20,12 +28,14 @@ import {
   type SessionForkHolder,
   type SessionForkOrigin,
 } from "../db/session-index";
+import type { HomeSubscriptionSlot } from "../db/usage-ledger";
 import { createLogger } from "../logger";
 import { sessionMessagePageSchema, SessionInternalPaths } from "../session/contracts";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { buildForkHandoff, type ForkHandoffSource } from "../session/fork-handoff";
 import type { Env } from "../types";
 import { parseBody } from "./body";
+import { PINNABLE_SLOT_HARNESS, pinnableSubscriptionSlots } from "./fork-subscription-slots";
 import { createNewSession } from "./session-create";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 import {
@@ -120,6 +130,51 @@ async function handleForkHandoff(
   return json({ handoff: buildForkHandoff(source.handoff) } satisfies ForkHandoffResponse);
 }
 
+/** The model a fork on `harness` runs: the source's when the harness can run it. */
+function forkModelForHarness(harness: HarnessId, sourceModel: string | undefined): string | null {
+  if (sourceModel && isValidModel(sourceModel) && harnessSupportsModel(harness, sourceModel)) {
+    return sourceModel;
+  }
+  return filterModelsForHarness(harness, VALID_MODELS)[0] ?? null;
+}
+
+async function handleForkSubscriptionSlots(
+  request: Request,
+  _env: Env,
+  params: { id: string },
+  ctx: SessionRouteContext
+): Promise<Response> {
+  const harness = harnessIdSchema.safeParse(new URL(request.url).searchParams.get("harness"));
+  if (!harness.success) return error("A valid harness is required", 400);
+
+  const enforcement = applyIdentityEnforcement(ctx, "session-create", {});
+  if (enforcement.rejection) return enforcement.rejection;
+  const resolvedUserId = requireAdmittedCanonicalUserId(ctx, enforcement.enforced);
+  if (resolvedUserId instanceof Response) return resolvedUserId;
+
+  const answer = (slots: HomeSubscriptionSlot[]): Response =>
+    json({
+      harness: harness.data,
+      slots: slots.map(({ slot, lastUsedAt }) => ({ slot, percentRemaining: null, lastUsedAt })),
+    } satisfies ForkSubscriptionSlotsResponse);
+  if (harness.data !== PINNABLE_SLOT_HARNESS) return answer([]);
+
+  const source = await readForkSource(ctx, params.id);
+  if (source instanceof Response) return source;
+  const model = forkModelForHarness(harness.data, source.model);
+  if (!model) return answer([]);
+  const binding = await bindSessionAuthHome(ctx.db, {
+    actorUserId: resolvedUserId,
+    model,
+    triggerKind: turnTriggerKind(ctx.principal),
+    harness: harness.data,
+    // Only OpenAI home rules read visibility; the Claude harness never runs OpenAI.
+    repoPrivate: async () => null,
+  });
+  if (binding.kind !== "served") return answer([]);
+  return answer(await pinnableSubscriptionSlots(ctx.db, harness.data, binding.home.id));
+}
+
 function forkResponse(sessionId: string, sourceId: string, created: boolean): Response {
   const body: ForkSessionResponse = { sessionId, forkedFromSessionId: sourceId, created };
   return json(body, created ? 201 : 200);
@@ -204,6 +259,7 @@ async function handleForkSession(
     spawnSource: enforcement.enforced.spawnSource ?? undefined,
     externalRef: null,
     fork: origin,
+    preferredSubscriptionSlot: body.subscriptionSlot ?? null,
   });
   if (outcome instanceof Response) return outcome;
   if (outcome.kind === "init_failed") {
@@ -281,6 +337,20 @@ sessionForkRoutes.get(
     cacheControl: "private, no-store",
   }),
   (c) => dispatchSession(c, handleForkHandoff)
+);
+
+sessionForkRoutes.get(
+  "/sessions/:id/fork/subscription-slots",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requireAll(
+      sessionRequirement("read"),
+      sessionRequirement("collaborate"),
+      permissionRequirement("sessions.create")
+    ),
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatchSession(c, handleForkSubscriptionSlots)
 );
 
 sessionForkRoutes.post(
