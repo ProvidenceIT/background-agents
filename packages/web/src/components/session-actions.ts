@@ -19,6 +19,8 @@ export interface SessionActionProps {
   primaryRepo?: { repoOwner: string; repoName: string } | null;
   onArchive?: () => void | Promise<void>;
   onUnarchive?: () => void | Promise<void>;
+  /** Opens the fork dialog; unset when the viewer cannot fork this session. */
+  onFork?: () => void;
   capabilities: SessionCapabilities;
 }
 

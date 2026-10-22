@@ -66,6 +66,57 @@ describe("ActionBar", () => {
     ]);
   });
 
+  it("offers Fork… in the desktop menu when the session can be forked", () => {
+    const onFork = vi.fn();
+    render(
+      <ActionBar
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[]}
+        onFork={onFork}
+        capabilities={FULL_CAPABILITIES}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Copy link",
+      "Fork…",
+    ]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Fork…" }));
+    expect(onFork).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Fork… in the mobile menu when the session can be forked", () => {
+    const onFork = vi.fn();
+    render(
+      <MobileSessionActions
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[]}
+        onFork={onFork}
+        capabilities={FULL_CAPABILITIES}
+        triggerRef={{ current: null }}
+        onOpenDetails={vi.fn()}
+        onOpenMedia={vi.fn()}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Details",
+      "Copy link",
+      "Fork…",
+      "Archive",
+    ]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Fork…" }));
+    expect(onFork).toHaveBeenCalledTimes(1);
+  });
+
   it("hides lifecycle actions when the capability is denied", () => {
     render(
       <ActionBar
