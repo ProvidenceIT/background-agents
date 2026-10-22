@@ -190,14 +190,12 @@ function applySessionBranchUpdate(
 
 /**
  * Mirrors the control plane's `lastTurnLimit` rule for live completions, which arrive without a
- * fresh snapshot: a failed turn that hit a limit sets it, a successful turn clears it.
+ * fresh snapshot: each finished turn replaces it with that turn's limit, or null if it had none.
  */
 function nextTurnLimit(
-  current: TurnLimit | null,
   event: Extract<SandboxEvent, { type: "execution_complete" }>
 ): TurnLimit | null {
-  if (event.success) return null;
-  return event.limit ?? current;
+  return event.success ? null : (event.limit ?? null);
 }
 
 function updateSessionState(
@@ -401,7 +399,7 @@ export function sessionSocketReducer(
       for (const event of action.events) {
         if (event.type === "boot_progress") boot = applyBootProgress(boot, event);
         if (event.type === "execution_complete") {
-          lastTurnLimit = nextTurnLimit(lastTurnLimit, event);
+          lastTurnLimit = nextTurnLimit(event);
         }
       }
       return updateSessionState(

@@ -749,12 +749,12 @@ describe("sessionSocketReducer", () => {
       expect(state.sessionState?.lastTurnLimit).toBeNull();
     });
 
-    it("survives a failed completion without a limit", () => {
+    it("is cleared by a failed completion without a limit, as the control plane does", () => {
       const state = reduce(
         subscribedState({ session: createSessionState({ lastTurnLimit: limit }) }),
         { type: "events_appended", events: [completion(false)] }
       );
-      expect(state.sessionState?.lastTurnLimit).toEqual(limit);
+      expect(state.sessionState?.lastTurnLimit).toBeNull();
     });
 
     it("is cleared when a new prompt starts processing", () => {
