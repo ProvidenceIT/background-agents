@@ -246,6 +246,26 @@ describe("useSessionSocket", () => {
     }
   );
 
+  it("shows a scheduled continue from the HTTP answer and from the broadcast", async () => {
+    const { result } = renderSessionSocket();
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].receive(createSubscribedMessage());
+    });
+
+    act(() => result.current.applyScheduledContinue(1_800_000_060_000));
+    expect(result.current.sessionState?.scheduledContinueAtMs).toBe(1_800_000_060_000);
+
+    act(() =>
+      FakeWebSocket.instances[0].receive({
+        type: "scheduled_continue",
+        scheduledContinueAtMs: null,
+      })
+    );
+    expect(result.current.sessionState?.scheduledContinueAtMs).toBeNull();
+  });
+
   it("uses the authenticated subscription capabilities while connected and ready", async () => {
     authorizationMock.canExportTrace = true;
     const { result } = renderSessionSocket();

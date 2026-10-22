@@ -108,6 +108,8 @@ export interface SessionInitInput {
   externalRef?: SessionExternalRef | null;
   /** Set only for a fork: its source and the caller's idempotency key. */
   fork?: SessionForkOrigin | null;
+  /** The pool slot of the bound home a fork asked to try first. */
+  preferredSubscriptionSlot?: string | null;
 }
 
 /**
@@ -232,6 +234,7 @@ export async function initializeSession(
     authHomeSelection: input.authHomeSelection ?? null,
     externalRef: input.externalRef ?? null,
     fork: input.fork ?? null,
+    preferredSubscriptionSlot: input.preferredSubscriptionSlot ?? null,
   });
 
   // Step 2: runtime init

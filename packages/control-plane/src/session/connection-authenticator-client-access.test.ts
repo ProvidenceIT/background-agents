@@ -756,3 +756,84 @@ describe("client session access", () => {
     expect(send).not.toHaveBeenCalled();
   });
 });
+
+describe("authorizeUser", () => {
+  type UserViewer = Extract<SessionViewer, { kind: "user" }>;
+  const ownRow: SessionAccessRow = {
+    id: "session",
+    ownerUserId: "member-user",
+    ownerTeamId: null,
+    visibility: "private",
+    collaboratorIds: [],
+  };
+  const otherTeamRow: SessionAccessRow = {
+    id: "session",
+    ownerUserId: "owner-user",
+    ownerTeamId: "team-b",
+    visibility: "team",
+    collaboratorIds: [],
+  };
+  const workspaceRow: SessionAccessRow = {
+    id: "session",
+    ownerUserId: "owner-user",
+    ownerTeamId: null,
+    visibility: "workspace",
+    collaboratorIds: ["member-user"],
+  };
+
+  function viewerFor(roleKey: "member" | "viewer"): UserViewer {
+    return {
+      kind: "user",
+      userId: "member-user",
+      roleKey,
+      suspended: false,
+      permissions: permissionsForBuiltInRole(roleKey),
+      memberships: new Map([["team-a", "member"]]),
+    };
+  }
+
+  function authenticatorResolving(resolution: unknown) {
+    const close = vi.fn();
+    const removeClient = vi.fn();
+    const authenticator = new SessionConnectionAuthenticator({
+      resolveSessionViewer: vi.fn(async () => resolution),
+      wsManager: { close, removeClient },
+      log: createLogger(),
+    } as unknown as SessionConnectionAuthenticatorDeps);
+    return { authenticator, close, removeClient };
+  }
+
+  function valid(viewer: UserViewer, row: SessionAccessRow) {
+    return {
+      kind: "valid",
+      mode: "on",
+      authorization: {
+        userId: viewer.userId,
+        role: { key: viewer.roleKey },
+        permissions: viewer.permissions,
+        suspendedAt: null,
+      },
+      viewer,
+      row,
+    };
+  }
+
+  it.each([
+    ["the owner of the session", "allowed", valid(viewerFor("member"), ownRow)],
+    ["a collaborator on a workspace session", "allowed", valid(viewerFor("member"), workspaceRow)],
+    ["a user outside the owning team", "denied", valid(viewerFor("member"), otherTeamRow)],
+    [
+      "a viewer who may read but not collaborate",
+      "denied",
+      valid(viewerFor("viewer"), workspaceRow),
+    ],
+    ["a suspended or unknown user", "denied", { kind: "rejected" }],
+    ["an unreadable authorization", "unavailable", { kind: "unavailable" }],
+  ])("answers %s with %s", async (_label, expected, resolution) => {
+    const { authenticator, close, removeClient } = authenticatorResolving(resolution);
+
+    await expect(authenticator.authorizeUser("member-user", "collaborate")).resolves.toBe(expected);
+    expect(close).not.toHaveBeenCalled();
+    expect(removeClient).not.toHaveBeenCalled();
+  });
+});

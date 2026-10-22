@@ -17,6 +17,7 @@ import { sessionSkillRoutes } from "./session-skills";
 import { sessionExportRoutes } from "./session-export";
 import { sessionScopeRoutes } from "./session-scope";
 import { sessionForkRoutes } from "./session-fork";
+import { sessionContinueAtResetRoutes } from "./session-continue-at-reset";
 
 /** Mount order is precedence order: static session paths precede `/sessions/:id`. */
 export const sessionRoutes = new Hono<ControlPlaneHonoEnv>();
@@ -38,6 +39,7 @@ for (const module of [
   sessionChildSpawnRoutes,
   sessionChildRoutes,
   sessionForkRoutes,
+  sessionContinueAtResetRoutes,
 ]) {
   sessionRoutes.route("/", module);
 }

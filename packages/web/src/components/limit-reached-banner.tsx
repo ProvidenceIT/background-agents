@@ -1,13 +1,32 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { TurnLimit } from "@open-inspect/shared/types/sandbox-events";
-import { describeTurnLimit, turnLimitSummary } from "@/lib/turn-limit";
+import type { ScheduledContinueFailure } from "@open-inspect/shared/types/server-messages";
+import {
+  describeScheduledContinue,
+  describeScheduledContinueFailure,
+  describeTurnLimit,
+  turnLimitSummary,
+} from "@/lib/turn-limit";
 
 /** How often the reset countdown re-renders; it shows whole minutes. */
 export const LIMIT_COUNTDOWN_TICK_MS = 15_000;
 
 export type ContinueAfterLimitResult = { ok: true } | { ok: false; message: string };
+
+const BUTTON_CLASS =
+  "rounded-sm border border-border bg-background px-2.5 py-1 text-sm font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60";
+
+type BannerAction = "continue" | "schedule" | "cancel";
+
+const CANCELLED_NOTICE = "The scheduled continue was cancelled.";
+
+const ACTION_FAILURES: Record<BannerAction, string> = {
+  continue: "The continue prompt could not be sent.",
+  schedule: "The continue could not be scheduled.",
+  cancel: "The scheduled continue could not be cancelled.",
+};
 
 interface LimitReachedBannerProps {
   limit: TurnLimit | null | undefined;
@@ -15,6 +34,14 @@ interface LimitReachedBannerProps {
   onContinue?: () => Promise<ContinueAfterLimitResult>;
   /** Opens the fork dialog; leave unset when the viewer cannot fork. */
   onFork?: () => void;
+  /** When the opted-in continue is due (epoch ms); null or absent when none is scheduled. */
+  scheduledContinueAtMs?: number | null;
+  /** Why the last scheduled continue did not run; null or absent when it did or none was due. */
+  scheduledContinueFailure?: ScheduledContinueFailure | null;
+  /** Schedules the continue for after the reset; leave unset when the viewer cannot collaborate. */
+  onScheduleContinue?: () => Promise<ContinueAfterLimitResult>;
+  /** Cancels the scheduled continue; leave unset when the viewer cannot collaborate. */
+  onCancelScheduledContinue?: () => Promise<ContinueAfterLimitResult>;
   isProcessing: boolean;
   /**
    * A prompt waits in the queue for the sandbox; it clears the limit once it
@@ -59,50 +86,117 @@ function LimitBanner({
   limit,
   onContinue,
   onFork,
+  scheduledContinueAtMs = null,
+  scheduledContinueFailure = null,
+  onScheduleContinue,
+  onCancelScheduledContinue,
   isProcessing,
   hasQueuedPrompt = false,
 }: LimitReachedBannerProps & { limit: TurnLimit }) {
   const nowMs = useNowMs(limit.resetsAtMs);
-  const [continuing, setContinuing] = useState(false);
-  const [continueError, setContinueError] = useState<string | null>(null);
+  const [pending, setPending] = useState<BannerAction | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  // Live regions do not announce removed text, so the viewer's own cancel says so in words.
+  const [cancelled, setCancelled] = useState(false);
+  const [seenScheduledAtMs, setSeenScheduledAtMs] = useState(scheduledContinueAtMs);
+  if (scheduledContinueAtMs !== seenScheduledAtMs) {
+    setSeenScheduledAtMs(scheduledContinueAtMs);
+    if (scheduledContinueAtMs !== null) setCancelled(false);
+  }
+  const [refocus, setRefocus] = useState(false);
+  const sectionRef = useRef<HTMLElement>(null);
+  const continueRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!refocus || pending !== null) return;
+    setRefocus(false);
+    const target = continueRef.current?.disabled ? sectionRef.current : continueRef.current;
+    target?.focus();
+  }, [refocus, pending]);
   const summary = turnLimitSummary(limit);
   const reset = nowMs === null ? null : describeTurnLimit(limit, nowMs).reset;
+  const scheduled =
+    nowMs === null || scheduledContinueAtMs === null
+      ? null
+      : describeScheduledContinue(scheduledContinueAtMs, nowMs);
+  const continueNotice =
+    scheduled ??
+    (scheduledContinueFailure
+      ? describeScheduledContinueFailure(scheduledContinueFailure)
+      : null) ??
+    (cancelled ? CANCELLED_NOTICE : null);
+  const resetAhead = nowMs !== null && limit.resetsAtMs !== null && limit.resetsAtMs > nowMs;
 
-  const handleContinue = async () => {
-    if (!onContinue || continuing) return;
-    setContinuing(true);
-    setContinueError(null);
+  const continueAtReset = scheduled
+    ? onCancelScheduledContinue && { action: "cancel" as const, handler: onCancelScheduledContinue }
+    : onScheduleContinue &&
+      resetAhead && { action: "schedule" as const, handler: onScheduleContinue };
+
+  const run = async (action: BannerAction, handler?: () => Promise<ContinueAfterLimitResult>) => {
+    if (!handler || pending) return;
+    setPending(action);
+    setActionError(null);
     try {
-      const result = await onContinue();
-      if (!result.ok) setContinueError(result.message);
+      const result = await handler();
+      if (!result.ok) {
+        setActionError(result.message);
+      } else if (action === "cancel") {
+        setCancelled(true);
+        // Past the reset nothing replaces Cancel, so focus moves on once the button is gone.
+        if (!resetAhead) setRefocus(true);
+      }
     } catch {
-      setContinueError("The continue prompt could not be sent.");
+      setActionError(ACTION_FAILURES[action]);
     } finally {
-      setContinuing(false);
+      setPending(null);
     }
   };
 
   return (
     <section
+      ref={sectionRef}
+      tabIndex={-1}
       aria-label="Subscription limit reached"
-      className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-warning/40 bg-warning-muted px-4 py-2.5 text-sm text-foreground"
+      className="outline-none flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-warning/40 bg-warning-muted px-4 py-2.5 text-sm text-foreground"
     >
       <p className="min-w-0 flex-1">
         <span className="font-medium">{summary}</span>
         {reset && <> {reset}</>} The conversation and workspace are saved.
+        {/* Mounted with the banner, so a schedule, a cancel or a failure is announced. */}
+        <span role="status" className="font-medium">
+          {continueNotice && ` ${continueNotice}`}
+        </span>
       </p>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
+          ref={continueRef}
           type="button"
-          className="rounded-sm border border-border bg-background px-2.5 py-1 text-sm font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={!onContinue || isProcessing || continuing || hasQueuedPrompt}
-          onClick={() => void handleContinue()}
+          className={BUTTON_CLASS}
+          disabled={!onContinue || isProcessing || pending !== null || hasQueuedPrompt}
+          onClick={() => void run("continue", onContinue)}
         >
-          {continuing ? "Sending…" : hasQueuedPrompt ? "Queued" : "Continue"}
+          {pending === "continue" ? "Sending…" : hasQueuedPrompt ? "Queued" : "Continue"}
         </button>
+        {continueAtReset && (
+          // One element for Schedule and Cancel, never disabled while it works, so keyboard
+          // focus stays on it from the click to the answer.
+          <button
+            type="button"
+            className={`${BUTTON_CLASS} aria-disabled:cursor-not-allowed aria-disabled:opacity-60`}
+            aria-disabled={pending !== null}
+            onClick={() => void run(continueAtReset.action, continueAtReset.handler)}
+          >
+            {continueAtReset.action === "cancel"
+              ? pending === "cancel"
+                ? "Cancelling…"
+                : "Cancel auto-continue"
+              : pending === "schedule"
+                ? "Scheduling…"
+                : "Continue when it resets"}
+          </button>
+        )}
         <button
           type="button"
-          className="rounded-sm border border-border bg-background px-2.5 py-1 text-sm font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+          className={BUTTON_CLASS}
           disabled={!onFork}
           aria-haspopup="dialog"
           onClick={onFork}
@@ -110,9 +204,9 @@ function LimitBanner({
           Fork…
         </button>
       </div>
-      {continueError && (
+      {actionError && (
         <p role="alert" className="w-full text-sm text-destructive">
-          {continueError}
+          {actionError}
         </p>
       )}
     </section>

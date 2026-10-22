@@ -303,6 +303,19 @@ describe("buildSandboxPod with a subscription home", () => {
     });
   });
 
+  it("names the preferred pool slot only when the home carries one", () => {
+    const pinned = buildSandboxPod(
+      podInput({ authHome: { ...authHome, preferredSlot: "claude-3" } })
+    ) as unknown as PodLike;
+    expect(pinned.spec.containers[0]!.env).toEqual([
+      { name: "SANDBOX_TIMEOUT_SECONDS", value: "3600" },
+      { name: "SF_AUTH_HOME", value: "/home/sandbox/.sf-auth" },
+      { name: "SF_AUTH_HOME_PROVIDERS", value: "anthropic" },
+      { name: "SF_AUTH_HOME_PREFERRED_SLOT", value: "claude-3" },
+    ]);
+    expect(JSON.stringify(withHome.spec.containers[0]!.env)).not.toContain("PREFERRED_SLOT");
+  });
+
   it("changes nothing about scheduling or the runtime class", () => {
     expect(withHome.spec.nodeSelector).toBeUndefined();
     expect(withHome.spec.runtimeClassName).toBe("gvisor");

@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MODEL_OPTIONS } from "@open-inspect/shared/models";
+import type { ForkSubscriptionSlot } from "@open-inspect/shared/types/session-api";
 import { ForkSessionDialog, type ForkSource } from "./fork-session-dialog";
 
 const push = vi.fn();
@@ -45,17 +47,36 @@ const SOURCE: ForkSource = {
 
 type FetchCall = { url: string; init?: RequestInit };
 
-function stubFetch(respond: (call: FetchCall) => Response | Promise<Response>): FetchCall[] {
+/** Subscription-slot lookups the dialog made, kept apart from the handoff and fork calls. */
+let slotCalls: string[] = [];
+
+/**
+ * Answers the dialog's requests; subscription-slot lookups get `slots` (none by default) and
+ * are recorded in `slotCalls`, not in the returned calls.
+ */
+function stubFetch(
+  respond: (call: FetchCall) => Response | Promise<Response>,
+  slots: ForkSubscriptionSlot[] | Response = []
+): FetchCall[] {
   const calls: FetchCall[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/fork/subscription-slots")) {
+        slotCalls.push(url);
+        const harness = new URL(url, "http://localhost").searchParams.get("harness");
+        return slots instanceof Response ? slots : Response.json({ harness, slots });
+      }
       const call = { url, init };
       calls.push(call);
       return respond(call);
     })
   );
   return calls;
+}
+
+function slot(name: string, percentRemaining: number | null = null): ForkSubscriptionSlot {
+  return { slot: name, percentRemaining, lastUsedAt: null };
 }
 
 function postedBodies(calls: FetchCall[]) {
@@ -66,6 +87,7 @@ function postedBodies(calls: FetchCall[]) {
 
 beforeEach(() => {
   push.mockReset();
+  slotCalls = [];
 });
 
 afterEach(() => {
@@ -230,5 +252,159 @@ describe("ForkSessionDialog", () => {
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+  describe("subscription", () => {
+    function forkResponds({ url }: FetchCall) {
+      return url.endsWith("/handoff")
+        ? Response.json({ handoff: "Draft" })
+        : Response.json(
+            { sessionId: "session-2", forkedFromSessionId: "session-1", created: true },
+            { status: 201 }
+          );
+    }
+
+    it("forks onto the chosen slot", async () => {
+      const user = userEvent.setup();
+      const calls = stubFetch(forkResponds, [slot("claude-1", 12), slot("claude-2")]);
+      render(<ForkSessionDialog open onOpenChange={vi.fn()} source={SOURCE} />);
+      await screen.findByDisplayValue("Draft");
+
+      const select = await screen.findByRole("combobox", { name: "Subscription" });
+      expect(select).toHaveTextContent("Automatic (most headroom)");
+      expect(slotCalls).toEqual(["/api/sessions/session-1/fork/subscription-slots?harness=claude"]);
+
+      await user.click(select);
+      expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+        "Automatic (most headroom)",
+        "claude-1 (12%)",
+        "claude-2",
+      ]);
+      await user.click(screen.getByRole("option", { name: "claude-2" }));
+      expect(select).toHaveTextContent("claude-2");
+      await user.click(screen.getByRole("button", { name: "Create" }));
+
+      expect(postedBodies(calls)[0]).toEqual({
+        forkRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        harness: "claude",
+        model: "anthropic/claude-opus-5",
+        reasoningEffort: "high",
+        handoff: "Draft",
+        subscriptionSlot: "claude-2",
+      });
+    });
+
+    it("marks the slot that hit the source's limit and warns when it is chosen", async () => {
+      const user = userEvent.setup();
+      const calls = stubFetch(forkResponds, [slot("claude-1"), slot("claude-3"), slot("claude-5")]);
+      render(
+        <ForkSessionDialog
+          open
+          onOpenChange={vi.fn()}
+          source={{ ...SOURCE, limitedSlot: "claude-3" }}
+        />
+      );
+      await screen.findByDisplayValue("Draft");
+
+      const select = await screen.findByRole("combobox", { name: "Subscription" });
+      await user.click(select);
+      expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+        "Automatic (most headroom)",
+        "claude-1",
+        "claude-3 (limit reached)",
+        "claude-5",
+      ]);
+      expect(screen.queryByText(/hit its limit/)).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("option", { name: "claude-3 (limit reached)" }));
+      expect(
+        screen.getByText(
+          "claude-3 hit this session's limit. Until it resets, the fork falls back to the automatic pick."
+        )
+      ).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Create" }));
+
+      expect(postedBodies(calls)[0]).toMatchObject({ subscriptionSlot: "claude-3" });
+    });
+
+    it("sends no slot when Automatic stays chosen", async () => {
+      const calls = stubFetch(forkResponds, [slot("claude-1"), slot("claude-2")]);
+      render(<ForkSessionDialog open onOpenChange={vi.fn()} source={SOURCE} />);
+      await screen.findByRole("combobox", { name: "Subscription" });
+      await screen.findByDisplayValue("Draft");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Create" }));
+      });
+
+      expect(postedBodies(calls)[0]).not.toHaveProperty("subscriptionSlot");
+    });
+
+    it("offers no choice for a single slot", async () => {
+      stubFetch(forkResponds, [slot("claude-1", 80)]);
+      render(<ForkSessionDialog open onOpenChange={vi.fn()} source={SOURCE} />);
+      await screen.findByDisplayValue("Draft");
+      await waitFor(() => expect(slotCalls).toHaveLength(1));
+
+      expect(screen.queryByRole("combobox", { name: "Subscription" })).not.toBeInTheDocument();
+    });
+
+    it("offers no choice when the slots cannot be loaded", async () => {
+      const calls = stubFetch(forkResponds, Response.json({ error: "Forbidden" }, { status: 403 }));
+      render(<ForkSessionDialog open onOpenChange={vi.fn()} source={SOURCE} />);
+      await screen.findByDisplayValue("Draft");
+      await waitFor(() => expect(slotCalls).toHaveLength(1));
+
+      expect(screen.queryByRole("combobox", { name: "Subscription" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Create" }));
+      });
+      expect(postedBodies(calls)[0]).not.toHaveProperty("subscriptionSlot");
+    });
+
+    it("drops the choice and the select when the fork moves to another agent", async () => {
+      const user = userEvent.setup();
+      const calls = stubFetch(forkResponds, [slot("claude-1"), slot("claude-2")]);
+      render(<ForkSessionDialog open onOpenChange={vi.fn()} source={SOURCE} />);
+      await screen.findByDisplayValue("Draft");
+      await user.click(await screen.findByRole("combobox", { name: "Subscription" }));
+      await user.click(screen.getByRole("option", { name: "claude-1" }));
+
+      await user.click(screen.getByRole("button", { name: "Switch agent to codex" }));
+
+      expect(screen.queryByRole("combobox", { name: "Subscription" })).not.toBeInTheDocument();
+      expect(slotCalls).toEqual(["/api/sessions/session-1/fork/subscription-slots?harness=claude"]);
+      await user.click(screen.getByRole("button", { name: "Create" }));
+      expect(postedBodies(calls)[0]).toMatchObject({ harness: "codex" });
+      expect(postedBodies(calls)[0]).not.toHaveProperty("subscriptionSlot");
+    });
+
+    it("shows a refused slot as an error and keeps the dialog open", async () => {
+      const user = userEvent.setup();
+      const onOpenChange = vi.fn();
+      stubFetch(
+        ({ url }) =>
+          url.endsWith("/handoff")
+            ? Response.json({ handoff: "Draft" })
+            : Response.json(
+                { error: "Subscription slot unavailable", code: "subscription_slot_unavailable" },
+                { status: 400 }
+              ),
+        [slot("claude-1"), slot("claude-2")]
+      );
+      render(<ForkSessionDialog open onOpenChange={onOpenChange} source={SOURCE} />);
+      await screen.findByDisplayValue("Draft");
+      await user.click(await screen.findByRole("combobox", { name: "Subscription" }));
+      await user.click(screen.getByRole("option", { name: "claude-2" }));
+
+      await user.click(screen.getByRole("button", { name: "Create" }));
+
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "That subscription is not available for this fork. Choose another one or Automatic."
+      );
+      expect(onOpenChange).not.toHaveBeenCalled();
+      expect(push).not.toHaveBeenCalled();
+      expect(screen.getByRole("combobox", { name: "Subscription" })).toBeEnabled();
+    });
   });
 });

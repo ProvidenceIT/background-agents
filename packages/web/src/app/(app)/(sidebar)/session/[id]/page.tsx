@@ -57,6 +57,7 @@ import { findLatestTerminalMessageId } from "@/lib/session-read-state";
 import { useMarkSessionRead } from "@/hooks/use-mark-session-read";
 import { usePromptInput } from "@/hooks/use-prompt-input";
 import { useContinueAfterLimit } from "@/hooks/use-continue-after-limit";
+import { useContinueAtReset } from "@/hooks/use-continue-at-reset";
 import { formatSessionCost } from "@/lib/session-cost";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
@@ -132,6 +133,7 @@ function SessionContent({
     sendTyping,
     reconnect,
     loadOlderEvents,
+    applyScheduledContinue,
   } = socket;
   // The inspector also needs plan calls older than the loaded window; later states in `events` win.
   const inspectorEvents = useMemo(
@@ -208,6 +210,12 @@ function SessionContent({
     !sandboxBlockReason &&
     modelAvailability.status === "available";
   const continueAfterLimit = useContinueAfterLimit(sendPrompt, selectedModel, reasoningEffort);
+  const continueAtReset = useContinueAtReset(sessionId, applyScheduledContinue);
+  // A sandbox hold may lift before the reset and is retried, but a reached cost limit refuses it.
+  const canScheduleContinue =
+    capabilities.collaborate &&
+    isSessionPromptable(sessionState?.status ?? DEFAULT_SESSION_STATUS) &&
+    !sessionState?.budgetExhausted;
   const [cancellingPromptIds, setCancellingPromptIds] = useState<ReadonlySet<string>>(new Set());
   const cancellingPromptIdsRef = useRef(new Set<string>());
   const handleRemoveQueuedPrompt = useCallback(
@@ -533,6 +541,10 @@ function SessionContent({
           limit={sessionState?.lastTurnLimit}
           onContinue={canContinueAfterLimit ? continueAfterLimit : undefined}
           onFork={onFork}
+          scheduledContinueAtMs={sessionState?.scheduledContinueAtMs}
+          scheduledContinueFailure={sessionState?.scheduledContinueFailure}
+          onScheduleContinue={canScheduleContinue ? continueAtReset.schedule : undefined}
+          onCancelScheduledContinue={capabilities.collaborate ? continueAtReset.cancel : undefined}
           isProcessing={isProcessing}
           hasQueuedPrompt={promptQueue.some((item) => item.status === "pending")}
         />
@@ -548,6 +560,7 @@ function SessionContent({
             harness: sessionHarness,
             model: sessionState?.model,
             reasoningEffort: sessionState?.reasoningEffort,
+            limitedSlot: sessionState?.lastTurnLimit?.subscriptionSlot,
           }}
         />
       )}

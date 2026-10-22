@@ -475,3 +475,98 @@ it("links a fork to its source session", async () => {
     "/session/session-0"
   );
 });
+
+function limitedSocketResettingLater(overrides: Record<string, unknown> = {}) {
+  collaboratorSocket();
+  const resetsAtMs = Date.now() + 60 * 60_000;
+  const applyScheduledContinue = vi.fn();
+  mocks.socket.mockReturnValue({
+    ...mocks.socket(),
+    sessionState: {
+      ...mocks.socket().sessionState,
+      lastTurnLimit: { ...TURN_LIMIT, resetsAtMs },
+    },
+    applyScheduledContinue,
+    ...overrides,
+  });
+  return { resetsAtMs, applyScheduledContinue };
+}
+
+it("schedules a continue for after the reset and shows it at once", async () => {
+  const { resetsAtMs, applyScheduledContinue } = limitedSocketResettingLater();
+  const fetchMock = vi.fn(async () =>
+    Response.json({ scheduledContinueAtMs: resetsAtMs + 60_000 })
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  render(<SessionPage />);
+
+  await userEvent.setup().click(screen.getByRole("button", { name: "Continue when it resets" }));
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/sessions/session-1/continue-at-reset",
+    expect.objectContaining({ method: "POST" })
+  );
+  expect(applyScheduledContinue).toHaveBeenCalledWith(resetsAtMs + 60_000);
+});
+
+it("cancels a scheduled continue from the banner", async () => {
+  const { resetsAtMs, applyScheduledContinue } = limitedSocketResettingLater();
+  mocks.socket.mockReturnValue({
+    ...mocks.socket(),
+    sessionState: { ...mocks.socket().sessionState, scheduledContinueAtMs: resetsAtMs + 60_000 },
+  });
+  const fetchMock = vi.fn(async () => Response.json({ scheduledContinueAtMs: null }));
+  vi.stubGlobal("fetch", fetchMock);
+  render(<SessionPage />);
+
+  expect(screen.getByRole("region", { name: "Subscription limit reached" })).toHaveTextContent(
+    /saved\. Continues automatically at \d{2}:\d{2}\./
+  );
+  expect(screen.queryByRole("button", { name: "Continue when it resets" })).toBeNull();
+  await userEvent.setup().click(screen.getByRole("button", { name: "Cancel auto-continue" }));
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/sessions/session-1/continue-at-reset",
+    expect.objectContaining({ method: "DELETE" })
+  );
+  expect(applyScheduledContinue).toHaveBeenCalledWith(null);
+});
+
+it("offers no scheduled continue once the session cost limit is reached", () => {
+  limitedSocketResettingLater();
+  mocks.socket.mockReturnValue({
+    ...mocks.socket(),
+    sessionState: { ...mocks.socket().sessionState, budgetExhausted: true },
+  });
+  render(<SessionPage />);
+
+  expect(screen.getByRole("region", { name: "Subscription limit reached" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "Continue when it resets" })).toBeNull();
+});
+
+it("gives a viewer without collaborate no way to schedule or cancel", () => {
+  const { resetsAtMs } = limitedSocketResettingLater();
+  const viewer = {
+    ...mocks.socket().sessionState,
+    capabilities: { ...mocks.snapshot!.session.capabilities!, canCollaborate: false },
+  };
+  mocks.socket.mockReturnValue({
+    ...mocks.socket(),
+    sessionState: viewer,
+    capabilities: resolveSessionCapabilities(viewer.capabilities, true),
+  });
+  const { unmount } = render(<SessionPage />);
+  expect(screen.queryByRole("button", { name: "Continue when it resets" })).toBeNull();
+  unmount();
+
+  mocks.socket.mockReturnValue({
+    ...mocks.socket(),
+    sessionState: { ...viewer, scheduledContinueAtMs: resetsAtMs + 60_000 },
+  });
+  render(<SessionPage />);
+  expect(screen.getByRole("region", { name: "Subscription limit reached" })).toHaveTextContent(
+    /Continues automatically at/
+  );
+  expect(screen.queryByRole("button", { name: "Cancel auto-continue" })).toBeNull();
+});

@@ -1,6 +1,10 @@
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { turnLimitSchema, type TurnLimit } from "@open-inspect/shared/types/sandbox-events";
+import {
+  scheduledContinueFailureSchema,
+  type ScheduledContinueFailure,
+} from "@open-inspect/shared/types/server-messages";
 import { z } from "zod";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
 import type { SqlStorage, TransactionSync } from "./sql-storage";
@@ -17,6 +21,25 @@ const sessionCostRowSchema = sessionRowSchema.pick({ total_cost: true });
 const sessionForkRowSchema = z.object({
   forked_from_session_id: z.string().nullable(),
   last_turn_limit: z.string().nullable(),
+});
+
+/** An opted-in prompt the session enqueues itself once the last turn's limit resets. */
+export const scheduledContinueSchema = z.object({
+  /** When it fires (epoch ms): the reset plus CONTINUE_AT_RESET_BUFFER_MS. */
+  atMs: z.number().int().nonnegative(),
+  /** Canonical user who scheduled it; the prompt is theirs and re-checked when it fires. */
+  requestedByUserId: z.string().min(1),
+  /** Their participant id, the prompt's author. */
+  authorId: z.string().min(1),
+  createdAtMs: z.number().int().nonnegative(),
+  /** Retries so far after a passing failure when it was due; absent before the first. */
+  retries: z.number().int().nonnegative().optional(),
+});
+export type ScheduledContinue = z.infer<typeof scheduledContinueSchema>;
+
+const scheduledContinueRowSchema = z.object({ scheduled_continue: z.string().nullable() });
+const scheduledContinueFailureRowSchema = z.object({
+  scheduled_continue_failure: z.string().nullable(),
 });
 
 /** Data for upserting a session. */
@@ -165,6 +188,58 @@ export class SessionCoreRepository {
     this.sql.exec(
       `UPDATE session SET last_turn_limit = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
       limit ? JSON.stringify(limit) : null
+    );
+  }
+
+  /** A stored value that no longer parses reads as nothing scheduled. */
+  getScheduledContinue(): ScheduledContinue | null {
+    const row = this.sql.exec(`SELECT scheduled_continue FROM session LIMIT 1`).toArray()[0];
+    if (row === undefined) return null;
+    const parsed = scheduledContinueRowSchema.safeParse(row);
+    if (!parsed.success) {
+      throw new SessionStorageIntegrityError("Malformed persisted scheduled continue row");
+    }
+    const stored = parsed.data.scheduled_continue;
+    if (!stored) return null;
+    try {
+      const schedule = scheduledContinueSchema.safeParse(JSON.parse(stored));
+      return schedule.success ? schedule.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  setScheduledContinue(schedule: ScheduledContinue | null): void {
+    this.sql.exec(
+      `UPDATE session SET scheduled_continue = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
+      schedule ? JSON.stringify(schedule) : null
+    );
+  }
+
+  /** A stored value that no longer parses reads as no failure. */
+  getScheduledContinueFailure(): ScheduledContinueFailure | null {
+    const row = this.sql
+      .exec(`SELECT scheduled_continue_failure FROM session LIMIT 1`)
+      .toArray()[0];
+    if (row === undefined) return null;
+    const parsed = scheduledContinueFailureRowSchema.safeParse(row);
+    if (!parsed.success) {
+      throw new SessionStorageIntegrityError("Malformed persisted scheduled continue failure row");
+    }
+    const stored = parsed.data.scheduled_continue_failure;
+    if (!stored) return null;
+    try {
+      const failure = scheduledContinueFailureSchema.safeParse(JSON.parse(stored));
+      return failure.success ? failure.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  setScheduledContinueFailure(failure: ScheduledContinueFailure | null): void {
+    this.sql.exec(
+      `UPDATE session SET scheduled_continue_failure = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
+      failure ? JSON.stringify(failure) : null
     );
   }
 

@@ -1,4 +1,8 @@
 import type { TurnLimit, TurnLimitWindow } from "@open-inspect/shared/types/sandbox-events";
+import type {
+  ScheduledContinueFailure,
+  ScheduledContinueRefusal,
+} from "@open-inspect/shared/types/server-messages";
 
 /** The prompt the banner's Continue button sends through the ordinary prompt path. */
 export const CONTINUE_AFTER_LIMIT_PROMPT = "Continue where you stopped.";
@@ -53,15 +57,15 @@ export function formatTimeUntil(remainingMs: number): string {
   return hours === 0 ? `in ${days} d` : `in ${days} d ${hours} h`;
 }
 
-function formatResetClock(resetsAtMs: number, nowMs: number, options: TurnLimitFormatOptions) {
-  const sameDay = resetsAtMs - nowMs < DAY_MS;
+function formatLimitClock(atMs: number, nowMs: number, options: TurnLimitFormatOptions) {
+  const sameDay = atMs - nowMs < DAY_MS;
   return new Intl.DateTimeFormat(options.locale, {
     ...(sameDay ? {} : { weekday: "short" }),
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
     timeZone: options.timeZone,
-  }).format(resetsAtMs);
+  }).format(atMs);
 }
 
 /** What was hit; unlike the reset, it does not depend on the clock or time zone. */
@@ -83,9 +87,52 @@ export function describeTurnLimit(
 
   if (limit.resetsAtMs === null) return { summary, reset: null };
   if (limit.resetsAtMs <= nowMs) return { summary, reset: "The limit has reset." };
-  const clock = formatResetClock(limit.resetsAtMs, nowMs, options);
+  const clock = formatLimitClock(limit.resetsAtMs, nowMs, options);
   return {
     summary,
     reset: `Resets at ${clock} (${formatTimeUntil(limit.resetsAtMs - nowMs)}).`,
   };
+}
+
+/** When an opted-in continue will be sent, on the same clock as the reset. */
+export function describeScheduledContinue(
+  scheduledContinueAtMs: number,
+  nowMs: number,
+  options: TurnLimitFormatOptions = {}
+): string {
+  return `Continues automatically at ${formatLimitClock(scheduledContinueAtMs, nowMs, options)}.`;
+}
+
+/** Shown to every viewer, so it names the kind of refusal and no one's usage figures. */
+function describeRefusal(refusal: ScheduledContinueRefusal | null): string {
+  switch (refusal) {
+    case "usage_quota_exceeded":
+      return "the person who scheduled it has reached a usage quota.";
+    case "auth_home_refused":
+      return "the subscription that runs this session refused the turn.";
+    case "budget_exhausted":
+      return "the session cost limit was reached.";
+    case "session_not_promptable":
+      return "the session can no longer take prompts.";
+    case "queue_full":
+      return "the session's prompt queue was full.";
+    case "request_conflict":
+      return "its prompt clashed with another request.";
+    case "harness_model_incompatible":
+      return "the session's model no longer works with its agent.";
+    case null:
+      return "its prompt was refused.";
+  }
+}
+
+/** Why the opted-in continue did not run when it was due. */
+export function describeScheduledContinueFailure(failure: ScheduledContinueFailure): string {
+  switch (failure.reason) {
+    case "refused":
+      return `The scheduled continue did not run: ${describeRefusal(failure.refusal)}`;
+    case "requester_cannot_collaborate":
+      return "The scheduled continue did not run: the person who scheduled it can no longer work in this session.";
+    case "retries_exhausted":
+      return "The scheduled continue did not run: the session could not queue it.";
+  }
 }

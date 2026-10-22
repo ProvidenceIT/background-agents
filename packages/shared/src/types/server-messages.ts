@@ -13,6 +13,34 @@ import { sandboxShutdownSchema, shutdownRecoveryActionSchema } from "./sandbox-s
 import { clientRequestIdSchema } from "./prompts";
 import { sessionVisibilitySchema } from "./teams";
 
+/**
+ * Why a due continue's prompt was refused, as a code. Every viewer of the session sees it,
+ * so it never carries the refusal's own message (a quota refusal describes the requester's
+ * usage).
+ */
+export const scheduledContinueRefusalSchema = z.enum([
+  "usage_quota_exceeded",
+  "auth_home_refused",
+  "budget_exhausted",
+  "session_not_promptable",
+  "queue_full",
+  "request_conflict",
+  "harness_model_incompatible",
+]);
+export type ScheduledContinueRefusal = z.infer<typeof scheduledContinueRefusalSchema>;
+
+/**
+ * Why an opted-in "continue when it resets" did not run when it was due: its prompt was
+ * refused (`refusal` says why), the person who scheduled it may no longer collaborate,
+ * or the session could not queue it after every retry.
+ */
+export const scheduledContinueFailureSchema = z.object({
+  reason: z.enum(["refused", "requester_cannot_collaborate", "retries_exhausted"]),
+  refusal: scheduledContinueRefusalSchema.nullable(),
+  atMs: z.number().int().nonnegative(),
+});
+export type ScheduledContinueFailure = z.infer<typeof scheduledContinueFailureSchema>;
+
 export const promptQueueItemSchema = z.object({
   messageId: z.string(),
   content: z.string(),
@@ -54,6 +82,16 @@ const sessionStateSchema = z.object({
    * a new prompt starts processing. Absent from producers that predate it.
    */
   lastTurnLimit: turnLimitSchema.nullable().optional(),
+  /**
+   * When an opted-in "continue when it resets" prompt is due (epoch ms); null when
+   * none is scheduled. Absent from producers that predate it.
+   */
+  scheduledContinueAtMs: z.number().int().nonnegative().nullable().optional(),
+  /**
+   * Why the last scheduled continue did not run; null once anything moves the session on
+   * (a prompt, a turn result, a new schedule, closing it). Absent from producers that predate it.
+   */
+  scheduledContinueFailure: scheduledContinueFailureSchema.nullable().optional(),
   totalCost: z.number().optional(),
   maxSessionCostUsd: z.number().nullable().optional(),
   budgetExhausted: z.boolean().optional(),
@@ -217,6 +255,13 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sandbox_restored"), message: z.string() }),
   z.object({ type: z.literal("sandbox_warning"), message: z.string() }),
   z.object({ type: z.literal("processing_status"), isProcessing: z.boolean() }),
+  /** The session's scheduled continue changed: set, replaced, cancelled, fired or dropped. */
+  z.object({
+    type: z.literal("scheduled_continue"),
+    scheduledContinueAtMs: z.number().int().nonnegative().nullable(),
+    /** Absent from producers that predate it; read as null. */
+    scheduledContinueFailure: scheduledContinueFailureSchema.nullable().optional(),
+  }),
   z.object({
     type: z.literal("budget_status"),
     totalCost: z.number(),

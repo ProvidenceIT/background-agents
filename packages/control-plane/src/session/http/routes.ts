@@ -14,7 +14,7 @@ export type SessionInternalRouteHandler = (
 ) => Promise<Response> | Response;
 
 export interface SessionInternalRoute {
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "DELETE";
   path: SessionInternalPath;
   handler: SessionInternalRouteHandler;
 }
@@ -62,6 +62,8 @@ export interface SessionInternalRouteHandlers {
   diffFailure: SessionInternalRouteHandler;
   diffResolveFile: SessionInternalRouteHandler;
   diffRetry: SessionInternalRouteHandler;
+  scheduleContinueAtReset: SessionInternalRouteHandler;
+  cancelContinueAtReset: SessionInternalRouteHandler;
 }
 
 /**
@@ -161,5 +163,15 @@ export function createSessionInternalRoutes(
       handler: handlers.diffResolveFile,
     },
     { method: "POST", path: SessionInternalPaths.diffRetry, handler: handlers.diffRetry },
+    {
+      method: "POST",
+      path: SessionInternalPaths.continueAtReset,
+      handler: handlers.scheduleContinueAtReset,
+    },
+    {
+      method: "DELETE",
+      path: SessionInternalPaths.continueAtReset,
+      handler: handlers.cancelContinueAtReset,
+    },
   ];
 }

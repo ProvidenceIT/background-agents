@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TurnLimit } from "@open-inspect/shared/types/sandbox-events";
-import { describeTurnLimit, formatTimeUntil } from "./turn-limit";
+import { describeScheduledContinue, describeTurnLimit, formatTimeUntil } from "./turn-limit";
 
 const NOW_MS = Date.UTC(2026, 9, 22, 8, 56, 0);
 const UTC = { locale: "en-GB", timeZone: "UTC" };
@@ -67,5 +67,19 @@ describe("formatTimeUntil", () => {
     [24 * 60 * 60_000, "in 1 d"],
   ])("formats %i ms as %s", (remainingMs, expected) => {
     expect(formatTimeUntil(remainingMs)).toBe(expected);
+  });
+});
+
+describe("describeScheduledContinue", () => {
+  it("gives the time the continue is sent", () => {
+    expect(describeScheduledContinue(Date.UTC(2026, 9, 22, 9, 1, 0), NOW_MS, UTC)).toBe(
+      "Continues automatically at 09:01."
+    );
+  });
+
+  it("adds the weekday when the continue is a day or more away", () => {
+    expect(describeScheduledContinue(Date.UTC(2026, 9, 24, 13, 31, 0), NOW_MS, UTC)).toBe(
+      "Continues automatically at Sat 13:31."
+    );
   });
 });

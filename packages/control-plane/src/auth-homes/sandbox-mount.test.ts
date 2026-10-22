@@ -32,12 +32,17 @@ describe("createSessionAuthHomeLookup", () => {
   });
   afterEach(() => db.close());
 
-  async function session(id: string, authHomeId: string | null, harness = "opencode") {
+  async function session(
+    id: string,
+    authHomeId: string | null,
+    harness = "opencode",
+    preferredSlot: string | null = null
+  ) {
     await db
       .prepare(
-        "INSERT INTO sessions (id, user_id, auth_home_id, harness, created_at, updated_at) VALUES (?, 'u2', ?, ?, 1, 1)"
+        "INSERT INTO sessions (id, user_id, auth_home_id, harness, preferred_subscription_slot, created_at, updated_at) VALUES (?, 'u2', ?, ?, ?, 1, 1)"
       )
-      .bind(id, authHomeId, harness)
+      .bind(id, authHomeId, harness, preferredSlot)
       .run();
   }
 
@@ -59,6 +64,24 @@ describe("createSessionAuthHomeLookup", () => {
       providers: ["openai"],
       writable: true,
     });
+  });
+
+  it("names the slot a fork prefers for a Claude session", async () => {
+    await session("s1", "ah_bram", "claude", "claude-3");
+    await expect(lookup.getForSession("s1")).resolves.toEqual({
+      pvcName: "sf-home-bram",
+      ownerUserId: "u1",
+      providers: ["anthropic", "openai"],
+      writable: false,
+      preferredSlot: "claude-3",
+    });
+  });
+
+  it("names no preferred slot for a Codex session or a stored name that is not a slot", async () => {
+    await session("s1", "ah_bram", "codex", "claude-3");
+    await session("s2", "ah_bram", "claude", "../claude-3");
+    expect((await lookup.getForSession("s1"))?.preferredSlot).toBeUndefined();
+    expect((await lookup.getForSession("s2"))?.preferredSlot).toBeUndefined();
   });
 
   it("finds nothing for a session without a binding or without a row", async () => {

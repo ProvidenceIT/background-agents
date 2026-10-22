@@ -4,7 +4,10 @@ import type { SessionSnapshot } from "@open-inspect/shared/types/server-messages
 import type {
   ForkHandoffResponse,
   ForkSessionResponse,
+  ForkSubscriptionSlotsResponse,
 } from "@open-inspect/shared/types/session-api";
+import { UserAuthHomeStore } from "../../src/auth-homes/store";
+import { UsageLedgerStore } from "../../src/db/usage-ledger";
 import { SessionForkTakenError, SessionIndexStore } from "../../src/db/session-index";
 import * as repositoryResolution from "../../src/repos/resolve";
 import { FORK_CONSENT_LINE } from "../../src/session/fork-handoff";
@@ -449,5 +452,229 @@ describe("session fork routes", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: expect.stringContaining('Invalid model "acme/not-a-model"'),
     });
+  });
+});
+
+describe("forking onto a chosen subscription slot", () => {
+  const LEDGER_SESSION = "slot-ledger-session";
+  const SETTLED_AT = 1_790_000_000_000;
+
+  beforeEach(async () => {
+    await cleanD1Tables();
+    await env.DB.prepare("DELETE FROM usage_ledger").run();
+    vi.spyOn(repositoryResolution, "resolveSessionRepositories").mockImplementation(
+      async (_env, repos) =>
+        repos.map((repo) => ({
+          ...repo,
+          repoId: 12345,
+          baseBranch: repo.baseBranch ?? "repo-default",
+        }))
+    );
+    await new UserAuthHomeStore(env.DB).register({
+      id: "ah_member",
+      ownerUserIds: [MEMBER],
+      pvcName: "sf-home-member",
+      nodeName: "node-1",
+      providers: ["anthropic"],
+    });
+    await env.DB.prepare(
+      "INSERT INTO sessions (id, user_id, auth_home_id, harness, created_at, updated_at) VALUES (?, ?, 'ah_member', 'claude', 1, 1)"
+    )
+      .bind(LEDGER_SESSION, MEMBER)
+      .run();
+    const ledger = new UsageLedgerStore(env.DB);
+    for (const [messageId, harness, slot, settledAt] of [
+      ["m-1", "claude", "claude-10", SETTLED_AT],
+      ["m-2", "claude", "claude-2", SETTLED_AT + 5],
+      ["m-3", "codex", "codex-1", SETTLED_AT],
+    ] as const) {
+      await ledger.recordTurn({
+        messageId,
+        sessionId: LEDGER_SESSION,
+        userId: MEMBER,
+        repoExternalId: null,
+        harness,
+        model: null,
+        costUsd: 0,
+        inputTokens: null,
+        outputTokens: null,
+        subscriptionSlot: slot,
+        settledAt,
+      });
+    }
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  function listSlots(sourceId: string, query: string, userId = MEMBER) {
+    return serviceFetch(`${BASE}/sessions/${sourceId}/fork/subscription-slots${query}`, {
+      as: { userId, role: "member" },
+    });
+  }
+
+  it("lists the Claude slots of the caller's home in name order", async () => {
+    const { name } = await seedSource();
+
+    const response = await listSlots(name, "?harness=claude");
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(await response.json<ForkSubscriptionSlotsResponse>()).toEqual({
+      harness: "claude",
+      slots: [
+        { slot: "claude-2", percentRemaining: null, lastUsedAt: SETTLED_AT + 5 },
+        { slot: "claude-10", percentRemaining: null, lastUsedAt: SETTLED_AT },
+      ],
+    });
+  });
+
+  it("lists nothing for a harness without a pinnable pool", async () => {
+    const { name } = await seedSource();
+
+    expect(await (await listSlots(name, "?harness=codex")).json()).toEqual({
+      harness: "codex",
+      slots: [],
+    });
+    expect(await (await listSlots(name, "?harness=opencode")).json()).toEqual({
+      harness: "opencode",
+      slots: [],
+    });
+  });
+
+  it("rejects a missing or unknown harness", async () => {
+    const { name } = await seedSource();
+
+    expect((await listSlots(name, "")).status).toBe(400);
+    expect((await listSlots(name, "?harness=gemini")).status).toBe(400);
+  });
+
+  it("stores the chosen slot on the fork", async () => {
+    const { name } = await seedSource();
+
+    const response = await fork(name, {
+      forkRequestId: crypto.randomUUID(),
+      handoff: "Continue.",
+      subscriptionSlot: "claude-2",
+    });
+
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<ForkSessionResponse>();
+    expect(
+      await env.DB.prepare(
+        "SELECT auth_home_id, preferred_subscription_slot FROM sessions WHERE id = ?"
+      )
+        .bind(sessionId)
+        .first()
+    ).toEqual({ auth_home_id: "ah_member", preferred_subscription_slot: "claude-2" });
+    await waitForSandboxStatus(env.SESSION.get(env.SESSION.idFromName(sessionId)), "failed");
+  });
+
+  it("stores no slot for an automatic fork", async () => {
+    const { name } = await seedSource();
+
+    const response = await fork(name, {
+      forkRequestId: crypto.randomUUID(),
+      handoff: "Continue.",
+      subscriptionSlot: null,
+    });
+
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<ForkSessionResponse>();
+    expect(
+      await env.DB.prepare("SELECT preferred_subscription_slot FROM sessions WHERE id = ?")
+        .bind(sessionId)
+        .first()
+    ).toEqual({ preferred_subscription_slot: null });
+    await waitForSandboxStatus(env.SESSION.get(env.SESSION.idFromName(sessionId)), "failed");
+  });
+
+  it.each([
+    ["a slot the home never spent", { subscriptionSlot: "claude-7" }],
+    ["a Codex slot", { subscriptionSlot: "codex-1" }],
+    [
+      "a slot on a harness without a pinnable pool",
+      { subscriptionSlot: "claude-2", harness: "opencode" },
+    ],
+  ])("refuses %s and creates nothing", async (_label, choice) => {
+    const { name } = await seedSource();
+
+    const response = await fork(name, {
+      forkRequestId: crypto.randomUUID(),
+      handoff: "Continue.",
+      ...choice,
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Subscription slot unavailable",
+      code: "subscription_slot_unavailable",
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM sessions WHERE forked_from_session_id = ?"
+      )
+        .bind(name)
+        .first()
+    ).toEqual({ count: 0 });
+  });
+
+  it("refuses a slot only another home spent, even when the source session ran on it", async () => {
+    const { name } = await seedSource();
+    const sourceRow = await env.DB.prepare(
+      "UPDATE sessions SET auth_home_id = 'ah_member' WHERE id = ?"
+    )
+      .bind(name)
+      .run();
+    expect(sourceRow.meta.changes).toBe(1);
+    await env.DB.prepare("UPDATE user_auth_homes SET owner_user_ids = ? WHERE id = 'ah_member'")
+      .bind(JSON.stringify([OTHER_MEMBER]))
+      .run();
+    await new UserAuthHomeStore(env.DB).register({
+      id: "ah_member_new",
+      ownerUserIds: [MEMBER],
+      pvcName: "sf-home-member-new",
+      nodeName: "node-1",
+      providers: ["anthropic"],
+    });
+
+    expect(await (await listSlots(name, "?harness=claude")).json()).toEqual({
+      harness: "claude",
+      slots: [],
+    });
+    const response = await fork(name, {
+      forkRequestId: crypto.randomUUID(),
+      handoff: "Continue.",
+      subscriptionSlot: "claude-2",
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Subscription slot unavailable",
+      code: "subscription_slot_unavailable",
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM sessions WHERE forked_from_session_id = ?"
+      )
+        .bind(name)
+        .first()
+    ).toEqual({ count: 0 });
+  });
+
+  it("refuses the fork outright for a caller left with no home", async () => {
+    const { name } = await seedSource();
+    await env.DB.prepare("UPDATE user_auth_homes SET owner_user_ids = ? WHERE id = 'ah_member'")
+      .bind(JSON.stringify([OTHER_MEMBER]))
+      .run();
+
+    expect(await (await listSlots(name, "?harness=claude")).json()).toEqual({
+      harness: "claude",
+      slots: [],
+    });
+    const response = await fork(name, {
+      forkRequestId: crypto.randomUUID(),
+      handoff: "Continue.",
+      subscriptionSlot: "claude-2",
+    });
+    expect(response.status).toBe(403);
   });
 });

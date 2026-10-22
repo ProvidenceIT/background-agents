@@ -3,6 +3,7 @@ import {
   CODEX_SEAT,
   type AuthHome,
 } from "@open-inspect/shared/types/auth-homes";
+import { subscriptionSlotSchema } from "@open-inspect/shared/types/sandbox-events";
 import type { SqlDatabase } from "../db/sql-database";
 import { AuthHomeUnavailableError, type SandboxAuthHome } from "../sandbox/provider";
 import { codexClaimName } from "./lease";
@@ -32,9 +33,14 @@ export interface SessionAuthHomeLookup {
  * The claim a launch mounts. A Codex session mounts the home's own Codex
  * claim (`sf-home-<u>-codex`) read-write, which carries the Codex login the
  * seat serializes and nothing else; every other harness mounts the home's
- * claim read-only, since nothing there needs to write it.
+ * claim read-only, since nothing there needs to write it, and names the pool
+ * slot a fork asked its Claude harness to try first.
  */
-function toSandboxAuthHome(home: AuthHome, harness: string | null): SandboxAuthHome {
+function toSandboxAuthHome(
+  home: AuthHome,
+  harness: string | null,
+  preferredSlot: string | null
+): SandboxAuthHome {
   if (harness === CODEX_SEAT) {
     return {
       pvcName: codexClaimName(home.pvcName),
@@ -48,6 +54,7 @@ function toSandboxAuthHome(home: AuthHome, harness: string | null): SandboxAuthH
     ownerUserId: authHomeOwnerUserId(home),
     providers: [...home.providers],
     writable: false,
+    ...(preferredSlot ? { preferredSlot } : {}),
   };
 }
 
@@ -56,9 +63,15 @@ export function createSessionAuthHomeLookup(db: SqlDatabase): SessionAuthHomeLoo
   return {
     async getForSession(sessionId) {
       const row = await db
-        .prepare("SELECT auth_home_id, harness FROM sessions WHERE id = ?")
+        .prepare(
+          "SELECT auth_home_id, harness, preferred_subscription_slot FROM sessions WHERE id = ?"
+        )
         .bind(sessionId)
-        .first<{ auth_home_id: string | null; harness: string | null }>();
+        .first<{
+          auth_home_id: string | null;
+          harness: string | null;
+          preferred_subscription_slot: string | null;
+        }>();
       const homeId = row?.auth_home_id;
       if (!homeId) return undefined;
       const home = await homes.getById(homeId);
@@ -68,7 +81,12 @@ export function createSessionAuthHomeLookup(db: SqlDatabase): SessionAuthHomeLoo
       if (home.status !== "active") {
         throw new AuthHomeUnavailableError(`Subscription home ${homeId} is ${home.status}`);
       }
-      return toSandboxAuthHome(home, row?.harness ?? null);
+      const preferred = subscriptionSlotSchema.safeParse(row?.preferred_subscription_slot);
+      return toSandboxAuthHome(
+        home,
+        row?.harness ?? null,
+        preferred.success ? preferred.data : null
+      );
     },
   };
 }

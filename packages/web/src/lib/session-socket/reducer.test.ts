@@ -774,6 +774,61 @@ describe("sessionSocketReducer", () => {
     });
   });
 
+  describe("scheduledContinueAtMs", () => {
+    it("is seeded by the page snapshot and the subscribed snapshot", () => {
+      expect(
+        createSessionSocketState(
+          createSnapshot({
+            session: createSessionState({ scheduledContinueAtMs: 1_800_000_060_000 }),
+          })
+        ).sessionState?.scheduledContinueAtMs
+      ).toBe(1_800_000_060_000);
+      expect(
+        subscribedState({
+          session: createSessionState({ scheduledContinueAtMs: 1_800_000_060_000 }),
+        }).sessionState?.scheduledContinueAtMs
+      ).toBe(1_800_000_060_000);
+    });
+
+    it("follows scheduled_continue messages", () => {
+      const scheduled = reduce(
+        subscribedState(),
+        serverMessage({ type: "scheduled_continue", scheduledContinueAtMs: 1_800_000_060_000 })
+      );
+      expect(scheduled.sessionState?.scheduledContinueAtMs).toBe(1_800_000_060_000);
+
+      const cleared = reduce(
+        scheduled,
+        serverMessage({ type: "scheduled_continue", scheduledContinueAtMs: null })
+      );
+      expect(cleared.sessionState?.scheduledContinueAtMs).toBeNull();
+    });
+
+    it("keeps why a scheduled continue did not run until the next change", () => {
+      const failure = {
+        reason: "refused" as const,
+        refusal: "usage_quota_exceeded" as const,
+        atMs: 1_800_000_060_000,
+      };
+      const failed = reduce(
+        subscribedState(),
+        serverMessage({
+          type: "scheduled_continue",
+          scheduledContinueAtMs: null,
+          scheduledContinueFailure: failure,
+        })
+      );
+      expect(failed.sessionState?.scheduledContinueFailure).toEqual(failure);
+
+      const rescheduled = reduce(
+        failed,
+        serverMessage({ type: "scheduled_continue", scheduledContinueAtMs: 1_800_000_120_000 })
+      );
+      expect(rescheduled.sessionState?.scheduledContinueFailure).toBeNull();
+      expect(rescheduled.sessionState?.scheduledContinueAtMs).toBe(1_800_000_120_000);
+    });
+  });
+
   describe("events_appended", () => {
     it("appends events in order", () => {
       const events: SandboxEvent[] = [

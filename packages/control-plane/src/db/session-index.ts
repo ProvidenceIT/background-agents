@@ -152,6 +152,8 @@ export interface CreateSessionCommand extends SessionEntry {
   externalRef?: SessionExternalRef | null;
   /** Fork lineage; kept apart from parentSessionId so forks never count as children. */
   fork?: SessionForkOrigin | null;
+  /** The pool slot of the bound home the session's sandbox tries first; never a credential. */
+  preferredSubscriptionSlot?: string | null;
 }
 
 /** Where a fork came from, and the caller's idempotency key for creating it. */
@@ -296,8 +298,8 @@ export class SessionIndexStore {
 
     const sessionStmt = this.db
       .prepare(
-        `INSERT INTO sessions (id, title, repo_owner, repo_name, harness, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at, owner_team_id, visibility, trigger_actor_user_id, trigger_kind, work_item_author_user_id, auth_home_id, auth_home_selection, external_ref_service, external_ref, external_ref_fingerprint, forked_from_session_id, fork_request_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sessions (id, title, repo_owner, repo_name, harness, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at, owner_team_id, visibility, trigger_actor_user_id, trigger_kind, work_item_author_user_id, auth_home_id, auth_home_selection, external_ref_service, external_ref, external_ref_fingerprint, forked_from_session_id, fork_request_id, preferred_subscription_slot)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -333,7 +335,8 @@ export class SessionIndexStore {
         session.externalRef?.ref ?? null,
         session.externalRef?.fingerprint ?? null,
         session.fork?.sourceSessionId ?? null,
-        session.fork?.forkRequestId ?? null
+        session.fork?.forkRequestId ?? null,
+        session.preferredSubscriptionSlot ?? null
       );
 
     const repositoryStmts = (session.repositories ?? []).map((repo, position) =>

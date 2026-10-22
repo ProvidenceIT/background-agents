@@ -118,7 +118,15 @@ export const SessionInternalPaths = {
   diffFailure: "/internal/diff-failure",
   diffResolveFile: "/internal/diff-resolve-file",
   diffRetry: "/internal/diff-retry",
+  continueAtReset: "/internal/continue-at-reset",
 } as const;
+
+/** What the router tells the runtime about who scheduled a continue at the limit's reset. */
+export const continueAtResetInternalRequestSchema = z.strictObject({
+  requestedByUserId: z.string().min(1),
+  authorId: z.string().min(1),
+});
+export type ContinueAtResetInternalRequest = z.infer<typeof continueAtResetInternalRequestSchema>;
 
 export type SessionInternalPath = (typeof SessionInternalPaths)[keyof typeof SessionInternalPaths];
 
