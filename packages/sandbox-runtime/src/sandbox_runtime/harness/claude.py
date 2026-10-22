@@ -14,7 +14,7 @@ import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
@@ -225,6 +225,10 @@ class ClaudeHarness:
         self._resume_on_connect = False
         self._needs_reconnect = False
         self._reconnects = 0
+        # A turn hit a subscription limit: the next turn starts a new child so
+        # the wrapper picks a slot again. Not a failure, so it spends no
+        # reconnect budget.
+        self._repick_slot = False
         self._interrupted = False
         self._tool_client: ControlPlaneToolClient | None = None
         self._tool_server: Any = None
@@ -395,6 +399,7 @@ class ClaudeHarness:
             and self._connected_model == model
             and self._connected_effort == reasoning_effort
             and not self._needs_reconnect
+            and not self._repick_slot
         )
         if same_shape and self._client is not None:
             return self._client
@@ -421,6 +426,7 @@ class ClaudeHarness:
         self._connected_model = model
         self._connected_effort = reasoning_effort
         self._needs_reconnect = False
+        self._repick_slot = False
         # A fresh child starts its running total at zero (§5.3 baseline rule).
         self._translator.cost_baseline = 0.0
         self._trajectory.diagnostic(
@@ -505,6 +511,26 @@ class ClaudeHarness:
         state = ClaudeTurnState(
             message_id=prompt.message_id, cost_baseline=self._translator.cost_baseline
         )
+        try:
+            outcome = await self._stream_turn(client, prompt, emit, state, deadline, max_duration)
+        finally:
+            if state.limit is not None:
+                self._repick_slot = True
+        if state.limit is not None and not outcome.success and not outcome.cancelled:
+            # A refused turn can also end by timeout or transport loss; the
+            # limit is still the cause the user needs to see.
+            return replace(outcome, limit=state.limit)
+        return outcome
+
+    async def _stream_turn(
+        self,
+        client: SdkClient,
+        prompt: HarnessPrompt,
+        emit: EventSink,
+        state: ClaudeTurnState,
+        deadline: float,
+        max_duration: float,
+    ) -> TurnOutcome:
         try:
             async with asyncio.timeout_at(deadline):
                 await client.query(self._user_messages(prompt))

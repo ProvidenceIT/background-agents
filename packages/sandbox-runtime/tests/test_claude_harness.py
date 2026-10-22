@@ -35,7 +35,14 @@ from sandbox_runtime.credentials.provider_credential_client import (
     RuntimeCredentialDenied,
     RuntimeCredentialUnavailable,
 )
-from sandbox_runtime.harness import AgentHarness, HarnessPrompt, HarnessStartError, PromptLimits
+from sandbox_runtime.harness import (
+    AgentHarness,
+    HarnessPrompt,
+    HarnessStartError,
+    PromptLimits,
+    SubscriptionLimit,
+    TurnOutcome,
+)
 from sandbox_runtime.harness.claude import (
     MAX_STDOUT_MESSAGE_BYTES,
     bare_model_id,
@@ -181,6 +188,58 @@ class TestAuthHome:
         assert h.harness.subscription_slot == "claude-3"
         await _run(h.harness, HarnessPrompt(message_id="m2", text="b", model="claude-opus-4-6"))
         assert h.harness.subscription_slot == "claude-5"
+
+    @pytest.mark.asyncio
+    async def test_a_turn_refused_by_a_limit_moves_the_next_turn_to_a_new_slot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        home = self._home(tmp_path)
+        picks = iter(["claude-5", "claude-2"])
+
+        async def connect(client: FakeSdkClient) -> None:
+            config_dir = Path(client.options["env"]["CLAUDE_CONFIG_DIR"])
+            (config_dir / POOL_PICK_FILE).write_text(json.dumps({"slot": next(picks)}))
+            client.connected = True
+
+        monkeypatch.setattr(FakeSdkClient, "connect", connect)
+        refused = [
+            RateLimitEvent(
+                rate_limit_info=RateLimitInfo(
+                    status="rejected", rate_limit_type="five_hour", resets_at=1_790_000_000
+                ),
+                uuid="u",
+                session_id="s",
+            ),
+            AssistantMessage(content=[], model="m", message_id="msg_1", error="rate_limit"),
+            _result(
+                0.0,
+                subtype="error_during_execution",
+                is_error=True,
+                result="Claude usage limit reached",
+            ),
+        ]
+        h = Harness(
+            tmp_path,
+            turns=[refused, [_result(0.1)]],
+            environ={"SF_AUTH_HOME": str(home), "SF_AUTH_HOME_PROVIDERS": "anthropic"},
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+
+        _, first = await _run(h.harness, HarnessPrompt(message_id="m1", text="a"))
+        assert first == TurnOutcome(
+            success=False,
+            error="Claude usage limit reached",
+            message_cost_usd=0.0,
+            limit=SubscriptionLimit(window="five_hour", resets_at=1_790_000_000.0),
+        )
+        assert h.harness.subscription_slot == "claude-5"
+
+        _, second = await _run(h.harness, HarnessPrompt(message_id="m2", text="Continue"))
+        assert second == TurnOutcome.ok(message_cost_usd=0.1)
+        assert len(h.clients) == 2
+        assert h.clients[1].options["resume"] == h.harness.session_id
+        assert h.harness.subscription_slot == "claude-2"
 
     @pytest.mark.asyncio
     async def test_api_key_children_report_no_slot(self, tmp_path: Path):
@@ -773,6 +832,58 @@ class TestReconnectPolicy:
         _, outcome = await _run(h.harness)
         assert outcome.success is False
         assert "repeatedly" in (outcome.error or "")
+
+    @pytest.mark.asyncio
+    async def test_limit_reconnects_spend_no_reconnect_budget(self, tmp_path: Path) -> None:
+        refused = [
+            AssistantMessage(content=[], model="m", message_id="msg_1", error="rate_limit"),
+            _result(0.0, subtype="error_during_execution", is_error=True, result="limit"),
+        ]
+        h = Harness(tmp_path, turns=[list(refused) for _ in range(5)] + [[_result(0.1)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        outcomes = [(await _run(h.harness))[1] for _ in range(6)]
+        assert [o.limit for o in outcomes] == [SubscriptionLimit(window="unknown")] * 5 + [None]
+        assert outcomes[5] == TurnOutcome.ok(message_cost_usd=0.1)
+        assert len(h.clients) == 6
+
+    @pytest.mark.asyncio
+    async def test_a_limit_survives_a_turn_that_then_stalls(self, tmp_path: Path) -> None:
+        stalled = [
+            RateLimitEvent(
+                rate_limit_info=RateLimitInfo(status="rejected", rate_limit_type="seven_day"),
+                uuid="u",
+                session_id="s",
+            ),
+        ]
+        h = Harness(tmp_path, turns=[stalled, [_result(0.1)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+        assert outcome == TurnOutcome(
+            success=False,
+            error="The Claude agent stream ended before the turn completed.",
+            limit=SubscriptionLimit(window="seven_day"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_warning_alone_keeps_the_child(self, tmp_path: Path) -> None:
+        warned = [
+            RateLimitEvent(
+                rate_limit_info=RateLimitInfo(
+                    status="allowed_warning", rate_limit_type="five_hour", resets_at=123
+                ),
+                uuid="u",
+                session_id="s",
+            ),
+            _result(0.1),
+        ]
+        h = Harness(tmp_path, turns=[warned, [_result(0.2)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+        await _run(h.harness)
+        assert len(h.clients) == 1
 
     @pytest.mark.asyncio
     async def test_failed_connects_spend_the_reconnect_budget(self, tmp_path: Path) -> None:

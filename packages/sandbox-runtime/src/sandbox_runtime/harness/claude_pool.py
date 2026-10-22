@@ -4,9 +4,10 @@ A home may carry several Claude subscriptions, one ``claude setup-token``
 per slot under ``claude/pool/<slot>/oauth-token``. The owner's PC, which
 already reads every subscription's headroom for its own fleet, pushes the
 percentages (never a credential) to ``claude/pool/headroom.json``. The
-wrapper calls :func:`pick_slot` at every exec, so each child, and with it
-each turn, starts on the subscription with the most headroom left, and a
-turn after an exhausted one moves on by itself.
+wrapper calls :func:`pick_slot` at every exec, so each child starts on the
+subscription with the most headroom left. A child serves turns until one
+hits a subscription limit; the harness then starts a new child for the next
+turn, so a turn after an exhausted one moves on by itself.
 
 Rules, in order:
 
