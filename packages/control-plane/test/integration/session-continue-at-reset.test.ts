@@ -3,7 +3,13 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { SessionSnapshot } from "@open-inspect/shared/types/server-messages";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, queryDO, serviceFetch, waitForSandboxStatus } from "./helpers";
+import {
+  initNamedSession,
+  queryDO,
+  seedMessage,
+  serviceFetch,
+  waitForSandboxStatus,
+} from "./helpers";
 import { runInSessionDO } from "./session-do-access";
 
 const BASE = "https://test.local";
@@ -237,5 +243,39 @@ describe("continue when the limit resets", () => {
     );
 
     expect(await storedSchedule(stub)).toBeNull();
+  });
+
+  it("clears the schedule when a turn completes", async () => {
+    const { name, stub } = await seedLimitedSession(Date.now() + 3_600_000);
+    expect((await continueAtReset(name, "POST")).status).toBe(200);
+    const [owner] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE role = 'owner'"
+    );
+    await seedMessage(stub, {
+      id: "msg-in-flight",
+      authorId: owner.id,
+      content: "Refactor the parser",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 1000,
+      startedAt: Date.now() - 500,
+    });
+
+    const completed = await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "execution_complete",
+        messageId: "msg-in-flight",
+        success: true,
+        sandboxId: "sb-limit",
+        timestamp: Date.now() / 1000,
+      }),
+    });
+
+    expect(completed.status).toBe(200);
+    expect(await storedSchedule(stub)).toBeNull();
+    expect(await snapshotScheduledAt(name)).toBeNull();
   });
 });
