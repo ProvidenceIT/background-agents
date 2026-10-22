@@ -53,15 +53,15 @@ export function formatTimeUntil(remainingMs: number): string {
   return hours === 0 ? `in ${days} d` : `in ${days} d ${hours} h`;
 }
 
-function formatResetClock(resetsAtMs: number, nowMs: number, options: TurnLimitFormatOptions) {
-  const sameDay = resetsAtMs - nowMs < DAY_MS;
+function formatLimitClock(atMs: number, nowMs: number, options: TurnLimitFormatOptions) {
+  const sameDay = atMs - nowMs < DAY_MS;
   return new Intl.DateTimeFormat(options.locale, {
     ...(sameDay ? {} : { weekday: "short" }),
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
     timeZone: options.timeZone,
-  }).format(resetsAtMs);
+  }).format(atMs);
 }
 
 /** What was hit; unlike the reset, it does not depend on the clock or time zone. */
@@ -83,9 +83,18 @@ export function describeTurnLimit(
 
   if (limit.resetsAtMs === null) return { summary, reset: null };
   if (limit.resetsAtMs <= nowMs) return { summary, reset: "The limit has reset." };
-  const clock = formatResetClock(limit.resetsAtMs, nowMs, options);
+  const clock = formatLimitClock(limit.resetsAtMs, nowMs, options);
   return {
     summary,
     reset: `Resets at ${clock} (${formatTimeUntil(limit.resetsAtMs - nowMs)}).`,
   };
+}
+
+/** When an opted-in continue will be sent, on the same clock as the reset. */
+export function describeScheduledContinue(
+  scheduledContinueAtMs: number,
+  nowMs: number,
+  options: TurnLimitFormatOptions = {}
+): string {
+  return `Continues automatically at ${formatLimitClock(scheduledContinueAtMs, nowMs, options)}.`;
 }
