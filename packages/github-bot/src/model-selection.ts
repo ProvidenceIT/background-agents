@@ -12,11 +12,7 @@ import {
   normalizeValidModels,
   type ValidModel,
 } from "@open-inspect/shared/models";
-import {
-  DEFAULT_HARNESS,
-  resolveHarnessForModel,
-  type HarnessId,
-} from "@open-inspect/shared/harnesses";
+import { resolveHarnessForModel, type HarnessId } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type { Logger } from "./logger";
@@ -131,7 +127,8 @@ export function applyInlineModelOverrides(
 
 /**
  * Resolve the harness for a canonical model, warning when the configured
- * harness cannot run it and the built-in default takes over. Cross-level
+ * harness cannot run it and the model's own harness takes over (Claude Agent
+ * for Anthropic, else the built-in default). Cross-level
  * pairs (global harness + repo model) can disagree, as can an inline model
  * override — a trigger must never fail silently on a mismatch the saves
  * could not see.
@@ -142,7 +139,7 @@ function resolveHarness(configured: HarnessId, model: string, log: Logger): Harn
     log.warn("config.harness_model_mismatch", {
       harness: configured,
       model,
-      fallback: DEFAULT_HARNESS,
+      fallback: harness,
     });
   }
   return harness;

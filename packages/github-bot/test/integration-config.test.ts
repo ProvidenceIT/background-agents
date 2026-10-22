@@ -294,7 +294,7 @@ describe("getGitHubConfig", () => {
 describe("resolveModelSelection harness", () => {
   const env = {} as unknown as Env;
 
-  it("sends the built-in harness with the canonical model when unconfigured", async () => {
+  it("runs the canonical Anthropic model on Claude when the built-in harness is configured", async () => {
     const log = createMockLogger();
     const result = await resolveModelSelection(
       env,
@@ -306,10 +306,13 @@ describe("resolveModelSelection harness", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // Stale model canonicalizes; the default harness runs the canonical one.
+    // Stale model canonicalizes to Anthropic, which runs only on Claude.
     expect(result.selection.model).toBe("anthropic/claude-opus-5-5");
-    expect(result.selection.harness).toBe("opencode");
-    expect(log.warn).not.toHaveBeenCalled();
+    expect(result.selection.harness).toBe("claude");
+    expect(log.warn).toHaveBeenCalledWith(
+      "config.harness_model_mismatch",
+      expect.objectContaining({ harness: "opencode", fallback: "claude" })
+    );
   });
 
   it("keeps a compatible configured harness", async () => {

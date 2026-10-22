@@ -571,6 +571,7 @@ describe("POST /api/messages", () => {
       repoName: "playground",
       model: "zai-coding-plan/glm-5.3",
       triggerKind: "mention",
+      harness: "opencode",
       actorDisplayName: "Casey",
     });
     expect(prompt.body).toEqual({
@@ -620,7 +621,7 @@ describe("POST /api/messages", () => {
     });
   });
 
-  it("runs openai/* on Codex, anthropic/* on the Claude Agent and other models on the default harness", async () => {
+  it("runs openai/* on Codex, anthropic/* on the Claude Agent through the shared pin and other models on the default harness", async () => {
     const routes = {
       [`GET /channel-bindings/msteams/${CHANNEL_ID}`]: boundChannel,
       "POST /sessions": sessionCreated,
@@ -654,7 +655,10 @@ describe("POST /api/messages", () => {
     const plain = harness(routes, { defaultModel: "zai-coding-plan/glm-5.3" });
     await plain.post(activityFixture());
     const [, plainCreate] = plain.controlPlaneRemote.requests;
-    expect(plainCreate.body).not.toHaveProperty("harness");
+    expect(plainCreate.body).toMatchObject({
+      model: "zai-coding-plan/glm-5.3",
+      harness: "opencode",
+    });
   });
 
   it("sends the configured reasoning effort with the default model and drops it for an inline model", async () => {
@@ -693,6 +697,7 @@ describe("POST /api/messages", () => {
       repoName: "playground",
       model: "zai-coding-plan/glm-5.3",
       triggerKind: "mention",
+      harness: "opencode",
       actorDisplayName: "Casey",
     });
     expect(inlinePrompt.body).not.toHaveProperty("reasoningEffort");

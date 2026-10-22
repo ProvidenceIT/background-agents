@@ -115,7 +115,7 @@ describe("resolveModelSelection with the Codex harness", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it("falls back to OpenCode, as today, for a model Codex cannot run", async () => {
+  it("falls back to the Claude Agent for an Anthropic model Codex cannot run", async () => {
     const logger = log();
     const result = await resolveModelSelection(
       env,
@@ -125,11 +125,11 @@ describe("resolveModelSelection with the Codex harness", () => {
       undefined
     );
 
-    expect(result.ok && result.selection.harness).toBe("opencode");
+    expect(result.ok && result.selection.harness).toBe("claude");
     expect(logger.warn).toHaveBeenCalledWith("config.harness_model_mismatch", {
       harness: "codex",
       model: "anthropic/claude-sonnet-4-6",
-      fallback: "opencode",
+      fallback: "claude",
     });
   });
 });

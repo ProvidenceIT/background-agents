@@ -7,7 +7,7 @@
  * rendered in the thread.
  */
 
-import type { HarnessId } from "@open-inspect/shared/harnesses";
+import { harnessForModel, type HarnessId } from "@open-inspect/shared/harnesses";
 import {
   extractProviderAndModel,
   getReasoningConfig,
@@ -67,15 +67,13 @@ interface ModelSelection {
 /**
  * The harness a Teams session runs its model on. Subscriptions are spent
  * only through their own CLIs on the sender's subscription home: OpenAI
- * through Codex (there is no OpenAI key) and Anthropic through the Claude
- * Agent, whose wrapper reads the home's setup token (OpenCode cannot). Any
- * other model keeps the control plane's built-in harness.
+ * through Codex (there is no OpenAI key), and providers pinned to a harness
+ * (Anthropic on the Claude Agent) through that harness. Any other model runs
+ * on the built-in harness.
  */
-function harnessForModel(model: string): HarnessId | undefined {
-  const { provider } = extractProviderAndModel(model);
-  if (provider === "openai") return "codex";
-  if (provider === "anthropic") return "claude";
-  return undefined;
+function teamsHarnessForModel(model: string): HarnessId {
+  if (extractProviderAndModel(model).provider === "openai") return "codex";
+  return harnessForModel(model);
 }
 
 /** Apply inline flags to the defaults, or say why they cannot be applied. */
@@ -218,7 +216,7 @@ export async function launchSession(deps: LaunchDeps, input: LaunchInput): Promi
       repoOwner: repo.data.owner,
       repoName: repo.data.name,
       model: selection.selection.model,
-      harness: harnessForModel(selection.selection.model),
+      harness: teamsHarnessForModel(selection.selection.model),
       reasoningEffort: selection.selection.reasoningEffort,
       actorDisplayName: activity.from?.name,
     },

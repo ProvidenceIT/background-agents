@@ -305,8 +305,20 @@ describe("resolveSessionAgentSettings", () => {
       allowLabelModelOverride: true,
     };
 
-    it("runs on OpenCode when no harness is configured", () => {
-      expect(resolveSessionAgentSettings(base).harness).toBe("opencode");
+    it("runs an Anthropic model on the Claude Agent when no harness is configured", () => {
+      expect(resolveSessionAgentSettings(base).harness).toBe("claude");
+    });
+
+    it("runs a non-Anthropic model on OpenCode when no harness is configured", () => {
+      expect(resolveSessionAgentSettings({ ...base, userModel: "openai/gpt-6-sol" })).toMatchObject(
+        { harness: "opencode", model: "openai/gpt-6-sol" }
+      );
+    });
+
+    it("moves an Anthropic model off a configured OpenCode harness onto the Claude Agent", () => {
+      expect(resolveSessionAgentSettings({ ...base, configHarness: "opencode" }).harness).toBe(
+        "claude"
+      );
     });
 
     it("runs a resolved Anthropic model on the configured Claude Agent harness", () => {
