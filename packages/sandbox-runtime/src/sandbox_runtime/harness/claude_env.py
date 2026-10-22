@@ -60,6 +60,8 @@ CONFIG_DIR_ENV_VAR: Final = "CLAUDE_CONFIG_DIR"
 # The subscription auth home, as the Kubernetes provider mounts it.
 AUTH_HOME_ENV_VAR: Final = "SF_AUTH_HOME"
 AUTH_HOME_PROVIDERS_ENV_VAR: Final = "SF_AUTH_HOME_PROVIDERS"
+# The pool slot the session is pinned to (a slot name, never a token).
+PREFERRED_SLOT_ENV_VAR: Final = "SF_AUTH_HOME_PREFERRED_SLOT"
 AUTH_HOME_CLAUDE_TOKEN: Final = "claude/oauth-token"
 AUTH_HOME_CLAUDE_EXPIRES_AT: Final = "claude/expires_at"
 # Claude Code's bare mode skips OAuth and reads only an API key; an auth-home
@@ -272,7 +274,10 @@ def write_clean_env_wrapper(
             f"import {POOL_MODULE_NAME} as pool",
             f"config_dir = env.get({CONFIG_DIR_ENV_VAR!r})",
             "refusals = Path(config_dir, REFUSALS_FILE_NAME) if config_dir else None",
-            "pick = pool.pick_slot(Path(TOKEN_FILE).parent, sys.argv[1:], refusals_file=refusals)",
+            f"preferred = env.get({PREFERRED_SLOT_ENV_VAR!r}) or None",
+            "pick = pool.pick_slot(",
+            "    Path(TOKEN_FILE).parent, sys.argv[1:], refusals_file=refusals, preferred=preferred",
+            ")",
             "token = ''",
             "if pick is not None:",
             "    try:",

@@ -11,6 +11,7 @@ from sandbox_runtime.auth_home import AuthHomeSecretRedactor, auth_home_boot_rep
 from sandbox_runtime.harness.claude_env import (
     POOL_PICK_FILE,
     POOL_REFUSALS_FILE,
+    PREFERRED_SLOT_ENV_VAR,
     ClaudeAuthMode,
     auth_home_has_claude_token,
     write_clean_env_wrapper,
@@ -349,8 +350,121 @@ def _fake_binary(tmp_path: Path) -> Path:
     return binary
 
 
+class TestPreferredSlot:
+    def _pick(self, home: Path, preferred: str | None, **kwargs):
+        return [
+            pick_slot(
+                home / "claude", [], preferred=preferred, now=NOW, rng=random.Random(seed), **kwargs
+            )
+            for seed in range(20)
+        ]
+
+    def test_the_preferred_slot_is_used_over_more_headroom(self, tmp_path: Path) -> None:
+        home = _home(tmp_path, ["claude-1", "claude-2", "claude-3"])
+        _headroom(
+            home,
+            {"claude-1": {"five_hour": 90}, "claude-2": {"five_hour": 30, "seven_day": 20}},
+        )
+        picks = self._pick(home, "claude-2")
+        assert {(p.slot, p.reason, p.percent_remaining) for p in picks} == {
+            ("claude-2", "preferred", 20)
+        }
+        assert {p.token_file for p in picks} == {
+            home / "claude" / "pool" / "claude-2" / "oauth-token"
+        }
+
+    def test_a_preferred_slot_without_a_fresh_reading_reports_no_percent(
+        self, tmp_path: Path
+    ) -> None:
+        home = _home(tmp_path, ["claude-1", "claude-2"])
+        _headroom(home, {"claude-2": {"five_hour": 70}}, age=FRESH_SECONDS + 1)
+        assert {(p.slot, p.reason, p.percent_remaining) for p in self._pick(home, "claude-2")} == {
+            ("claude-2", "preferred", None)
+        }
+        _headroom(home, {"claude-1": {"five_hour": 70}})
+        assert {(p.slot, p.reason, p.percent_remaining) for p in self._pick(home, "claude-2")} == {
+            ("claude-2", "preferred", None)
+        }
+
+    def test_a_refused_preferred_slot_falls_back_to_the_normal_pick(self, tmp_path: Path) -> None:
+        home = _home(tmp_path, ["claude-1", "claude-2", "claude-3"])
+        _headroom(home, {"claude-1": {"five_hour": 90}, "claude-3": {"five_hour": 40}})
+        refusals = tmp_path / "refused.json"
+        record_refusal(refusals, "claude-2", NOW + 600, NOW)
+        picks = self._pick(home, "claude-2", refusals_file=refusals)
+        assert {(p.slot, p.reason, p.percent_remaining) for p in picks} == {
+            ("claude-1", "ranked", 90)
+        }
+        after_reset = pick_slot(
+            home / "claude", [], refusals_file=refusals, preferred="claude-2", now=NOW + 601
+        )
+        assert (after_reset.slot, after_reset.reason) == ("claude-2", "preferred")
+
+    def test_a_model_refusal_drops_the_preference_only_for_that_model(self, tmp_path: Path) -> None:
+        home = _home(tmp_path, ["claude-1", "claude-2"])
+        refusals = tmp_path / "refused.json"
+        record_refusal(refusals, "claude-2", NOW + 86400, NOW, scope="opus")
+
+        def slots(model: str) -> set[str]:
+            return {
+                pick_slot(
+                    home / "claude",
+                    ["--model", model],
+                    refusals_file=refusals,
+                    preferred="claude-2",
+                    now=NOW,
+                    rng=random.Random(seed),
+                ).slot
+                for seed in range(20)
+            }
+
+        assert slots("claude-opus-4-6") == {"claude-1"}
+        assert slots("claude-sonnet-4-6") == {"claude-2"}
+
+    def test_an_exhausted_preferred_slot_falls_back_even_in_an_old_snapshot(
+        self, tmp_path: Path
+    ) -> None:
+        home = _home(tmp_path, ["claude-1", "claude-2"])
+        _headroom(
+            home,
+            {"claude-2": {"five_hour": (EXHAUSTED_PERCENT, NOW + 900)}},
+            age=FRESH_SECONDS + 1,
+        )
+        assert {(p.slot, p.reason) for p in self._pick(home, "claude-2")} == {
+            ("claude-1", "spread")
+        }
+
+    def test_when_every_slot_is_exhausted_the_preference_does_not_override(
+        self, tmp_path: Path
+    ) -> None:
+        home = _home(tmp_path, ["claude-1", "claude-2"])
+        _headroom(
+            home,
+            {
+                "claude-1": {"five_hour": (0, NOW + 300)},
+                "claude-2": {"five_hour": (0, NOW + 900)},
+            },
+        )
+        assert {(p.slot, p.reason) for p in self._pick(home, "claude-2")} == {
+            ("claude-1", "exhausted")
+        }
+
+    def test_an_unknown_or_unsafe_name_gets_the_normal_pick(self, tmp_path: Path) -> None:
+        home = _home(tmp_path, ["claude-1", "claude-2"])
+        _headroom(home, {"claude-1": {"five_hour": 90}, "claude-2": {"five_hour": 10}})
+        for name in ("claude-9", "../claude-2", "", "claude-2/", "pool"):
+            picks = self._pick(home, name)
+            assert {(p.slot, p.reason) for p in picks} == {("claude-1", "ranked")}, name
+
+    def test_a_single_token_home_ignores_a_pool_slot_preference(self, tmp_path: Path) -> None:
+        home = _home(tmp_path, [], single=True)
+        assert {(p.slot, p.reason) for p in self._pick(home, "claude-2")} == {("default", "spread")}
+
+
 class TestWrapper:
-    def _run(self, tmp_path: Path, home: Path, *args: str) -> tuple[dict, Path]:
+    def _run(
+        self, tmp_path: Path, home: Path, *args: str, env: dict[str, str] | None = None
+    ) -> tuple[dict, Path]:
         wrapper = write_clean_env_wrapper(
             tmp_path / "bin",
             mode=ClaudeAuthMode.AUTH_HOME,
@@ -361,7 +475,7 @@ class TestWrapper:
         config.mkdir(exist_ok=True)
         completed = subprocess.run(
             [str(wrapper), *args],
-            env={"PATH": "/usr/bin:/bin", "CLAUDE_CONFIG_DIR": str(config)},
+            env={"PATH": "/usr/bin:/bin", "CLAUDE_CONFIG_DIR": str(config), **(env or {})},
             capture_output=True,
             text=True,
             check=True,
@@ -402,6 +516,43 @@ class TestWrapper:
         (config / POOL_REFUSALS_FILE).write_text(json.dumps({"claude-5": {"account": far}}))
         for _ in range(5):
             child, pick_file = self._run(tmp_path, home)
+            assert child["token"] == _token("claude-1")
+            assert json.loads(pick_file.read_text())["slot"] == "claude-1"
+
+    def test_the_wrapper_runs_on_the_slot_the_session_is_pinned_to(self, tmp_path: Path) -> None:
+        home = _home(tmp_path, ["claude-1", "claude-2"])
+        (home / "claude" / "pool" / "headroom.json").write_text(
+            json.dumps(
+                {
+                    "capturedAt": datetime.now(UTC).isoformat(),
+                    "slots": {
+                        "claude-1": {"windows": [{"id": "five_hour", "percentRemaining": 80}]},
+                        "claude-2": {"windows": [{"id": "five_hour", "percentRemaining": 25}]},
+                    },
+                }
+            )
+        )
+        pinned = {PREFERRED_SLOT_ENV_VAR: "claude-2"}
+        child, pick_file = self._run(tmp_path, home, "-p", "hi", env=pinned)
+        assert child["token"] == _token("claude-2")
+        record = json.loads(pick_file.read_text())
+        assert {key: record[key] for key in ("slot", "reason", "percentRemaining")} == {
+            "slot": "claude-2",
+            "reason": "preferred",
+            "percentRemaining": 25,
+        }
+        child, pick_file = self._run(tmp_path, home, env={PREFERRED_SLOT_ENV_VAR: ""})
+        assert child["token"] == _token("claude-1")
+        assert json.loads(pick_file.read_text())["reason"] == "ranked"
+
+    def test_a_refused_pinned_slot_moves_the_wrapper_on(self, tmp_path: Path) -> None:
+        home = _home(tmp_path, ["claude-1", "claude-2"])
+        config = tmp_path / "cfg"
+        config.mkdir()
+        far = datetime.now(UTC).timestamp() + 3600
+        (config / POOL_REFUSALS_FILE).write_text(json.dumps({"claude-2": {"account": far}}))
+        for _ in range(5):
+            child, pick_file = self._run(tmp_path, home, env={PREFERRED_SLOT_ENV_VAR: "claude-2"})
             assert child["token"] == _token("claude-1")
             assert json.loads(pick_file.read_text())["slot"] == "claude-1"
 

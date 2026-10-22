@@ -18,6 +18,8 @@ Rules, in order:
    an exhausted window stays exhausted until its reset, whoever reported it.
    A refusal this session recorded rules its slot out the same way; a
    refusal of a model window (``seven_day_opus``) only for that model.
+   A preferred slot (a session pinned to one subscription) is used whenever
+   this rule leaves it open; otherwise the rules below pick as usual.
 2. With a fresh snapshot, slots with a reading rank by their tightest
    window: five-hour, week, and a model window the ``--model`` argument
    names (``fable`` for ``claude-fable-5-1``). One is chosen at random from
@@ -85,7 +87,7 @@ class Ranked:
     """What :func:`rank_pick` chose, without a file: the caller maps the slot to its own."""
 
     slot: str
-    # ``ranked``, ``spread`` (no fresh ranking) or ``exhausted`` (every slot is).
+    # ``preferred``, ``ranked``, ``spread`` (no fresh ranking) or ``exhausted`` (every slot is).
     reason: str
     percent_remaining: int | None
 
@@ -94,7 +96,7 @@ class Ranked:
 class Pick:
     slot: str
     token_file: Path
-    # Why this slot: ``ranked``, ``spread`` (no fresh ranking), ``exhausted``.
+    # Why this slot: ``preferred``, ``ranked``, ``spread`` (no fresh ranking), ``exhausted``.
     reason: str
     percent_remaining: int | None
 
@@ -230,10 +232,15 @@ def pick_slot(
     argv: list[str],
     *,
     refusals_file: Path | None = None,
+    preferred: str | None = None,
     now: float | None = None,
     rng: random.Random | None = None,
 ) -> Pick | None:
-    """The slot this exec runs on, or ``None`` when the home holds no token."""
+    """The slot this exec runs on, or ``None`` when the home holds no token.
+
+    ``preferred`` names the slot the session is pinned to; a name the home
+    has no token for is ignored.
+    """
     slots = pool_slots(claude_dir)
     if not slots:
         return None
@@ -247,6 +254,7 @@ def pick_slot(
         account_windows=ACCOUNT_WINDOWS,
         extra_windows=extra,
         blocked_until=read_refusals(refusals_file, now, extra) if refusals_file else None,
+        preferred=preferred,
         now=now,
         rng=rng or random.Random(),
     )
@@ -263,6 +271,7 @@ def rank_pick(
     account_windows: tuple[str, ...] | None,
     extra_windows: tuple[str, ...] = (),
     blocked_until: Mapping[str, float] | None = None,
+    preferred: str | None = None,
     now: float,
     rng: random.Random,
 ) -> Ranked | None:
@@ -272,7 +281,8 @@ def rank_pick(
     window the snapshot has, as for Codex, whose rows carry one ``weekly``
     window), and ``extra_windows`` the model windows that bound the choice
     too. ``blocked_until`` rules a slot out until the given time, on top of
-    the snapshot (the caller's own exhaustion marks).
+    the snapshot (the caller's own exhaustion marks). ``preferred`` wins
+    whenever it is one of ``slots`` and rule 1 leaves it open.
     """
     names = list(slots)
     if not names:
@@ -299,16 +309,20 @@ def rank_pick(
             ends.append(block)
         return max(ends) if ends else None
 
+    def tightest(slot: str) -> int:
+        return min(w.percent_remaining for w in relevant(slot))
+
     open_slots = [slot for slot in names if exhausted_until(slot) is None]
+    if preferred in open_slots:
+        read = fresh and any(counts(w) for w in relevant(preferred))
+        return Ranked(preferred, "preferred", tightest(preferred) if read else None)
     if not open_slots:
         slot = min(names, key=lambda s: (exhausted_until(s) or now, s))
         return Ranked(slot, "exhausted", 0)
 
     if fresh:
         scores = {
-            slot: min(w.percent_remaining for w in relevant(slot))
-            for slot in open_slots
-            if any(counts(w) for w in relevant(slot))
+            slot: tightest(slot) for slot in open_slots if any(counts(w) for w in relevant(slot))
         }
         ranked = {slot: score for slot, score in scores.items() if score > EXHAUSTED_PERCENT}
         if ranked:
