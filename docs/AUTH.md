@@ -293,8 +293,10 @@ last turn's limit resets, answering 409 `no_future_reset` when there is no futur
 POST replaces the schedule. When it fires, the session re-checks that the person who scheduled it
 may still collaborate and enqueues the prompt as them through the normal turn admission (home,
 quota, budget). A refusal there drops it; any other failure (authorization that cannot be read, a
-database error, a sandbox recovery hold) tries again a minute later, up to 30 times. Any other
-prompt, a new turn result, archiving or cancelling drops the schedule.
+database error, a sandbox recovery hold) tries again a minute later, up to 30 times. When it does
+not run (refused, the requester lost access, retries spent), the snapshot's
+`scheduledContinueFailure` says why until the session moves on. Any other prompt, a new turn result,
+archiving or cancelling drops the schedule.
 
 **Settings > Teams > Require a team for new sessions** (`requireTeamOnCreate`, off by default)
 requires a team for new sessions, environments, and automations, including bot-created sessions.
