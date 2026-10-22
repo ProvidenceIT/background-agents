@@ -348,6 +348,8 @@ const TURN_LIMIT = {
 function collaboratorSocket(overrides: Record<string, unknown> = {}) {
   const session = {
     ...mocks.snapshot!.session,
+    // Anthropic models run only on Claude Agent.
+    harness: "claude",
     lastTurnLimit: TURN_LIMIT,
     capabilities: { ...mocks.snapshot!.session.capabilities!, canCollaborate: true },
   };

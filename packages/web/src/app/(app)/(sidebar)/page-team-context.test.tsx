@@ -225,11 +225,13 @@ describe("Home team context", () => {
         },
       ],
     });
+    // Start on OpenCode; the Anthropic pick also switches the harness to Claude Agent.
+    localStorage.setItem("open-inspect-last-selected-model", "openai/gpt-5.4");
     const user = userEvent.setup();
     render(<Home />);
     await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
     await waitFor(() => expect(sessionCreateBody()).toBeDefined());
-    await user.click(screen.getByRole("button", { name: "Switch model to GPT-5.4" }));
+    await user.click(screen.getByRole("button", { name: "Switch model to Claude Opus 5.5" }));
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith("/api/sessions/session-1/archive", expect.anything())
     );
@@ -240,7 +242,10 @@ describe("Home team context", () => {
     await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
     const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions");
     expect(calls).toHaveLength(2);
-    expect(JSON.parse(String(calls[1][1]?.body))).toMatchObject({ model: "openai/gpt-5.4" });
+    expect(JSON.parse(String(calls[1][1]?.body))).toMatchObject({
+      harness: "claude",
+      model: "anthropic/claude-opus-5-5",
+    });
   });
 
   it("falls back locally when the composer's team is no longer an active membership", async () => {

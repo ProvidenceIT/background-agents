@@ -104,7 +104,7 @@ describe("ModelReasoningSelector", () => {
     expect(onHarnessChange).toHaveBeenCalledWith("opencode");
   });
 
-  it("offers all three agents, Codex marked as OpenAI's", async () => {
+  it("offers every agent, each marked with its vendor", async () => {
     const onHarnessChange = vi.fn();
     render(
       <ModelReasoningSelector
@@ -128,9 +128,13 @@ describe("ModelReasoningSelector", () => {
     const labels = screen
       .getAllByRole("menuitemradio")
       .map((item) => item.querySelector(".truncate")?.textContent);
-    expect(labels).toEqual(["OpenCode", "Claude Agent", "Codex"]);
+    expect(labels).toEqual(["OpenCode", "Claude Agent", "Codex", "SuperGrok", "Antigravity"]);
     const codex = screen.getByRole("menuitemradio", { name: "Codex" });
     expect(codex.querySelector("svg title")).toHaveTextContent("OpenAI");
+    const grok = screen.getByRole("menuitemradio", { name: "SuperGrok" });
+    expect(grok.querySelector("svg title")).toHaveTextContent("Grok");
+    const agy = screen.getByRole("menuitemradio", { name: "Antigravity" });
+    expect(agy.querySelector("svg title")).toHaveTextContent("Antigravity");
   });
 
   it("shows why a session waits next to the trigger", () => {

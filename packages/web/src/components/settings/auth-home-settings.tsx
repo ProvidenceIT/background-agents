@@ -47,6 +47,7 @@ const PROVIDER_LABELS: Record<AuthHomeProviderId, string> = {
   anthropic: "Claude",
   openai: "ChatGPT (Codex)",
   xai: "SuperGrok",
+  antigravity: "Antigravity",
   "zai-coding-plan": "Z.AI Coding Plan",
 };
 

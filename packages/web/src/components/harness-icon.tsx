@@ -1,5 +1,11 @@
 import { getHarnessLabel, type HarnessId } from "@open-inspect/shared/harnesses";
-import { AnthropicIcon, OpenAIIcon, OpenCodeIcon } from "@/components/ui/icons";
+import {
+  AnthropicIcon,
+  AntigravityIcon,
+  GrokIcon,
+  OpenAIIcon,
+  OpenCodeIcon,
+} from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
 /** Mark of the vendor behind each harness, so the picker reads at a glance. */
@@ -7,6 +13,8 @@ const HARNESS_ICONS = {
   opencode: OpenCodeIcon,
   claude: AnthropicIcon,
   codex: OpenAIIcon,
+  grok: GrokIcon,
+  agy: AntigravityIcon,
 } as const satisfies Record<HarnessId, unknown>;
 
 export function HarnessIcon({ harness, className }: { harness: HarnessId; className?: string }) {

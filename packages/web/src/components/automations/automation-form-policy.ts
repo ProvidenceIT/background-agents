@@ -18,7 +18,7 @@ import {
   reconcileProviderSelectionsForHarness,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
-import type { HarnessModelAvailability } from "@/lib/session-harness";
+import { harnessForModelPick, type HarnessModelAvailability } from "@/lib/session-harness";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 
 export interface AutomationFormValues {
@@ -95,7 +95,11 @@ export const DEFAULT_AUTOMATION_SCHEDULE_CRON = "0 9 * * *";
 export function createAutomationFormDraft(
   initialValues: InitialAutomationFormValues = {}
 ): AutomationFormDraft {
-  const harness = getValidHarnessOrDefault(initialValues.harness);
+  const model = initialValues.model ?? DEFAULT_MODEL;
+  // A model pinned to another harness drives it: a blank create on the
+  // default model starts on Claude Agent, and so does a saved OpenCode row
+  // that still names an Anthropic model.
+  const harness = harnessForModelPick(getValidHarnessOrDefault(initialValues.harness), model);
   return {
     name: initialValues.name ?? "",
     instructions: initialValues.instructions ?? "",
@@ -113,7 +117,7 @@ export function createAutomationFormDraft(
     },
     agent: {
       harness,
-      model: initialValues.model ?? DEFAULT_MODEL,
+      model,
       reasoningEffort: initialValues.reasoningEffort ?? "",
     },
   };

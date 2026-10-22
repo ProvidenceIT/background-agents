@@ -373,6 +373,8 @@ describe("GitHubIntegrationSettings", () => {
             defaults: {
               autoReviewOnOpen: false,
               model: "anthropic/claude-sonnet-4-6",
+              // The saved Anthropic model runs only on Claude Agent.
+              harness: "claude",
               reasoningEffort: "high",
               autofix: {
                 ...GITHUB_AUTOFIX_DEFAULTS,
@@ -415,6 +417,8 @@ describe("GitHubIntegrationSettings", () => {
             defaults: {
               autoReviewOnOpen: false,
               model: "anthropic/claude-sonnet-4-6",
+              // The saved Anthropic model runs only on Claude Agent.
+              harness: "claude",
               codeReviewInstructions: "Focus on security.",
             },
           },
@@ -434,6 +438,7 @@ describe("GitHubIntegrationSettings", () => {
           settings: {
             defaults: {
               autoReviewOnOpen: false,
+              harness: "claude",
               codeReviewInstructions: "Focus on security.",
             },
           },
