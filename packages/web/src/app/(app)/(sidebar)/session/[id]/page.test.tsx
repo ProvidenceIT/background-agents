@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   snapshot: null as SessionSnapshot | null,
   mobile: false,
   enabledModels: [] as string[],
+  canCreateSessions: true,
 }));
 vi.mock("next/navigation", () => ({
   notFound: () => {
@@ -42,7 +43,10 @@ vi.mock("@/hooks/use-keyboard-shortcuts", () => ({
   useKeyboardShortcuts: () => ({ shortcuts: {} }),
 }));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
-  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      permission !== "sessions.create" || mocks.canCreateSessions,
+  }),
 }));
 vi.mock("@/hooks/use-mark-session-read", () => ({ useMarkSessionRead: vi.fn() }));
 vi.mock("@/hooks/use-session-participant-profiles", () => ({
@@ -123,6 +127,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.mobile = false;
   mocks.enabledModels = [];
+  mocks.canCreateSessions = true;
   mocks.diffState = null;
   mocks.snapshot = {
     session: {
@@ -422,6 +427,17 @@ it("offers fork only to collaborators and opens the fork dialog from the banner"
 
   expect(await screen.findByRole("dialog", { name: "Fork session" })).toBeInTheDocument();
   expect(await screen.findByDisplayValue("# Handoff")).toBeInTheDocument();
+});
+
+it("hides Fork from a collaborator who may not create sessions", () => {
+  collaboratorSocket();
+  mocks.canCreateSessions = false;
+  render(<SessionPage />);
+
+  expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Fork…" })).toBeDisabled();
+  expect(mocks.header.mock.lastCall?.[0].actions.onFork).toBeUndefined();
+  expect(mocks.composer.mock.lastCall?.[0].session.onFork).toBeUndefined();
 });
 
 it("links a fork to its source session", async () => {

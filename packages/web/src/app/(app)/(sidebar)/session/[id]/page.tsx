@@ -59,6 +59,7 @@ import { usePromptInput } from "@/hooks/use-prompt-input";
 import { useContinueAfterLimit } from "@/hooks/use-continue-after-limit";
 import { formatSessionCost } from "@/lib/session-cost";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useSessionSnapshot, useRefreshSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
 import { SandboxShutdownBanner } from "@/components/sandbox-shutdown-banner";
@@ -195,7 +196,10 @@ function SessionContent({
   );
   const [forkDialogOpen, setForkDialogOpen] = useState(false);
   const openForkDialog = useCallback(() => setForkDialogOpen(true), []);
-  const onFork = capabilities.collaborate ? openForkDialog : undefined;
+  const { hasPermission } = useCurrentUserAuthorization();
+  // Forking creates a session, so it also needs the workspace create right.
+  const onFork =
+    capabilities.collaborate && hasPermission("sessions.create") ? openForkDialog : undefined;
   const canContinueAfterLimit =
     ready &&
     capabilities.collaborate &&
