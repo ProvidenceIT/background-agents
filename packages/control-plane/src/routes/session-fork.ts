@@ -23,7 +23,7 @@ import {
 import { createLogger } from "../logger";
 import { sessionMessagePageSchema, SessionInternalPaths } from "../session/contracts";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
-import { buildForkHandoff, type ForkHandoffSource } from "../session/fork-handoff";
+import { buildForkHandoff, forkStartBranch, type ForkHandoffSource } from "../session/fork-handoff";
 import type { Env } from "../types";
 import { parseBody } from "./body";
 import { createNewSession } from "./session-create";
@@ -181,10 +181,10 @@ async function handleForkSession(
   const source = await readForkSource(ctx, sourceId);
   if (source instanceof Response) return source;
   const sourceTitle = source.handoff.title?.trim() || UNTITLED_SESSION;
-  const repositories = source.handoff.repositories.map(({ repoOwner, repoName, baseBranch }) => ({
-    repoOwner,
-    repoName,
-    baseBranch,
+  const repositories = source.handoff.repositories.map((repository) => ({
+    repoOwner: repository.repoOwner,
+    repoName: repository.repoName,
+    baseBranch: forkStartBranch(repository),
   }));
   const createBody = createSessionInputSchema.safeParse({
     title: body.title ?? `${sourceTitle} (fork)`,
