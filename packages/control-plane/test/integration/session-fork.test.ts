@@ -269,7 +269,7 @@ describe("session fork routes", () => {
     await waitForSandboxStatus(env.SESSION.get(env.SESSION.idFromName(sessionId)), "failed");
   });
 
-  it.each([
+  it.each<[Record<string, string>, string]>([
     [{ handoff: "Continue." }, "missing forkRequestId"],
     [{ forkRequestId: crypto.randomUUID(), carry: "handoff" }, "unknown key"],
     [{ forkRequestId: "short", handoff: "Continue." }, "malformed forkRequestId"],
