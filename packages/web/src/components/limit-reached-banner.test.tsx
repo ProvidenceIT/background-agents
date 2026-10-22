@@ -26,25 +26,41 @@ afterEach(() => {
 });
 
 describe("LimitReachedBanner", () => {
-  it("renders nothing without a limit", () => {
-    const { container } = render(<LimitReachedBanner limit={null} isProcessing={false} />);
-    expect(container).toBeEmptyDOMElement();
+  it("shows no banner without a limit", () => {
+    render(<LimitReachedBanner limit={null} isProcessing={false} />);
+    expect(screen.queryByRole("region")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+  });
+
+  it("announces a new limit through a live region that was already mounted", () => {
+    const { rerender } = render(<LimitReachedBanner limit={null} isProcessing={false} />);
+    const liveRegion = screen.getByRole("status");
+
+    rerender(<LimitReachedBanner limit={LIMIT} isProcessing={false} />);
+
+    expect(screen.getByRole("status")).toBe(liveRegion);
+    expect(liveRegion).toHaveTextContent(
+      "Claude subscription limit reached (five-hour window, slot claude-5). The conversation and workspace are saved."
+    );
   });
 
   it("says which limit was hit, when it resets and that the work is saved", () => {
     render(<LimitReachedBanner limit={LIMIT} isProcessing={false} />);
-    expect(screen.getByRole("status", { name: "Subscription limit reached" })).toHaveTextContent(
+    expect(screen.getByRole("region", { name: "Subscription limit reached" })).toHaveTextContent(
       "Claude subscription limit reached (five-hour window, slot claude-5). Resets at 09:00 (in 4 min). The conversation and workspace are saved."
     );
   });
 
   it("counts down and reports the reset once it passes", () => {
     render(<LimitReachedBanner limit={LIMIT} isProcessing={false} />);
+    const banner = screen.getByRole("region");
     act(() => vi.advanceTimersByTime(2 * 60_000));
-    expect(screen.getByRole("status")).toHaveTextContent("Resets at 09:00 (in 2 min).");
-    act(() => vi.advanceTimersByTime(2 * 60_000 + LIMIT_COUNTDOWN_TICK_MS));
-    expect(screen.getByRole("status")).toHaveTextContent("The limit has reset.");
+    expect(banner).toHaveTextContent("Resets at 09:00 (in 2 min).");
     expect(screen.getByRole("status")).not.toHaveTextContent("Resets at");
+    act(() => vi.advanceTimersByTime(2 * 60_000 + LIMIT_COUNTDOWN_TICK_MS));
+    expect(banner).toHaveTextContent("The limit has reset.");
+    expect(banner).not.toHaveTextContent("Resets at");
   });
 
   it("sends the continue prompt and reports a rejected send", async () => {

@@ -19,9 +19,21 @@ interface LimitReachedBannerProps {
 }
 
 export function LimitReachedBanner({ limit, ...props }: LimitReachedBannerProps) {
-  if (!limit) return null;
-  // A new limit gets fresh pending/error state.
-  return <LimitBanner key={`${limit.window}:${limit.resetsAtMs}`} limit={limit} {...props} />;
+  return (
+    <>
+      {/* Mounted empty before any limit: screen readers announce changes inside an existing live
+          region, not a region inserted with its text already in it. */}
+      <p role="status" className="sr-only">
+        {limit
+          ? `${describeTurnLimit(limit, Date.now()).summary} The conversation and workspace are saved.`
+          : ""}
+      </p>
+      {/* A new limit gets fresh pending/error state. */}
+      {limit && (
+        <LimitBanner key={`${limit.window}:${limit.resetsAtMs}`} limit={limit} {...props} />
+      )}
+    </>
+  );
 }
 
 function useNowMs(resetsAtMs: number | null): number {
@@ -61,21 +73,13 @@ function LimitBanner({
   };
 
   return (
-    <div
-      role="status"
+    <section
       aria-label="Subscription limit reached"
       className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-warning/40 bg-warning-muted px-4 py-2.5 text-sm text-foreground"
     >
       <p className="min-w-0 flex-1">
         <span className="font-medium">{summary}</span>
-        {/* The countdown changes every tick; announcing each change would be noise. */}
-        {reset && (
-          <>
-            {" "}
-            <span aria-live="off">{reset}</span>
-          </>
-        )}{" "}
-        The conversation and workspace are saved.
+        {reset && <> {reset}</>} The conversation and workspace are saved.
       </p>
       <div className="flex items-center gap-2">
         <button
@@ -101,6 +105,6 @@ function LimitBanner({
           {continueError}
         </p>
       )}
-    </div>
+    </section>
   );
 }

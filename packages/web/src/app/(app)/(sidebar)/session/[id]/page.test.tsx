@@ -369,7 +369,7 @@ it("continues after a subscription limit through the prompt path", async () => {
   const sendPrompt = collaboratorSocket();
   render(<SessionPage />);
 
-  expect(screen.getByRole("status", { name: "Subscription limit reached" })).toHaveTextContent(
+  expect(screen.getByRole("region", { name: "Subscription limit reached" })).toHaveTextContent(
     "Claude subscription limit reached (five-hour window, slot claude-5). The conversation and workspace are saved."
   );
   await userEvent.setup().click(screen.getByRole("button", { name: "Continue" }));
@@ -389,7 +389,7 @@ it("hides the limit banner when the last turn hit no limit", () => {
     sessionState: { ...mocks.socket().sessionState, lastTurnLimit: null },
   });
   render(<SessionPage />);
-  expect(screen.queryByRole("status", { name: "Subscription limit reached" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Subscription limit reached" })).toBeNull();
 });
 
 it("offers fork only to collaborators and opens the fork dialog from the banner", async () => {
