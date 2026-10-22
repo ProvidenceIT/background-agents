@@ -93,8 +93,14 @@ describe("authHomeSchema", () => {
     expect(authHomeSchema.safeParse({ ...home, maxConcurrent: 0 }).success).toBe(false);
   });
 
-  it("carries the Z.AI Coding Plan next to the subscription providers", () => {
-    expect(AUTH_HOME_PROVIDER_IDS).toEqual(["openai", "xai", "anthropic", "zai-coding-plan"]);
+  it("carries the Z.AI Coding Plan and Antigravity next to the subscription providers", () => {
+    expect(AUTH_HOME_PROVIDER_IDS).toEqual([
+      "openai",
+      "xai",
+      "anthropic",
+      "zai-coding-plan",
+      "antigravity",
+    ]);
     expect(
       authHomeSchema.parse({ ...home, providers: ["anthropic", "zai-coding-plan"] }).providers
     ).toEqual(["anthropic", "zai-coding-plan"]);
@@ -105,6 +111,7 @@ describe("authHomeProviderForModel", () => {
   it("names the provider a model spends, or null when no home can carry it", () => {
     expect(authHomeProviderForModel("anthropic/claude-sonnet-4-6")).toBe("anthropic");
     expect(authHomeProviderForModel("zai-coding-plan/glm-5.3")).toBe("zai-coding-plan");
+    expect(authHomeProviderForModel("antigravity/gemini-4-argon")).toBe("antigravity");
     expect(authHomeProviderForModel("openai/gpt-6-sol")).toBe("openai");
     expect(authHomeProviderForModel("opencode-go/glm-5.2")).toBeNull();
   });

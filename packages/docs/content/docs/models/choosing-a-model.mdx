@@ -94,12 +94,23 @@ Runs on OpenCode only. Credential: a connected ChatGPT account, or `OPENAI_API_K
 
 Runs on OpenCode only. Opt-in group. Credential: a connected SuperGrok account, or `XAI_API_KEY` in API-key mode. Entitlement to a given Grok model is decided by xAI for the connected account.
 
-| Model ID             | Display name   | Reasoning efforts        | Default effort |
-| -------------------- | -------------- | ------------------------ | -------------- |
-| `xai/grok-4.5`       | Grok 4.5       | low, medium, high        | high           |
-| `xai/grok-4.6`       | Grok 4.6       | low, medium, high, xhigh | high           |
-| `xai/grok-4.7`       | Grok 4.7       | low, medium, high, xhigh | high           |
-| `xai/grok-build-0.1` | Grok Build 0.1 | Not configurable         | N/A            |
+| Model ID                  | Display name        | Reasoning efforts        | Default effort |
+| ------------------------- | ------------------- | ------------------------ | -------------- |
+| `xai/grok-4.5`            | Grok 4.5            | low, medium, high        | high           |
+| `xai/grok-4.6`            | Grok 4.6            | low, medium, high, xhigh | high           |
+| `xai/grok-4.7`            | Grok 4.7            | low, medium, high, xhigh | high           |
+| `xai/grok-4.7-build-fast` | Grok 4.7 Build Fast | low, medium, high, xhigh | high           |
+| `xai/grok-build-0.1`      | Grok Build 0.1      | Not configurable         | N/A            |
+
+### Google Antigravity
+
+Runs on the Antigravity harness only, from a subscription home. Opt-in group. Antigravity's own Claude models are not offered: Anthropic models run only on Claude Agent.
+
+| Model ID                       | Display name     | Reasoning efforts | Default effort |
+| ------------------------------ | ---------------- | ----------------- | -------------- |
+| `antigravity/gemini-4-argon`   | Gemini 4 Argon   | low, medium, high | medium         |
+| `antigravity/gemini-3.8-flash` | Gemini 3.8 Flash | low, medium, high | medium         |
+| `antigravity/gpt-oss-120b`     | GPT-OSS 120B     | medium            | medium         |
 
 ### OpenCode Zen
 

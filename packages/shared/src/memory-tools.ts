@@ -62,9 +62,11 @@ export function harnessMemoryToolName(harness: HarnessId, tool: MemoryToolName):
       return tool;
     case "claude":
     case "codex":
+    case "grok":
+    case "agy":
       // Claude receives runtime tools through the in-process `oi` MCP server,
-      // Codex through the same tools served over stdio; both qualify an MCP
-      // tool as `mcp__<server>__<tool>`.
+      // the CLI harnesses (Codex, grok, agy) through the same tools served
+      // over stdio; all qualify an MCP tool as `mcp__<server>__<tool>`.
       return `mcp__oi__${tool}`;
     default: {
       const exhaustive: never = harness;

@@ -20,7 +20,7 @@ import type {
   SessionProviderAuthMode,
 } from "./types/provider-accounts";
 
-export const HARNESS_IDS = ["opencode", "claude", "codex"] as const;
+export const HARNESS_IDS = ["opencode", "claude", "codex", "grok", "agy"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 export const DEFAULT_HARNESS: HarnessId = "opencode";
 export const harnessIdSchema = z.enum(HARNESS_IDS);
@@ -37,6 +37,11 @@ export interface HarnessCapabilities {
   readonly defaultModel?: string;
   /** Provider id → auth modes the harness can *select* for that provider. */
   readonly providerAuth: Readonly<Partial<Record<string, readonly ProviderAuthMode[]>>>;
+  /**
+   * Catalog ids the harness can run within its families; absent means every
+   * model of those families.
+   */
+  readonly allowedModels?: readonly string[];
   /** How a sandbox restore resumes the conversation. */
   readonly resume: "session_id";
 }
@@ -46,7 +51,6 @@ export const HARNESS_CATALOG = {
     label: "OpenCode",
     modelFamilies: "any",
     providerAuth: {
-      anthropic: ["api_key", "auth_home"],
       openai: ["api_key", "provider_account", "auth_home"],
       xai: ["api_key", "provider_account", "auth_home"],
     },
@@ -75,7 +79,44 @@ export const HARNESS_CATALOG = {
     },
     resume: "session_id",
   },
+  // SuperGrok through the grok CLI, on the access token the subscription
+  // home's push keeps fresh. The CLI refreshes nothing in the sandbox, so
+  // there is no key path either.
+  grok: {
+    label: "SuperGrok",
+    modelFamilies: ["xai"],
+    defaultModel: "xai/grok-4.7-build-fast",
+    // What `grok models` lists for a SuperGrok login; it does not serve
+    // xai/grok-build-0.1.
+    allowedModels: ["xai/grok-4.7", "xai/grok-4.7-build-fast", "xai/grok-4.6", "xai/grok-4.5"],
+    providerAuth: {
+      xai: ["auth_home"],
+    },
+    resume: "session_id",
+  },
+  // Google Antigravity through the agy CLI, on the same pushed-token path.
+  // agy also serves Claude models; those stay out of the catalog, since
+  // Anthropic models run only on Claude Agent.
+  agy: {
+    label: "Antigravity",
+    modelFamilies: ["antigravity"],
+    defaultModel: "antigravity/gemini-4-argon",
+    providerAuth: {
+      antigravity: ["auth_home"],
+    },
+    resume: "session_id",
+  },
 } as const satisfies Record<HarnessId, HarnessCapabilities>;
+
+/**
+ * Providers whose models run on one harness only, whatever a family list
+ * says: Anthropic models run only on Claude Agent, Antigravity models only
+ * on agy. A bare model id counts as Anthropic.
+ */
+export const MODEL_PROVIDER_HARNESS: Readonly<Partial<Record<string, HarnessId>>> = {
+  anthropic: "claude",
+  antigravity: "agy",
+};
 
 export function isValidHarness(value: unknown): value is HarnessId {
   return typeof value === "string" && (HARNESS_IDS as readonly string[]).includes(value);
@@ -95,12 +136,22 @@ export function getHarnessLabel(harness: HarnessId): string {
   return HARNESS_CATALOG[harness].label;
 }
 
-/** Whether the harness can run a model (by its catalog provider prefix). */
+/**
+ * Whether the harness can run a model: by its provider pin, then its catalog
+ * provider prefix, then the harness's allowed model ids.
+ */
 export function harnessSupportsModel(harness: HarnessId, model: string): boolean {
-  const families = getHarnessCapabilities(harness).modelFamilies;
-  if (families === "any") return true;
-  const { provider } = extractProviderAndModel(model);
-  return families.includes(provider);
+  const { provider, model: name } = extractProviderAndModel(model);
+  const pinned = MODEL_PROVIDER_HARNESS[provider];
+  if (pinned && pinned !== harness) return false;
+  const { modelFamilies, allowedModels } = getHarnessCapabilities(harness);
+  if (modelFamilies !== "any" && !modelFamilies.includes(provider)) return false;
+  return !allowedModels || allowedModels.includes(`${provider}/${name}`);
+}
+
+/** The harness a model runs on when nothing configures one: its pin, else the built-in harness. */
+export function harnessForModel(model: string): HarnessId {
+  return MODEL_PROVIDER_HARNESS[extractProviderAndModel(model).provider] ?? DEFAULT_HARNESS;
 }
 
 /** Whether the harness runs the provider on a subscription home and nothing else. */
@@ -129,18 +180,19 @@ export function harnessSupportsProviderAuth(
 
 /**
  * The harness a session launched by an integration runs `model` on: the
- * configured harness when it can run the model, else the built-in harness,
- * which runs every model. Integrations resolve the model at launch from
- * sources a saved harness cannot constrain (issue labels, user preferences,
+ * configured harness when it can run the model, else the model's own harness
+ * (`harnessForModel`). Integrations resolve the model at launch from sources
+ * a saved harness cannot constrain (issue labels, user preferences,
  * deployment defaults), so the configured harness is a preference that never
- * strands a launch on a model it cannot run. Absent means the built-in harness.
+ * strands a launch on a model it cannot run. Absent means the model's harness.
  */
 export function resolveHarnessForModel(
   configured: HarnessId | undefined,
   model: string
 ): HarnessId {
-  const harness = configured ?? DEFAULT_HARNESS;
-  return harnessSupportsModel(harness, model) ? harness : DEFAULT_HARNESS;
+  return configured && harnessSupportsModel(configured, model)
+    ? configured
+    : harnessForModel(model);
 }
 
 /** Models from a list that the harness can run. */
@@ -210,13 +262,18 @@ export function checkHarnessCompatibility(
   providerAuthModes?: Readonly<Partial<Record<string, SessionProviderAuthMode>>>
 ): HarnessCompatibilityError | null {
   const label = getHarnessLabel(harness);
+  const { provider } = extractProviderAndModel(model);
   if (!harnessSupportsModel(harness, model)) {
+    const pinned = MODEL_PROVIDER_HARNESS[provider];
+    const hint =
+      pinned && pinned !== harness
+        ? ` It runs only on ${getHarnessLabel(pinned)}; fork this session onto ${getHarnessLabel(pinned)}.`
+        : "";
     return {
       code: "model",
-      message: `Model "${model}" cannot run on the ${label} harness.`,
+      message: `Model "${model}" cannot run on the ${label} harness.${hint}`,
     };
   }
-  const { provider } = extractProviderAndModel(model);
   const mode = providerAuthModes?.[provider];
   if (mode && !harnessSupportsProviderAuth(harness, provider, mode)) {
     return { code: "provider_auth", message: providerAuthMessage(harness, provider, mode) };
