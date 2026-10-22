@@ -1,0 +1,164 @@
+import type { SqlDatabase } from "../db/sql-database";
+
+/**
+ * The session notice outbox (`session_notices`, migration 0101).
+ *
+ * A row is written once per (session, status revision, channel, recipient):
+ * a repeated projection of the same revision inserts nothing. The drainer
+ * claims due `pending` rows with a compare-and-swap on `claimed_at`, the way
+ * the subscription-home notices claim theirs, so a double tick or a second
+ * host sends a row at most once; a claim that outlives `STALE_CLAIM_MS` died
+ * with its process and is claimed again.
+ */
+
+/** A claim this old that was neither settled nor given back died with its process. */
+export const STALE_NOTICE_CLAIM_MS = 15 * 60 * 1000;
+
+/** `shadow` rows record what live mode would have sent; nothing ever sends them. */
+export type NewNoticeState = "pending" | "shadow";
+
+export interface NewSessionNotice {
+  sessionId: string;
+  revision: number;
+  status: string;
+  channel: string;
+  recipientRef: string;
+  reasonCode: string;
+  /** The channel's closed message, serialized; never free text. */
+  payload: string;
+  state: NewNoticeState;
+}
+
+export interface ClaimedSessionNotice {
+  id: number;
+  sessionId: string;
+  revision: number;
+  channel: string;
+  recipientRef: string;
+  payload: string;
+  /** Including this claim. */
+  attempts: number;
+  createdAt: number;
+}
+
+interface ClaimedRow {
+  id: number;
+  session_id: string;
+  revision: number;
+  channel: string;
+  recipient_ref: string;
+  payload: string;
+  attempts: number;
+  created_at: number;
+}
+
+export class SessionNoticeStore {
+  constructor(private readonly db: SqlDatabase) {}
+
+  /** Record one notice; false when the same revision already has it. */
+  async insert(notice: NewSessionNotice, nowMs: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `INSERT INTO session_notices (session_id, revision, status, channel, recipient_ref,
+           reason_code, payload, state, next_attempt_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (session_id, revision, channel, recipient_ref) DO NOTHING`
+      )
+      .bind(
+        notice.sessionId,
+        notice.revision,
+        notice.status,
+        notice.channel,
+        notice.recipientRef,
+        notice.reasonCode,
+        notice.payload,
+        notice.state,
+        nowMs,
+        nowMs,
+        nowMs
+      )
+      .run();
+    return result.meta.changes > 0;
+  }
+
+  /** Claim up to `limit` due pending notices, oldest first; each claim counts as an attempt. */
+  async claimDue(nowMs: number, limit: number): Promise<ClaimedSessionNotice[]> {
+    const staleBefore = nowMs - STALE_NOTICE_CLAIM_MS;
+    const candidates = await this.db
+      .prepare(
+        `SELECT id FROM session_notices
+         WHERE state = 'pending' AND next_attempt_at <= ?
+           AND (claimed_at IS NULL OR claimed_at <= ?)
+         ORDER BY next_attempt_at, id
+         LIMIT ?`
+      )
+      .bind(nowMs, staleBefore, limit)
+      .all<{ id: number }>();
+    const claimed: ClaimedSessionNotice[] = [];
+    for (const { id } of candidates.results) {
+      const row = await this.db
+        .prepare(
+          `UPDATE session_notices
+           SET claimed_at = ?, attempts = attempts + 1, updated_at = ?
+           WHERE id = ? AND state = 'pending' AND (claimed_at IS NULL OR claimed_at <= ?)
+           RETURNING id, session_id, revision, channel, recipient_ref, payload, attempts,
+             created_at`
+        )
+        .bind(nowMs, nowMs, id, staleBefore)
+        .first<ClaimedRow>();
+      if (row) {
+        claimed.push({
+          id: row.id,
+          sessionId: row.session_id,
+          revision: row.revision,
+          channel: row.channel,
+          recipientRef: row.recipient_ref,
+          payload: row.payload,
+          attempts: row.attempts,
+          createdAt: row.created_at,
+        });
+      }
+    }
+    return claimed;
+  }
+
+  async markSent(id: number, nowMs: number): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE session_notices
+         SET state = 'sent', delivered_at = ?, claimed_at = NULL, error_code = NULL, updated_at = ?
+         WHERE id = ? AND state = 'pending'`
+      )
+      .bind(nowMs, nowMs, id)
+      .run();
+  }
+
+  /** Settle a notice that will never be sent; `errorCode` is a short code, never a response body. */
+  async markFailed(id: number, errorCode: string, nowMs: number): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE session_notices
+         SET state = 'failed', claimed_at = NULL, error_code = ?, updated_at = ?
+         WHERE id = ? AND state = 'pending'`
+      )
+      .bind(errorCode, nowMs, id)
+      .run();
+  }
+
+  /** Give the claim back and try again from `nextAttemptAtMs`. */
+  async retryLater(
+    id: number,
+    errorCode: string,
+    nextAttemptAtMs: number,
+    nowMs: number
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE session_notices
+         SET claimed_at = NULL, next_attempt_at = ?, error_code = ?, updated_at = ?
+         WHERE id = ? AND state = 'pending'`
+      )
+      .bind(nextAttemptAtMs, errorCode, nowMs, id)
+      .run();
+  }
+}
