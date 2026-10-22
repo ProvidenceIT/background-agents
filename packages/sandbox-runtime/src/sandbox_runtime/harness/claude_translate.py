@@ -39,6 +39,8 @@ TASK_TOOL_NAME: Final = "task"
 # First-party MCP tools use the same wire ids as OpenCode; external tools stay qualified.
 OI_TOOL_PREFIX: Final = f"mcp__{OI_TOOL_SERVER_NAME}__"
 MAX_TRACKED_TASKS: Final = 128
+# Overage states in which the CLI keeps a rejected window's turn going on extra usage.
+OVERAGE_CONTINUES: Final = frozenset({"allowed", "allowed_warning"})
 AUTHENTICATION_FAILED_MESSAGE: Final = (
     "Anthropic rejected this session's credential. Reconnect the Claude account in "
     "Settings (or check ANTHROPIC_API_KEY) and start a new session."
@@ -385,7 +387,7 @@ class ClaudeTranslator:
 
         if isinstance(message, RateLimitEvent):
             info = message.rate_limit_info
-            if info.status == "rejected":
+            if info.status == "rejected" and info.overage_status not in OVERAGE_CONTINUES:
                 state.limit = SubscriptionLimit.of(info.rate_limit_type, info.resets_at)
             if info.status in ("allowed_warning", "rejected"):
                 detail = f"Anthropic rate limit {info.status}"

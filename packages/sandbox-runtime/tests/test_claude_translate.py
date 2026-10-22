@@ -437,10 +437,13 @@ def test_result_translation_exposes_typed_metadata_and_turn_outcome(subtype, is_
     assert result.usage == usage and translator.cost_baseline == 0.3
 
 
-def _rate_limit(status, rate_limit_type=None, resets_at=None):
+def _rate_limit(status, rate_limit_type=None, resets_at=None, overage_status=None):
     return RateLimitEvent(
         rate_limit_info=RateLimitInfo(
-            status=status, rate_limit_type=rate_limit_type, resets_at=resets_at
+            status=status,
+            rate_limit_type=rate_limit_type,
+            resets_at=resets_at,
+            overage_status=overage_status,
         ),
         uuid="r",
         session_id="native",
@@ -499,10 +502,42 @@ def test_warnings_and_successful_turns_carry_no_limit():
     translator.translate(state, _rate_limit("allowed_warning", "five_hour", 123), interrupted=False)
     assert state.limit is None
 
-    # Overage can carry a turn past a refused window; the turn still succeeds.
-    translator.translate(state, _rate_limit("rejected", "five_hour", 123), interrupted=False)
+    # Overage carries the turn past the refused window; the turn still succeeds.
+    translator.translate(
+        state,
+        _rate_limit("rejected", "five_hour", 123, overage_status="allowed"),
+        interrupted=False,
+    )
     outcome = translator.translate(state, _result(0.1), interrupted=False).outcome
     assert outcome == TurnOutcome.ok(message_cost_usd=0.1)
+    assert state.limit is None
+
+
+@pytest.mark.parametrize("overage_status", ["allowed", "allowed_warning"])
+def test_a_turn_running_on_overage_that_fails_otherwise_carries_no_limit(overage_status):
+    translator = ClaudeTranslator()
+    state = ClaudeTurnState(message_id="prompt", cost_baseline=0.0)
+    translator.translate(
+        state,
+        _rate_limit("rejected", "five_hour", 123, overage_status=overage_status),
+        interrupted=False,
+    )
+    outcome = translator.translate(
+        state,
+        _result(0.0, subtype="error_during_execution", is_error=True, result="tool crashed"),
+        interrupted=False,
+    ).outcome
+    assert outcome == TurnOutcome(success=False, error="tool crashed", message_cost_usd=0.0)
+
+
+def test_a_rejected_window_whose_overage_is_also_rejected_refuses_the_turn():
+    translator = ClaudeTranslator()
+    state = ClaudeTurnState(message_id="prompt", cost_baseline=0.0)
+    translator.translate(
+        state,
+        _rate_limit("rejected", "five_hour", 123, overage_status="rejected"),
+        interrupted=False,
+    )
     assert state.limit == SubscriptionLimit(window="five_hour", resets_at=123.0)
 
 

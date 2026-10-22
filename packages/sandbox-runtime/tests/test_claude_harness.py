@@ -867,6 +867,30 @@ class TestReconnectPolicy:
         )
 
     @pytest.mark.asyncio
+    async def test_a_turn_carried_by_overage_keeps_the_child(self, tmp_path: Path) -> None:
+        on_overage = [
+            RateLimitEvent(
+                rate_limit_info=RateLimitInfo(
+                    status="rejected",
+                    rate_limit_type="five_hour",
+                    resets_at=1_790_000_000,
+                    overage_status="allowed",
+                ),
+                uuid="u",
+                session_id="s",
+            ),
+            _result(0.0, subtype="error_during_execution", is_error=True, result="tool crashed"),
+        ]
+        h = Harness(tmp_path, turns=[on_overage, [_result(0.1)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        _, first = await _run(h.harness)
+        assert first == TurnOutcome(success=False, error="tool crashed", message_cost_usd=0.0)
+        _, second = await _run(h.harness)
+        assert second == TurnOutcome.ok(message_cost_usd=0.1)
+        assert len(h.clients) == 1
+
+    @pytest.mark.asyncio
     async def test_a_warning_alone_keeps_the_child(self, tmp_path: Path) -> None:
         warned = [
             RateLimitEvent(
