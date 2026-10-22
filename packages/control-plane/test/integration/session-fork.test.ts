@@ -95,7 +95,11 @@ describe("session fork routes", () => {
     await cleanD1Tables();
     vi.spyOn(repositoryResolution, "resolveSessionRepositories").mockImplementation(
       async (_env, repos) =>
-        repos.map((repo) => ({ ...repo, repoId: 12345, baseBranch: repo.baseBranch ?? "main" }))
+        repos.map((repo) => ({
+          ...repo,
+          repoId: 12345,
+          baseBranch: repo.baseBranch ?? "repo-default",
+        }))
     );
   });
   afterEach(() => vi.restoreAllMocks());
@@ -112,7 +116,7 @@ describe("session fork routes", () => {
     const { handoff } = await response.json<ForkHandoffResponse>();
     expect(handoff).toContain('# Handoff from "Fix the parser"');
     expect(handoff).toContain(
-      "- acme/web-app: work branch `oi/fix-parser` (pushed; this session starts from it)"
+      "- acme/web-app: base branch `main`; the original session pushed its work to `oi/fix-parser`. Continue from it with `git fetch origin oi/fix-parser && git reset --hard FETCH_HEAD`."
     );
     expect(handoff).toContain("## Original request\n\n> Fix the quote handling in the parser");
     expect(handoff).toContain(
@@ -124,7 +128,7 @@ describe("session fork routes", () => {
     expect(handoff).toContain(FORK_CONSENT_LINE);
   });
 
-  it("creates a private fork on the pushed branch, enqueues the handoff, and replays", async () => {
+  it("creates a private fork on the source's base branch, enqueues the handoff, and replays", async () => {
     const { name, stub } = await seedSource();
     const [sourceSession] = await queryDO<{ model: string; harness: string }>(
       stub,
@@ -149,7 +153,7 @@ describe("session fork routes", () => {
       ownerTeamId: null,
       parentSessionId: null,
       spawnDepth: 0,
-      baseBranch: "oi/fix-parser",
+      baseBranch: "main",
       model: sourceSession.model,
       harness: sourceSession.harness,
     });
@@ -173,7 +177,7 @@ describe("session fork routes", () => {
     expect((await snapshot.json<SessionSnapshot>()).session).toMatchObject({
       forkedFromSessionId: name,
       parentSessionId: null,
-      repositories: [expect.objectContaining({ baseBranch: "oi/fix-parser" })],
+      repositories: [expect.objectContaining({ baseBranch: "main", branchName: null })],
     });
 
     const replay = await fork(name, { forkRequestId, handoff: "Something else" });

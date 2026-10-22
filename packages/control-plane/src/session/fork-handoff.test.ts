@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { FORK_HANDOFF_MAX_CHARS } from "@open-inspect/shared/types/session-api";
-import {
-  buildForkHandoff,
-  FORK_CONSENT_LINE,
-  forkStartBranch,
-  type ForkHandoffSource,
-} from "./fork-handoff";
+import { buildForkHandoff, FORK_CONSENT_LINE, type ForkHandoffSource } from "./fork-handoff";
 
 const BASE = { sandboxId: "sb-1", timestamp: 1 };
 
@@ -22,22 +17,6 @@ function source(overrides: Partial<ForkHandoffSource> = {}): ForkHandoffSource {
     ...overrides,
   };
 }
-
-describe("forkStartBranch", () => {
-  it("starts from the pushed work branch, else the base branch", () => {
-    expect(
-      forkStartBranch({
-        repoOwner: "acme",
-        repoName: "web",
-        baseBranch: "main",
-        branchName: "oi/fix-parser",
-      })
-    ).toBe("oi/fix-parser");
-    expect(
-      forkStartBranch({ repoOwner: "acme", repoName: "web", baseBranch: "main", branchName: null })
-    ).toBe("main");
-  });
-});
 
 describe("buildForkHandoff", () => {
   it("drafts the full handoff from a limited session", () => {
@@ -119,8 +98,8 @@ describe("buildForkHandoff", () => {
         "",
         "## Repositories",
         "",
-        "- acme/web: work branch `oi/parser` (pushed; this session starts from it)",
-        "- acme/api: base branch `develop` (nothing was pushed; this session starts from the base branch, so unpushed work from the original sandbox is not here)",
+        "- acme/web: base branch `main`; the original session pushed its work to `oi/parser`. Continue from it with `git fetch origin oi/parser && git reset --hard FETCH_HEAD`. If that branch no longer exists (for example it was merged and deleted), stay on `main` and check whether the work already landed there. Pull requests from this session target `main` from this session's own branch, never `oi/parser`.",
+        "- acme/api: base branch `develop`. Nothing was pushed, so unpushed work from the original sandbox is not here.",
         "",
         "## Original request",
         "",
