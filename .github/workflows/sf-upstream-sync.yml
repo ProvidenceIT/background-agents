@@ -41,7 +41,7 @@ concurrency:
 jobs:
   sync:
     name: Merge upstream/main into a sync branch
-    if: github.repository == 'bramdokman/background-agents'
+    if: contains(fromJSON('["bramdokman/background-agents", "ProvidenceIT/background-agents"]'), github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

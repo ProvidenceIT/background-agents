@@ -5,7 +5,8 @@
 # teams-bot images to private GHCR, build the sandbox image when its content
 # hash is new, tag the commit sf-<UTC committer time>-<sha8>, and open or
 # refresh ONE rolling "Deploy sf/main @ <sha8>" pull request in the private
-# deploy repo bramdokman/software-factory (deploy/scripts/promote.py there).
+# deploy repo <owner>/software-factory (deploy/scripts/promote.py there). The
+# owner is bramdokman or, after the move, ProvidenceIT; GHCR paths follow it.
 # Merging that pull request is the deploy; Flux pulls it. GitHub never holds
 # cluster credentials.
 #
@@ -66,13 +67,14 @@ permissions:
 env:
   NPM_CONFIG_AUDIT: "false"
   NPM_CONFIG_PREFER_OFFLINE: "true"
-  SANDBOX_REPOSITORY: ghcr.io/bramdokman/open-inspect-sandbox
+  # GHCR namespaces are lower case: ghcr.io/bramdokman or ghcr.io/providenceit.
+  SANDBOX_REPOSITORY: ghcr.io/${{ github.repository_owner == 'ProvidenceIT' && 'providenceit' || 'bramdokman' }}/open-inspect-sandbox
 
 jobs:
   meta:
     name: Release metadata
     # Only the fork releases; a copy of this file elsewhere does nothing.
-    if: github.repository == 'bramdokman/background-agents'
+    if: contains(fromJSON('["bramdokman/background-agents", "ProvidenceIT/background-agents"]'), github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -442,7 +444,7 @@ jobs:
           - component: teams-bot
             file: packages/teams-bot/Dockerfile
     env:
-      REPOSITORY: ghcr.io/bramdokman/open-inspect-${{ matrix.component }}
+      REPOSITORY: ghcr.io/${{ github.repository_owner == 'ProvidenceIT' && 'providenceit' || 'bramdokman' }}/open-inspect-${{ matrix.component }}
       TAG: ${{ needs.meta.outputs.tag }}
       # build-push-action uploads a build record (.dockerbuild artifact) and a
       # job summary by default; both carry the build args, so SF_WS_URL would
@@ -522,7 +524,7 @@ jobs:
             ${{ env.REPOSITORY }}:${{ needs.meta.outputs.tag }}
             ${{ env.REPOSITORY }}:${{ needs.meta.outputs.sha8 }}
           labels: |
-            org.opencontainers.image.source=https://github.com/bramdokman/background-agents
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.meta.outputs.sha }}
           build-args: |
             NEXT_PUBLIC_WS_URL=${{ secrets.SF_WS_URL }}
@@ -547,7 +549,7 @@ jobs:
             ${{ env.REPOSITORY }}:${{ needs.meta.outputs.tag }}
             ${{ env.REPOSITORY }}:${{ needs.meta.outputs.sha8 }}
           labels: |
-            org.opencontainers.image.source=https://github.com/bramdokman/background-agents
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.meta.outputs.sha }}
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
@@ -722,7 +724,7 @@ jobs:
           REF: ${{ steps.reuse.outputs.ref || steps.build.outputs.ref }}
         run: |
           [[ "$REUSE" == "true" ]] && built=false || built=true
-          if [[ ! "$REF" =~ ^ghcr\.io/bramdokman/open-inspect-sandbox@sha256:[0-9a-f]{64}$ ]]; then
+          if [[ ! "$REF" =~ ^ghcr\.io/(bramdokman|providenceit)/open-inspect-sandbox@sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::unexpected sandbox reference '$REF'"
             exit 1
           fi
@@ -812,14 +814,14 @@ jobs:
           ls -l "$d"
           mkdir -p "$RUNNER_TEMP/release-input"
           jq -n \
-            --arg sha "$SHA" --arg tag "$TAG" --arg run "$RUN_URL" \
+            --arg sha "$SHA" --arg tag "$TAG" --arg run "$RUN_URL" --arg repo "$GITHUB_REPOSITORY" \
             --slurpfile cp "$d/digest-control-plane.json" \
             --slurpfile web "$d/digest-web.json" \
             --slurpfile bot "$d/digest-teams-bot.json" \
             --slurpfile sbx "$d/digest-sandbox.json" \
             --argjson force "$FORCE" --argjson downgrade "$ALLOW_DOWNGRADE" \
             '{
-              sourceRepo: "bramdokman/background-agents",
+              sourceRepo: $repo,
               sourceSha: $sha,
               releaseTag: $tag,
               runUrl: $run,
@@ -859,7 +861,7 @@ jobs:
     permissions:
       contents: read
     env:
-      OPS_REPO: bramdokman/software-factory
+      OPS_REPO: ${{ github.repository_owner }}/software-factory
       PROMOTE_BRANCH: promote/sf-main
       SHA: ${{ needs.meta.outputs.sha }}
     steps:
@@ -882,7 +884,7 @@ jobs:
         with:
           client-id: ${{ vars.SF_BOT_CLIENT_ID }}
           private-key: ${{ secrets.SF_BOT_PRIVATE_KEY }}
-          owner: bramdokman
+          owner: ${{ github.repository_owner }}
           repositories: software-factory
           permission-contents: write
           permission-pull-requests: write
@@ -891,7 +893,7 @@ jobs:
       - name: Checkout the deploy repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: bramdokman/software-factory
+          repository: ${{ env.OPS_REPO }}
           ref: main
           token: ${{ steps.app.outputs.token }}
           persist-credentials: false
