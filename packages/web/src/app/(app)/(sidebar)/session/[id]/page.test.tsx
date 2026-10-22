@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   diffState: null as SessionDiffState | null,
   snapshot: null as SessionSnapshot | null,
   mobile: false,
+  enabledModels: [] as string[],
 }));
 vi.mock("next/navigation", () => ({
   notFound: () => {
@@ -53,13 +54,23 @@ vi.mock("@/hooks/use-session-skills", () => ({
 vi.mock("@/hooks/use-session-rename", () => ({
   useSessionRename: () => ({ optimisticTitle: null, renameSession: vi.fn() }),
 }));
-vi.mock("@/hooks/use-enabled-models", () => ({
-  useEnabledModels: () => ({ enabledModels: [], enabledModelOptions: [], loading: false }),
-}));
+vi.mock("@/hooks/use-enabled-models", async () => {
+  const { MODEL_OPTIONS } = await import("@open-inspect/shared/models");
+  return {
+    useEnabledModels: () => ({
+      enabledModels: mocks.enabledModels,
+      enabledModelOptions: mocks.enabledModels.length ? MODEL_OPTIONS : [],
+      loading: false,
+    }),
+  };
+});
 vi.mock("@/hooks/use-session-diffs", () => ({
   useSessionDiffs: () => ({ state: mocks.diffState, isLoading: false }),
 }));
-vi.mock("@/hooks/use-media-query", () => ({ useMediaQuery: () => mocks.mobile }));
+vi.mock("@/hooks/use-media-query", () => ({
+  useMediaQuery: () => mocks.mobile,
+  useIsMobile: () => mocks.mobile,
+}));
 vi.mock("@/hooks/use-session-details-sidebar", () => ({
   useSessionDetailsSidebar: () => ({ isOpen: true, toggle: vi.fn() }),
 }));
@@ -111,6 +122,7 @@ vi.mock("@/components/session-changes-panel", () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.mobile = false;
+  mocks.enabledModels = [];
   mocks.diffState = null;
   mocks.snapshot = {
     session: {
@@ -187,6 +199,7 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 it("renders the existing not-found path before cached session content or action hooks", () => {
@@ -317,4 +330,101 @@ it.each([
   await user.click(await screen.findByRole("button", { name: "Close changes" }));
 
   await waitFor(() => expect(link).toHaveFocus());
+});
+
+const TURN_LIMIT = {
+  kind: "subscription_limit" as const,
+  window: "five_hour" as const,
+  resetsAtMs: null,
+  subscriptionSlot: "claude-5",
+  harness: "claude",
+};
+
+function collaboratorSocket(overrides: Record<string, unknown> = {}) {
+  const session = {
+    ...mocks.snapshot!.session,
+    lastTurnLimit: TURN_LIMIT,
+    capabilities: { ...mocks.snapshot!.session.capabilities!, canCollaborate: true },
+  };
+  const sendPrompt = vi.fn(async () => ({
+    ok: true as const,
+    clientRequestId: "request-1",
+    messageId: "message-1",
+    position: null,
+  }));
+  mocks.enabledModels = ["anthropic/claude-opus-5"];
+  mocks.socket.mockReturnValue({
+    ...mocks.socket(),
+    ready: true,
+    isProcessing: false,
+    sessionState: session,
+    capabilities: resolveSessionCapabilities(session.capabilities, true),
+    sendPrompt,
+    ...overrides,
+  });
+  return sendPrompt;
+}
+
+it("continues after a subscription limit through the prompt path", async () => {
+  const sendPrompt = collaboratorSocket();
+  render(<SessionPage />);
+
+  expect(screen.getByRole("status", { name: "Subscription limit reached" })).toHaveTextContent(
+    "Claude subscription limit reached (five-hour window, slot claude-5). The conversation and workspace are saved."
+  );
+  await userEvent.setup().click(screen.getByRole("button", { name: "Continue" }));
+
+  expect(sendPrompt).toHaveBeenCalledTimes(1);
+  expect(sendPrompt.mock.calls[0]).toEqual([
+    "Continue where you stopped.",
+    "anthropic/claude-opus-5",
+    expect.anything(),
+  ]);
+});
+
+it("hides the limit banner when the last turn hit no limit", () => {
+  collaboratorSocket();
+  mocks.socket.mockReturnValue({
+    ...mocks.socket(),
+    sessionState: { ...mocks.socket().sessionState, lastTurnLimit: null },
+  });
+  render(<SessionPage />);
+  expect(screen.queryByRole("status", { name: "Subscription limit reached" })).toBeNull();
+});
+
+it("offers fork only to collaborators and opens the fork dialog from the banner", async () => {
+  const { unmount } = render(<SessionPage />);
+  expect(mocks.header.mock.lastCall?.[0].actions.onFork).toBeUndefined();
+  unmount();
+
+  collaboratorSocket();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ handoff: "# Handoff" }))
+  );
+  render(<SessionPage />);
+  expect(mocks.header.mock.lastCall?.[0].actions.onFork).toEqual(expect.any(Function));
+  expect(mocks.composer.mock.lastCall?.[0].session.onFork).toEqual(expect.any(Function));
+
+  await userEvent.setup().click(screen.getByRole("button", { name: "Fork…" }));
+
+  expect(await screen.findByRole("dialog", { name: "Fork session" })).toBeInTheDocument();
+  expect(await screen.findByDisplayValue("# Handoff")).toBeInTheDocument();
+});
+
+it("links a fork to its source session", async () => {
+  mocks.socket.mockReturnValue({
+    ...mocks.socket(),
+    sessionState: { ...mocks.snapshot!.session, forkedFromSessionId: "session-0" },
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ session: { title: "Original work" } }))
+  );
+  render(<SessionPage />);
+
+  expect(await screen.findByRole("link", { name: "Original work" })).toHaveAttribute(
+    "href",
+    "/session/session-0"
+  );
 });
