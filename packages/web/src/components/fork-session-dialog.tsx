@@ -142,8 +142,17 @@ function ForkSessionForm({ source, onClose }: { source: ForkSource; onClose: () 
     router.push(`/session/${encodeURIComponent(result.value.sessionId)}`);
   };
 
+  // Closing mid-request would drop its error and navigate after the user dismissed the dialog.
+  const keepOpenWhileSubmitting = (event: Event) => {
+    if (submitting) event.preventDefault();
+  };
+
   return (
-    <DialogContent className="max-h-[calc(100vh-2rem)] w-[calc(100%-1.5rem)] max-w-2xl overflow-y-auto sm:w-full">
+    <DialogContent
+      className="max-h-[calc(100vh-2rem)] w-[calc(100%-1.5rem)] max-w-2xl overflow-y-auto sm:w-full"
+      onEscapeKeyDown={keepOpenWhileSubmitting}
+      onInteractOutside={keepOpenWhileSubmitting}
+    >
       <div>
         <DialogTitle>Fork session</DialogTitle>
         <DialogDescription className="mt-1.5">

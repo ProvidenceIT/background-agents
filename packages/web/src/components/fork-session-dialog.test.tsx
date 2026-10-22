@@ -190,4 +190,45 @@ describe("ForkSessionDialog", () => {
 
     await waitFor(() => expect(screen.getByDisplayValue("Second draft")).toBeInTheDocument());
   });
+  it("stays open on Escape or an outside click while the fork is being created", async () => {
+    let finish: (response: Response) => void = () => {};
+    stubFetch(({ url }) =>
+      url.endsWith("/handoff")
+        ? Response.json({ handoff: "Draft" })
+        : new Promise<Response>((resolve) => {
+            finish = resolve;
+          })
+    );
+    const onOpenChange = vi.fn();
+    render(<ForkSessionDialog open onOpenChange={onOpenChange} source={SOURCE} />);
+    await screen.findByDisplayValue("Draft");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    });
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    fireEvent.pointerDown(document.body, { button: 0, pointerType: "mouse" });
+    fireEvent.click(document.body);
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Creating…" })).toBeDisabled();
+    await act(async () => {
+      finish(
+        Response.json({ sessionId: "session-2", forkedFromSessionId: "session-1", created: true })
+      );
+    });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(push).toHaveBeenCalledWith("/session/session-2");
+  });
+
+  it("closes on Escape when no fork is being created", async () => {
+    stubFetch(() => Response.json({ handoff: "Draft" }));
+    const onOpenChange = vi.fn();
+    render(<ForkSessionDialog open onOpenChange={onOpenChange} source={SOURCE} />);
+    await screen.findByDisplayValue("Draft");
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
 });
