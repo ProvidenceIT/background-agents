@@ -740,6 +740,7 @@ class AgentBridge:
         tool_call_event_count = 0
         message_cost_usd: float | None = None
         subscription_slot: str | None = None
+        limit: dict[str, Any] | None = None
         had_error = False
         error_message = None
 
@@ -825,6 +826,10 @@ class AgentBridge:
                 had_error = True
                 error_category = "harness_failure"
                 error_message = turn.error or "Unknown error"
+                if turn.limit is not None:
+                    limit = turn.limit.wire(
+                        harness=self._harness_id.value, subscription_slot=subscription_slot
+                    )
             if turn.cancelled:
                 raise asyncio.CancelledError
 
@@ -890,6 +895,7 @@ class AgentBridge:
             **({"error": error_message} if error_message else {}),
             **({"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}),
             **({"subscriptionSlot": subscription_slot} if subscription_slot else {}),
+            **({"limit": limit} if limit else {}),
         }
 
     async def _prepare_turn(
