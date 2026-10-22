@@ -353,6 +353,12 @@ function reduceServerMessage(
         ...(message.isProcessing ? { lastTurnLimit: null } : {}),
       }));
 
+    case "scheduled_continue":
+      return updateSessionState(state, (prev) => ({
+        ...prev,
+        scheduledContinueAtMs: message.scheduledContinueAtMs,
+      }));
+
     case "budget_status":
       return updateSessionState(state, (prev) => ({
         ...prev,

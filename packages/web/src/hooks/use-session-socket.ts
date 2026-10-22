@@ -85,6 +85,8 @@ interface UseSessionSocketReturn {
   sendTyping: () => void;
   reconnect: () => void;
   loadOlderEvents: () => void;
+  /** Applies a continue-at-reset answer before (or without) its broadcast arriving. */
+  applyScheduledContinue: (scheduledContinueAtMs: number | null) => void;
 }
 
 type CorrelatedRequestFailure = {
@@ -483,6 +485,13 @@ export function useSessionSocket(
     });
   }, [isOpen, send, hasMoreHistory, loadingHistory, cursor]);
 
+  const applyScheduledContinue = useCallback((scheduledContinueAtMs: number | null) => {
+    dispatch({
+      type: "server_message",
+      message: { type: "scheduled_continue", scheduledContinueAtMs },
+    });
+  }, []);
+
   const isProcessing = state.sessionState?.isProcessing ?? false;
   const sessionState = state.sessionState
     ? {
@@ -520,5 +529,6 @@ export function useSessionSocket(
     sendTyping,
     reconnect,
     loadOlderEvents,
+    applyScheduledContinue,
   };
 }
