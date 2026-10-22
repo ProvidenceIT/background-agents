@@ -41,7 +41,9 @@ const WEEK_MS = 7 * DAY_MS;
 const DIGEST_SEND_OFFSET_MS = 7 * 60 * 60 * 1000;
 /** A claim this old that was neither sent nor released died with its process. */
 const STALE_CLAIM_MS = 15 * 60 * 1000;
-const OID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** An Entra (Microsoft) object id as `user_identities` stores it for provider `microsoft`. */
+export const ENTRA_OBJECT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type NoticeKind = "claude_expiry" | "weekly_digest";
 
@@ -90,7 +92,7 @@ async function recipientOid(db: SqlDatabase, home: AuthHome): Promise<string | n
     .all<{ user_id: string; provider_user_id: string }>();
   for (const id of ids) {
     const oid = rows.results.find((row) => row.user_id === id)?.provider_user_id;
-    if (oid && OID_PATTERN.test(oid)) return oid;
+    if (oid && ENTRA_OBJECT_ID_PATTERN.test(oid)) return oid;
   }
   return null;
 }
