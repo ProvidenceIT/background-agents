@@ -560,6 +560,7 @@ function SessionContent({
             harness: sessionHarness,
             model: sessionState?.model,
             reasoningEffort: sessionState?.reasoningEffort,
+            limitedSlot: sessionState?.lastTurnLimit?.subscriptionSlot,
           }}
         />
       )}

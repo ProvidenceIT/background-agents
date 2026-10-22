@@ -41,6 +41,8 @@ export interface ForkSource {
   harness: HarnessId;
   model: string | null | undefined;
   reasoningEffort: string | null | undefined;
+  /** The slot the source's last turn hit its subscription limit on, if any. */
+  limitedSlot?: string | null;
 }
 
 interface ForkSessionDialogProps {
@@ -146,7 +148,8 @@ function useForkSubscriptionSlots(sessionId: string, harness: HarnessId) {
   return pinnable && loaded.harness === harness ? loaded.slots : [];
 }
 
-function slotLabel({ slot, percentRemaining }: ForkSubscriptionSlot) {
+function slotLabel({ slot, percentRemaining }: ForkSubscriptionSlot, limitedSlot: string | null) {
+  if (slot === limitedSlot) return `${slot} (limit reached)`;
   return percentRemaining === null ? slot : `${slot} (${percentRemaining}%)`;
 }
 
@@ -239,11 +242,17 @@ function ForkSessionForm({ source, onClose }: { source: ForkSource; onClose: () 
               <SelectItem value={AUTOMATIC_SLOT_VALUE}>Automatic (most headroom)</SelectItem>
               {slots.map((slot) => (
                 <SelectItem key={slot.slot} value={slot.slot}>
-                  {slotLabel(slot)}
+                  {slotLabel(slot, source.limitedSlot ?? null)}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
+          {subscriptionSlot !== null && subscriptionSlot === source.limitedSlot && (
+            <p className="text-xs text-muted-foreground">
+              {subscriptionSlot} hit this session&apos;s limit. Until it resets, the fork falls back
+              to the automatic pick.
+            </p>
+          )}
         </div>
       )}
       {model.selection.availability.status === "unavailable" && (

@@ -293,6 +293,39 @@ describe("ForkSessionDialog", () => {
       });
     });
 
+    it("marks the slot that hit the source's limit and warns when it is chosen", async () => {
+      const user = userEvent.setup();
+      const calls = stubFetch(forkResponds, [slot("claude-1"), slot("claude-3"), slot("claude-5")]);
+      render(
+        <ForkSessionDialog
+          open
+          onOpenChange={vi.fn()}
+          source={{ ...SOURCE, limitedSlot: "claude-3" }}
+        />
+      );
+      await screen.findByDisplayValue("Draft");
+
+      const select = await screen.findByRole("combobox", { name: "Subscription" });
+      await user.click(select);
+      expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+        "Automatic (most headroom)",
+        "claude-1",
+        "claude-3 (limit reached)",
+        "claude-5",
+      ]);
+      expect(screen.queryByText(/hit its limit/)).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("option", { name: "claude-3 (limit reached)" }));
+      expect(
+        screen.getByText(
+          "claude-3 hit this session's limit. Until it resets, the fork falls back to the automatic pick."
+        )
+      ).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Create" }));
+
+      expect(postedBodies(calls)[0]).toMatchObject({ subscriptionSlot: "claude-3" });
+    });
+
     it("sends no slot when Automatic stays chosen", async () => {
       const calls = stubFetch(forkResponds, [slot("claude-1"), slot("claude-2")]);
       render(<ForkSessionDialog open onOpenChange={vi.fn()} source={SOURCE} />);
