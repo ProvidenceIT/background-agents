@@ -429,6 +429,25 @@ it("offers fork only to collaborators and opens the fork dialog from the banner"
   expect(await screen.findByDisplayValue("# Handoff")).toBeInTheDocument();
 });
 
+it("disables Continue and Fork on a limited session for a viewer without collaborate", () => {
+  collaboratorSocket();
+  const viewer = {
+    ...mocks.socket().sessionState,
+    capabilities: { ...mocks.snapshot!.session.capabilities!, canCollaborate: false },
+  };
+  mocks.socket.mockReturnValue({
+    ...mocks.socket(),
+    sessionState: viewer,
+    capabilities: resolveSessionCapabilities(viewer.capabilities, true),
+  });
+  render(<SessionPage />);
+
+  expect(screen.getByRole("region", { name: "Subscription limit reached" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Fork…" })).toBeDisabled();
+  expect(mocks.header.mock.lastCall?.[0].actions.onFork).toBeUndefined();
+});
+
 it("hides Fork from a collaborator who may not create sessions", () => {
   collaboratorSocket();
   mocks.canCreateSessions = false;
