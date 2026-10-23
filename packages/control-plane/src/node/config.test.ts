@@ -52,6 +52,16 @@ describe("readEnvConfig", () => {
     ).toBe("https://motion.providenceit.nl/");
   });
 
+  it("rejects a motion API URL the session tools could not call safely", () => {
+    expect(() =>
+      readEnvConfig({ ...REQUIRED, MOTION_API_URL: "http://motion.providenceit.nl" })
+    ).toThrow("MOTION_API_URL");
+    expect(
+      readEnvConfig({ ...REQUIRED, MOTION_API_URL: "https://motion.providenceit.nl" })
+        .MOTION_API_URL
+    ).toBe("https://motion.providenceit.nl");
+  });
+
   it("names every missing required variable at once", () => {
     expect(() => readEnvConfig({ DEPLOYMENT_NAME: "test", TOKEN_ENCRYPTION_KEY: "" })).toThrow(
       "Missing required configuration: GITHUB_BOT_USERNAME, TOKEN_ENCRYPTION_KEY, PROVIDER_ACCOUNTS_ENCRYPTION_KEY, REPO_SECRETS_ENCRYPTION_KEY"
