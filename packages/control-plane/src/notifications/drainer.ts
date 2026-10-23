@@ -1,3 +1,4 @@
+import type { ResolvedNotificationSettings } from "@open-inspect/shared/types/integrations";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
@@ -32,7 +33,9 @@ export async function drainSessionNotices(
   store: SessionNoticeStore,
   registry: NoticeChannelRegistry,
   log: Logger,
-  nowMs: number
+  nowMs: number,
+  /** Read this tick: a channel switched off since its rows were written sends none of them. */
+  settings: ResolvedNotificationSettings
 ): Promise<NoticeDrainResult> {
   const result: NoticeDrainResult = { sent: 0, failed: 0, retried: 0 };
   for (const notice of await store.claimDue(nowMs, NOTICE_DRAIN_BATCH)) {
@@ -51,6 +54,10 @@ export async function drainSessionNotices(
     }
     if (!channel) {
       await fail("channel_unavailable");
+      continue;
+    }
+    if (!channel.isEnabled(settings)) {
+      await fail("channel_disabled");
       continue;
     }
     let outcome;
@@ -76,8 +83,10 @@ export async function drainSessionNotices(
 }
 
 /**
- * The scheduled entry point. Sends only in `live` mode; in any other mode
- * pending rows wait, and expire if the mode stays that way.
+ * The scheduled entry point. Sends only in `live` mode. In any other mode,
+ * or with the integration disabled, the rows still waiting are settled as
+ * failed (`not_live`) and lose any agent text: a mode switch is the admin
+ * saying stop, and agent words must not wait in the table for a later one.
  */
 export async function runSessionNoticesJob(
   env: Env,
@@ -86,12 +95,19 @@ export async function runSessionNoticesJob(
   nowMs: number
 ): Promise<void> {
   const settings = await loadNotificationSettings(db);
-  if (!settings.enabled || settings.mode !== "live") return;
+  const store = new SessionNoticeStore(db);
+  if (!settings.enabled || settings.mode !== "live") {
+    const dropped = await store.failPending("not_live", nowMs);
+    if (dropped > 0)
+      log.info("session_notice.dropped", { notices: dropped, error_code: "not_live" });
+    return;
+  }
   const result = await drainSessionNotices(
-    new SessionNoticeStore(db),
+    store,
     createNoticeChannelRegistry(env, db, log),
     log,
-    nowMs
+    nowMs,
+    settings
   );
   if (result.sent > 0 || result.failed > 0 || result.retried > 0) {
     log.info("session_notice.drained", { ...result });

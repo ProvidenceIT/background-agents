@@ -421,7 +421,10 @@ Automations:
   session's agent asked for (`src/session-tools/notify-user.ts`, revision = its ordinal, at most
   five per session and one a minute). Its cleaned text (mentions, markup and foreign links removed)
   is kept only until the row settles, then dropped; the row keeps its SHA-256 and length. Shadow
-  rows never hold the text.
+  rows never hold the text. A row cannot wait indefinitely: the first tick outside `live` mode (or
+  with the integration disabled) settles every waiting row as failed (`not_live`), a channel
+  switched off fails its waiting rows when they come due (`channel_disabled`), and deleting a
+  session fails its waiting rows (`session_deleted`); each drops the text.
 - `subscription_sharing`: the single-row (`id = 'global'`) workspace policy, `household` (default,
   read when the row is absent) or `owner_only`, managed by `/subscription-sharing`.
 - `auth_home_leases` and `auth_home_lease_queue`: the Codex seat, one running Codex session per home

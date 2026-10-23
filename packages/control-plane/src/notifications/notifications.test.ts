@@ -2,10 +2,14 @@ import { DatabaseSync } from "node:sqlite";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { noticeEnvelopeSchema } from "@open-inspect/shared/notices";
-import type { NotificationSettings } from "@open-inspect/shared/types/integrations";
+import {
+  resolveNotificationSettings,
+  type NotificationSettings,
+} from "@open-inspect/shared/types/integrations";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DirectMessageDelivery, DirectMessagePayload } from "../auth-homes/expiry-digest";
 import { IntegrationSettingsStore } from "../db/integration-settings";
+import { SessionIndexStore } from "../db/session-index";
 import { applyMigrations } from "../node/migrate";
 import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
 import type { BackgroundTasks } from "../platform-ports";
@@ -26,6 +30,7 @@ import {
 } from "./notifications.test-support";
 import {
   SessionNoticeRecorder,
+  loadNotificationSettings,
   recordSessionNotices,
   settledSessionFacts,
   type SettlementReading,
@@ -44,6 +49,7 @@ const SESSION = "9f2c4e1a7b3d5f60a1b2c3d4e5f60718";
 const TITLE = "Acme client secret plan";
 const NOW = Date.UTC(2026, 9, 23, 12);
 const OCCURRED_AT_MS = NOW - 2_000;
+const LIVE = resolveNotificationSettings({ enabled: true, mode: "live" });
 
 function migratedDatabase(): NodeSqlDatabase {
   const sqlite = new DatabaseSync(":memory:");
@@ -305,12 +311,60 @@ describe("session notices", () => {
       expect(await rows()).toEqual([]);
     });
 
+    it("never keeps an agent's words past live mode or the session", async () => {
+      const store = new SessionNoticeStore(db);
+      const agentRow = (revision: number, sessionId = SESSION) =>
+        store.insert(
+          {
+            sessionId,
+            revision,
+            status: "agent",
+            channel: "teams-agent",
+            recipientRef: OWNER_OID,
+            reasonCode: "agent",
+            payload: JSON.stringify({ kind: "agent", text: "the agent's words", textLength: 17 }),
+            state: "pending",
+          },
+          NOW
+        );
+      const agentRows = async () => (await rows()).filter((row) => row.channel === "teams-agent");
+      await configure({ enabled: true, mode: "live" });
+      await agentRow(-1);
+      await seedSession(db, "deleted-session");
+      await agentRow(-1, "deleted-session");
+
+      await new SessionIndexStore(db).delete("deleted-session");
+      expect(await agentRows()).toEqual([
+        expect.objectContaining({ session_id: SESSION, state: "pending" }),
+        expect.objectContaining({
+          session_id: "deleted-session",
+          state: "failed",
+          error_code: "session_deleted",
+          payload: JSON.stringify({ kind: "agent", textLength: 17 }),
+        }),
+      ]);
+
+      await configure({ enabled: false, mode: "live" });
+      await runSessionNoticesJob({} as Env, db, log, NOW);
+      expect(await agentRows()).toEqual([
+        expect.objectContaining({
+          session_id: SESSION,
+          state: "failed",
+          error_code: "not_live",
+          payload: JSON.stringify({ kind: "agent", textLength: 17 }),
+        }),
+        expect.objectContaining({ session_id: "deleted-session" }),
+      ]);
+    });
+
     it("records shadow rows that the drainer never sends", async () => {
       await configure({ enabled: true, mode: "shadow" });
       expect(await record(facts())).toBe(1);
       expect(await rows()).toEqual([expect.objectContaining({ state: "shadow" })]);
       await runSessionNoticesJob({} as Env, db, log, NOW);
-      expect(await drainSessionNotices(new SessionNoticeStore(db), registry(), log, NOW)).toEqual({
+      expect(
+        await drainSessionNotices(new SessionNoticeStore(db), registry(), log, NOW, LIVE)
+      ).toEqual({
         sent: 0,
         failed: 0,
         retried: 0,
@@ -320,8 +374,14 @@ describe("session notices", () => {
   });
 
   describe("draining", () => {
-    const drain = (nowMs = NOW) =>
-      drainSessionNotices(new SessionNoticeStore(db), registry(), log, nowMs);
+    const drain = async (nowMs = NOW) =>
+      drainSessionNotices(
+        new SessionNoticeStore(db),
+        registry(),
+        log,
+        nowMs,
+        await loadNotificationSettings(db)
+      );
 
     beforeEach(async () => {
       await configure({ enabled: true, mode: "live" });
@@ -391,11 +451,21 @@ describe("session notices", () => {
         new SessionNoticeStore(db),
         new NoticeChannelRegistry([]),
         log,
-        NOW
+        NOW,
+        LIVE
       );
       expect(result).toEqual({ sent: 0, failed: 1, retried: 0 });
       expect(await rows()).toEqual([
         expect.objectContaining({ error_code: "channel_unavailable" }),
+      ]);
+    });
+
+    it("fails a waiting row whose channel the settings turned off, and drops its text", async () => {
+      await configure({ enabled: true, mode: "live", channels: { teams: false } });
+      expect(await drain()).toEqual({ sent: 0, failed: 1, retried: 0 });
+      expect(posted).toEqual([]);
+      expect(await rows()).toEqual([
+        expect.objectContaining({ state: "failed", error_code: "channel_disabled" }),
       ]);
     });
 
@@ -411,7 +481,12 @@ describe("session notices", () => {
       await configure({ enabled: true, mode: "shadow" });
       await runSessionNoticesJob(env, db, log, NOW);
       expect(requests).toEqual([]);
+      // Leaving live mode drops what was waiting rather than sending it later.
+      expect(await rows()).toEqual([
+        expect.objectContaining({ revision: 7, state: "failed", error_code: "not_live" }),
+      ]);
       await configure({ enabled: true, mode: "live" });
+      await record(facts({ revision: 8 }));
       await runSessionNoticesJob(env, db, log, NOW);
       expect(requests).toEqual([
         expect.objectContaining({ recipientAadObjectId: OWNER_OID, signature: expect.any(String) }),
@@ -467,7 +542,7 @@ describe("motion doorbell notices", () => {
   const record = (f: SettledSessionFacts, nowMs = NOW) =>
     recordSessionNotices(f, { db, registry: registry(), nowMs });
   const drain = (nowMs = NOW) =>
-    drainSessionNotices(new SessionNoticeStore(db), registry(), log, nowMs);
+    drainSessionNotices(new SessionNoticeStore(db), registry(), log, nowMs, LIVE);
   const configure = (settings: NotificationSettings) =>
     new IntegrationSettingsStore(db).setGlobal("notifications", { defaults: settings });
   const rows = async () =>

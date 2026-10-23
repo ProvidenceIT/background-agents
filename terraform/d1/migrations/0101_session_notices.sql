@@ -3,7 +3,9 @@
 -- makes a repeated projection of the same status revision a no-op, so each
 -- recipient hears about a revision once. `payload` is the channel's closed,
 -- content-free message (a NoticeEnvelope for Teams): never a title, prompt,
--- agent text, error string or cost. `state` is pending (due for the drainer),
+-- error string or cost. The one exception is a `teams-agent` row (notify_user):
+-- it holds the agent's cleaned text until the row settles (sent or failed),
+-- then keeps only its hash and length. `state` is pending (due for the drainer),
 -- shadow (recorded in shadow mode, never sent), sent or failed; error_code is
 -- a short code, never a remote response body. The table doubles as the audit
 -- of who was told what, where.

@@ -3,7 +3,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentNoticeSchema } from "@open-inspect/shared/notices";
 import type { SessionToolGate } from "@open-inspect/shared/session-tools";
-import type { NotificationSettings } from "@open-inspect/shared/types/integrations";
+import {
+  resolveNotificationSettings,
+  type NotificationSettings,
+} from "@open-inspect/shared/types/integrations";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DirectMessagePayload } from "../auth-homes/expiry-digest";
 import { IntegrationSettingsStore } from "../db/integration-settings";
@@ -240,7 +243,15 @@ describe("session tool routes", () => {
           }),
         ]);
         const store = new SessionNoticeStore(db);
-        expect(await drainSessionNotices(store, registry, silentLogger(), NOW + 1)).toEqual({
+        expect(
+          await drainSessionNotices(
+            store,
+            registry,
+            silentLogger(),
+            NOW + 1,
+            resolveNotificationSettings({ enabled: true, mode: "live" })
+          )
+        ).toEqual({
           sent: 1,
           failed: 0,
           retried: 0,

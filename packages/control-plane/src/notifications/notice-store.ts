@@ -1,4 +1,4 @@
-import type { SqlDatabase } from "../db/sql-database";
+import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 
 /**
  * The session notice outbox (`session_notices`, migration 0101).
@@ -68,6 +68,29 @@ export function withoutFreeText(payload: string): string {
   if (!("text" in parsed)) return payload;
   const { text: _text, ...rest } = parsed as Record<string, unknown>;
   return JSON.stringify(rest);
+}
+
+/** The payload column without a `notify_user` notice's words, in SQL (see withoutFreeText). */
+const PAYLOAD_WITHOUT_TEXT_SQL =
+  "CASE WHEN json_valid(payload) THEN json_remove(payload, '$.text') ELSE payload END";
+
+/**
+ * Settle a deleted session's waiting notices as failed and drop any agent
+ * text they hold; batched with the session row's own delete.
+ */
+export function failPendingNoticesOfSessionStatement(
+  db: SqlDatabase,
+  sessionId: string,
+  nowMs: number
+): SqlStatement {
+  return db
+    .prepare(
+      `UPDATE session_notices
+       SET state = 'failed', claimed_at = NULL, error_code = 'session_deleted',
+         payload = ${PAYLOAD_WITHOUT_TEXT_SQL}, updated_at = ?
+       WHERE session_id = ? AND state = 'pending'`
+    )
+    .bind(nowMs, sessionId);
 }
 
 export class SessionNoticeStore {
@@ -164,6 +187,23 @@ export class SessionNoticeStore {
       )
       .bind(errorCode, payload ?? null, nowMs, id)
       .run();
+  }
+
+  /**
+   * Settle every waiting notice that no live tick holds as failed, without
+   * agent text; for a tick outside live mode, which must not send them later.
+   */
+  async failPending(errorCode: string, nowMs: number): Promise<number> {
+    const result = await this.db
+      .prepare(
+        `UPDATE session_notices
+         SET state = 'failed', claimed_at = NULL, error_code = ?,
+           payload = ${PAYLOAD_WITHOUT_TEXT_SQL}, updated_at = ?
+         WHERE state = 'pending' AND (claimed_at IS NULL OR claimed_at <= ?)`
+      )
+      .bind(errorCode, nowMs, nowMs - STALE_NOTICE_CLAIM_MS)
+      .run();
+    return result.meta.changes;
   }
 
   /** Give the claim back and try again from `nextAttemptAtMs`. */
