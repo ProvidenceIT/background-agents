@@ -4,9 +4,17 @@ import { harnessIdSchema } from "../harnesses";
 import { escapeRegExp } from "../regex";
 import { z } from "zod";
 import { teamSettingsSchema } from "./teams";
+import { SESSION_TOOL_GATES, sessionToolGateSchema, type SessionToolGate } from "../session-tools";
 
 export type IntegrationId =
-  "github" | "linear" | "code-server" | "vnc" | "sandbox" | "slack" | "notifications";
+  | "github"
+  | "linear"
+  | "code-server"
+  | "vnc"
+  | "sandbox"
+  | "slack"
+  | "notifications"
+  | "session-tools";
 
 /** Enforces the common shape for all integration configurations. */
 export interface IntegrationEntry<
@@ -666,6 +674,32 @@ export function resolveNotificationSettings(
 }
 
 /**
+ * Session tools the agent may call (see `../session-tools.ts`), as the gates
+ * that install them. `enabledRepos` narrows which repositories get any; a
+ * repository override replaces the default list. Nothing is enabled unless a
+ * workspace admin lists it.
+ */
+export const sessionToolsSettingsSchema = z.strictObject({
+  tools: z.array(sessionToolGateSchema).max(SESSION_TOOL_GATES.length).optional(),
+});
+export type SessionToolsSettings = z.infer<typeof sessionToolsSettingsSchema>;
+
+/**
+ * The gates a session gets from its resolved settings: none unless its
+ * repository is allowed and a list names them. Repository-less sessions use
+ * the global default list.
+ */
+export function resolveSessionToolGates(
+  resolved: { enabledRepos: string[] | null; settings: SessionToolsSettings | undefined },
+  repo: string | null
+): SessionToolGate[] {
+  if (repo !== null && resolved.enabledRepos !== null) {
+    if (!resolved.enabledRepos.includes(repo.toLowerCase())) return [];
+  }
+  return [...new Set(resolved.settings?.tools ?? [])].sort();
+}
+
+/**
  * Integrations that accept environment-level setting overrides — the top layer
  * of the resolution chain (global defaults → primary-repo overrides →
  * environment overrides). Limited to the settings the session-scoped
@@ -728,6 +762,10 @@ export const integrationSettingsSchemas = {
       defaults: notificationSettingsSchema.optional(),
     }),
     repo: z.strictObject({}),
+  },
+  "session-tools": {
+    global: integrationGlobalSettingsSchema(sessionToolsSettingsSchema),
+    repo: sessionToolsSettingsSchema,
   },
 } as const;
 
@@ -895,5 +933,10 @@ export const INTEGRATION_DEFINITIONS: {
     id: "notifications",
     name: "Session notices",
     description: "Tell a session's owner on Teams when the session finishes or needs them",
+  },
+  {
+    id: "session-tools",
+    name: "Session tools",
+    description: "Tools the agent may call: notify the owner, read and annotate its motion Task",
   },
 ];

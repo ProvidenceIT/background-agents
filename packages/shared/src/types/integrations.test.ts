@@ -36,6 +36,7 @@ import {
   integrationSettingsSchemas,
   notificationSettingsSchema,
   resolveNotificationSettings,
+  resolveSessionToolGates,
   NOTIFICATION_DEFAULTS,
   slackIntegrationSettingsRoutingResponseSchema,
   validateSandboxChildSessionLimits,
@@ -684,5 +685,39 @@ describe("notification settings", () => {
     expect(integrationSettingsSchemas.notifications.repo.safeParse({ enabled: true }).success).toBe(
       false
     );
+  });
+});
+
+describe("session tool settings", () => {
+  const settings = integrationSettingsSchemas["session-tools"];
+
+  it("enables nothing until a list names the gates", () => {
+    expect(resolveSessionToolGates({ enabledRepos: null, settings: undefined }, "a/b")).toEqual([]);
+    expect(resolveSessionToolGates({ enabledRepos: null, settings: {} }, null)).toEqual([]);
+  });
+
+  it("honours the repository allowlist and deduplicates the gates", () => {
+    const resolved = {
+      enabledRepos: ["acme/widgets"],
+      settings: { tools: ["notify", "notify", "motion_read"] as const },
+    };
+    expect(
+      resolveSessionToolGates(
+        { ...resolved, settings: { tools: [...resolved.settings.tools] } },
+        "Acme/Widgets"
+      )
+    ).toEqual(["motion_read", "notify"]);
+    expect(
+      resolveSessionToolGates({ ...resolved, settings: { tools: ["notify"] } }, "acme/other")
+    ).toEqual([]);
+    expect(
+      resolveSessionToolGates({ enabledRepos: [], settings: { tools: ["notify"] } }, null)
+    ).toEqual(["notify"]);
+  });
+
+  it("accepts only known gates", () => {
+    expect(settings.global.safeParse({ defaults: { tools: ["notify"] } }).success).toBe(true);
+    expect(settings.repo.safeParse({ tools: ["ask_openclaw"] }).success).toBe(false);
+    expect(settings.repo.safeParse({ tools: ["notify"], recipient: "x" }).success).toBe(false);
   });
 });

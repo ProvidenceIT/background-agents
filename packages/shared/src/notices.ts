@@ -11,6 +11,7 @@
  */
 
 import { z } from "zod";
+import { NOTIFY_USER_MESSAGE_MAX_CHARS, NOTIFY_USER_URGENCIES } from "./session-tools";
 
 /**
  * Why a notice was raised. `limit_hit` and `recovery_needed` are failed
@@ -99,6 +100,113 @@ export function renderTeamsNoticeText(
   }
   if (options.webAppUrl) {
     lines.push(`${options.webAppUrl.replace(/\/+$/, "")}/session/${envelope.sessionId}`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * A notice the session's agent asked for (`notify_user`). It is the one notice
+ * that carries words the agent chose, so the words are cleaned before they are
+ * stored (`sanitizeAgentNoticeText`), kept only until the notice settles, and
+ * audited as a hash and a length. Everything else is closed like the envelope.
+ */
+export const AGENT_NOTICE_KIND = "agent";
+export const AGENT_NOTICE_TEXT_MAX_CHARS = NOTIFY_USER_MESSAGE_MAX_CHARS;
+
+export const agentNoticeSchema = z.strictObject({
+  kind: z.literal(AGENT_NOTICE_KIND),
+  sessionId: z.string().min(1).max(128),
+  /** `owner/name` of the primary repository, or null for a session without one. */
+  repo: z.string().min(1).max(512).nullable(),
+  urgency: z.enum(NOTIFY_USER_URGENCIES),
+  /** Present until the notice settles (sent or failed); never in a shadow row. */
+  text: z.string().min(1).max(AGENT_NOTICE_TEXT_MAX_CHARS).optional(),
+  textSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  textLength: z.number().int().nonnegative(),
+});
+export type AgentNotice = z.infer<typeof agentNoticeSchema>;
+
+export interface AgentNoticeSanitizeOptions {
+  /** Hosts whose links survive, besides github.com: this deployment's web app. */
+  allowedLinkHosts: readonly string[];
+}
+
+const LINK_REMOVED = "[link removed]";
+const URL_PATTERN = /\b(?:https?:\/\/|www\.)[^\s<>()\]]+/gi;
+/** C0 controls but tab and newline, DEL, zero-width and bidi overrides. */
+function isInvisible(char: string): boolean {
+  const code = char.codePointAt(0) ?? 0;
+  return (
+    (code < 0x20 && code !== 0x09 && code !== 0x0a) ||
+    code === 0x7f ||
+    (code >= 0x200b && code <= 0x200f) ||
+    (code >= 0x202a && code <= 0x202e) ||
+    (code >= 0x2060 && code <= 0x2064) ||
+    code === 0xfeff
+  );
+}
+
+function isAllowedLink(raw: string, hosts: readonly string[]): boolean {
+  try {
+    const url = new URL(raw.startsWith("www.") ? `https://${raw}` : raw);
+    if (url.protocol !== "https:") return false;
+    const host = url.hostname.toLowerCase();
+    return [...hosts, "github.com"].some(
+      (allowed) => host === allowed.toLowerCase() || host.endsWith(`.${allowed.toLowerCase()}`)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The agent's words as a notice may carry them: plain text on at most a few
+ * lines, no markup, no mention that could ping someone, and no link except to
+ * this deployment or GitHub. A prompt-injected agent can still choose the
+ * words, so the route that calls this is the only control: it never lets the
+ * agent pick the recipient.
+ */
+export function sanitizeAgentNoticeText(raw: string, options: AgentNoticeSanitizeOptions): string {
+  let text = raw.normalize("NFKC");
+  // Teams mention entities and any other markup.
+  text = text.replace(/<at>[\s\S]*?<\/at>/gi, "");
+  text = text.replace(/<[^>]*>/g, "");
+  // Markdown links keep their label; the target is judged like a bare link.
+  text = text.replace(
+    /!?\[([^\]]*)\]\(([^)\s]*)[^)]*\)/g,
+    (_match, label: string, target: string) =>
+      isAllowedLink(target, options.allowedLinkHosts) ? `${label} ${target}` : label
+  );
+  text = text.replace(URL_PATTERN, (url) =>
+    isAllowedLink(url, options.allowedLinkHosts) ? url : LINK_REMOVED
+  );
+  // @everyone, @channel and @handles lose the sigil.
+  text = text.replace(/(^|[^\w@])@(?=[\w.-])/g, "$1");
+  // Control and zero-width characters, then whitespace runs and blank lines.
+  text = [...text].filter((char) => !isInvisible(char)).join("");
+  text = text
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter((line) => line.length > 0)
+    .slice(0, 6)
+    .join("\n");
+  return text.slice(0, AGENT_NOTICE_TEXT_MAX_CHARS).trim();
+}
+
+/** The agent's notice as plain text for a Teams direct message. */
+export function renderTeamsAgentNoticeText(
+  notice: AgentNotice & { text: string },
+  options: NoticeRenderOptions
+): string {
+  const where = notice.repo ? ` in ${notice.repo}` : "";
+  const lines = [
+    notice.urgency === "high"
+      ? `From your Open-Inspect agent${where} (needs you):`
+      : `From your Open-Inspect agent${where}:`,
+    notice.text,
+  ];
+  if (options.webAppUrl) {
+    lines.push(`${options.webAppUrl.replace(/\/+$/, "")}/session/${notice.sessionId}`);
   }
   return lines.join("\n");
 }

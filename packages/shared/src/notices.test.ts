@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   NOTICE_REASONS,
+  agentNoticeSchema,
+  renderTeamsAgentNoticeText,
+  sanitizeAgentNoticeText,
   noticeEnvelopeSchema,
   renderTeamsNoticeText,
   type NoticeEnvelope,
@@ -85,5 +88,67 @@ describe("renderTeamsNoticeText", () => {
 
   it("works for a session without a repository", () => {
     expect(renderTeamsNoticeText({ ...BASE, repo: null }, {})).not.toContain("null");
+  });
+});
+
+describe("agent notices", () => {
+  const hosts = { allowedLinkHosts: ["oi.example.test"] };
+
+  it("strips mentions, markup and links other than this deployment's and GitHub's", () => {
+    expect(
+      sanitizeAgentNoticeText(
+        "<at>Bram</at> @everyone PR ready: https://github.com/acme/widgets/pull/7 see [login](https://evil.example/x) and http://oi.example.test/a www.evil.example <b>now</b>",
+        hosts
+      )
+    ).toBe(
+      "everyone PR ready: https://github.com/acme/widgets/pull/7 see login and [link removed] [link removed] now"
+    );
+    expect(sanitizeAgentNoticeText("[session](https://oi.example.test/session/1)", hosts)).toBe(
+      "session https://oi.example.test/session/1"
+    );
+    expect(sanitizeAgentNoticeText("mail me at a@b.example", hosts)).toBe("mail me at a@b.example");
+  });
+
+  it("collapses whitespace and control characters and caps the length", () => {
+    expect(sanitizeAgentNoticeText("a​\u0007b\n\n\n  c   d  ", hosts)).toBe("ab\nc d");
+    expect(sanitizeAgentNoticeText("x".repeat(900), hosts)).toHaveLength(500);
+    expect(sanitizeAgentNoticeText("<at>x</at> ", hosts)).toBe("");
+  });
+
+  it("is closed: no recipient, no title, and the text is optional", () => {
+    const notice = {
+      kind: "agent",
+      sessionId: "s1",
+      repo: "acme/widgets",
+      urgency: "normal",
+      textSha256: "0".repeat(64),
+      textLength: 3,
+    };
+    expect(agentNoticeSchema.safeParse(notice).success).toBe(true);
+    expect(agentNoticeSchema.safeParse({ ...notice, title: "Acme" }).success).toBe(false);
+    expect(agentNoticeSchema.safeParse({ ...notice, recipient: "x" }).success).toBe(false);
+  });
+
+  it("renders who it is from, the words and the session link", () => {
+    expect(
+      renderTeamsAgentNoticeText(
+        {
+          kind: "agent",
+          sessionId: "s1",
+          repo: "acme/widgets",
+          urgency: "high",
+          text: "Blocked on the API key.",
+          textSha256: "0".repeat(64),
+          textLength: 23,
+        },
+        { webAppUrl: "https://oi.example.test/" }
+      )
+    ).toBe(
+      [
+        "From your Open-Inspect agent in acme/widgets (needs you):",
+        "Blocked on the API key.",
+        "https://oi.example.test/session/s1",
+      ].join("\n")
+    );
   });
 });
