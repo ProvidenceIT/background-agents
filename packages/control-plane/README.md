@@ -415,7 +415,9 @@ Automations:
 - `session_notices`: the session notice outbox (`src/notifications`). One row per settled root
   session's status revision, channel and recipient, written when the `notifications` integration is
   on (`shadow` rows are never sent) and drained each minute in `live` mode. The payload is the
-  closed `NoticeEnvelope`: never a title, prompt, agent text, error string or cost.
+  channel's closed message, the `NoticeEnvelope` for a Teams DM and the doorbell body for motion
+  (`channel = 'motion'`, recipient the session's external ref): never a title, prompt, agent text,
+  error string or cost.
 - `subscription_sharing`: the single-row (`id = 'global'`) workspace policy, `household` (default,
   read when the row is absent) or `owner_only`, managed by `/subscription-sharing`.
 - `auth_home_leases` and `auth_home_lease_queue`: the Codex seat, one running Codex session per home

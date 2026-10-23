@@ -542,7 +542,19 @@ its permission ceiling alone admits it nowhere.
   web sign-in stored resolves, and an unknown one gets 403 `service_actor_not_enrolled` with no
   user, identity or assignment written. Its ceiling is sessions (create, read, collaborate,
   lifecycle) and repositories and environments (use). Sessions it starts carry
-  `spawnSource: "motion"`. It has no actorless grants and receives no callbacks.
+  `spawnSource: "motion"`. It has no actorless grants. It receives no callbacks, only a
+  metadata-only doorbell (signed, actorless) when a session it created settles; see below.
+- **The doorbell.** With `MOTION_CALLBACK_URL` and `SERVICE_AUTH_SECRET_MOTION_CALLBACK` both set
+  and the `notifications` integration live, the control plane posts
+  `POST {MOTION_CALLBACK_URL}/api/v1/open-inspect/events` once per status revision of a root session
+  whose external ref belongs to `motion`, when it reaches `completed`, `failed`, `cancelled` or
+  `archived` (`src/notifications/senders/motion-doorbell.ts`). The body is
+  `{type, sessionId, externalRef, status, revision, occurredAt}` and nothing else: no title, prompt,
+  agent text, error, cost, repository or person. It is sig1-signed under the service name
+  `open-inspect` with no `X-OpenInspect-Actor`, with its own key, distinct from
+  `SERVICE_AUTH_SECRET_MOTION` so one leaked key does not open both directions. Motion trusts the
+  body only to pick the row it re-reads from the control plane. Motion is not a callback destination
+  (`CALLBACK_DESTINATIONS`), and the doorbell key is not a verification key here.
 - **Ten opt-in routes.** A route admits an opt-in service only when its policy names it in
   `optInServices`; every other route answers 403 `service_capability_required` before the actor is
   resolved, whatever the ceiling says. Motion is named on exactly `POST /sessions`, `GET /sessions`,
