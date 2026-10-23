@@ -75,7 +75,12 @@ export function parseMotionCallbackUrl(raw: string): string {
   if (url.search !== "" || url.hash !== "" || raw.includes("?") || raw.includes("#")) {
     throw new Error(`MOTION_CALLBACK_URL must not carry a query or fragment, got ${raw}`);
   }
-  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+  // The signature covers the fixed path MOTION_DOORBELL_PATH, so a base with a
+  // path of its own would post somewhere the signature does not name.
+  if (url.pathname.replace(/\/+$/, "") !== "") {
+    throw new Error(`MOTION_CALLBACK_URL must be an origin without a path, got ${raw}`);
+  }
+  return url.origin;
 }
 
 const motionDoorbellBodySchema = z.strictObject({

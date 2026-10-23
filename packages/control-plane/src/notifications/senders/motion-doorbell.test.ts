@@ -127,19 +127,17 @@ describe("motionDoorbellBody", () => {
 });
 
 describe("parseMotionCallbackUrl", () => {
-  it("takes an https base, or http to localhost, and strips the trailing slash", () => {
+  it("takes an https origin, or http to localhost, and strips the trailing slash", () => {
     expect(parseMotionCallbackUrl("https://motion.providenceit.nl/")).toBe(
       "https://motion.providenceit.nl"
-    );
-    expect(parseMotionCallbackUrl("https://example.test/motion//")).toBe(
-      "https://example.test/motion"
     );
     expect(parseMotionCallbackUrl("http://localhost:3000")).toBe("http://localhost:3000");
     expect(parseMotionCallbackUrl("http://127.0.0.1:3000/")).toBe("http://127.0.0.1:3000");
   });
 
-  it("refuses plain http elsewhere, a query, a fragment and a relative URL", () => {
+  it("refuses plain http elsewhere, a path, a query, a fragment and a relative URL", () => {
     for (const raw of [
+      "https://example.test/motion",
       "http://motion.providenceit.nl",
       "https://motion.example.test/?a=1",
       "https://motion.example.test/#x",

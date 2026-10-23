@@ -45,6 +45,12 @@
         "reason": "Merge audit payload, same constraint as authorization-store: before/after state is read inside the mutating batch. Postgres form is json_build_object."
       }
     },
+    "packages/control-plane/src/notifications/notice-store.ts": {
+      "json-function": {
+        "occurrences": ["json_remove(", "json_valid("],
+        "reason": "Dropping a notify_user notice's text has to happen in the same statement that settles the row: the session delete runs it inside the delete's batch, and the mode sweep fails every waiting row at once without reading them first. Postgres form is payload::jsonb - 'text'."
+      }
+    },
     "terraform/d1/migrations/0076_anthropic_provider_accounts.sql": {
       "create-trigger": {
         "occurrences": ["CREATE TRIGGER"],
