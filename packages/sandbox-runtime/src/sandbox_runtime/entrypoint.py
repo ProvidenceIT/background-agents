@@ -13,6 +13,7 @@ from .agent_bridge_process import AgentBridgeProcess
 from .boot_events import BootEventLog
 from .browser_desktop import BrowserDesktop
 from .claude_stager import ClaudeStager, isolated_claude_config_dir, resolve_claude_config_dir
+from .cli_stager import CliStager, cli_layout
 from .code_server import CodeServer
 from .codex_stager import CodexStager, resolve_codex_config_dir, resolve_codex_managed_skills_dir
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
@@ -68,6 +69,8 @@ def build_harness_process(
             return ClaudeStager(config.claude_stager_config(), log, config_dir=claude_config_dir)
         case HarnessId.CODEX:
             return CodexStager(config.has_repository, log)
+        case HarnessId.GROK | HarnessId.AGY:
+            return CliStager(config.harness, config.has_repository, log)
     raise ValueError(f"Unsupported harness: {config.harness}")
 
 
@@ -98,18 +101,24 @@ def harness_config_dir(harness: HarnessId, claude_config_dir: Path | None) -> Pa
         case HarnessId.CODEX:
             # Never CODEX_HOME: that is the subscription home, shared across sessions.
             return resolve_codex_config_dir()
+        case HarnessId.GROK | HarnessId.AGY:
+            # Never the CLI's own home: memory and tool config stay beside it.
+            return cli_layout(harness).config_dir
     raise ValueError(f"Unsupported harness: {harness}")
 
 
 def managed_skills_destination(harness: HarnessId, claude_config_dir: Path | None) -> Path:
     """Where managed skills land: wherever the harness discovers user skills.
 
-    OpenCode and Claude read ``skills/`` in their own config tree. Codex never
-    reads its harness directory for skills, so its managed skills go where it
-    does look.
+    OpenCode and Claude read ``skills/`` in their own config tree. Codex, grok
+    and agy never read their harness directory for skills, so their managed
+    skills go where each does look: ``$GROK_HOME/skills`` for grok,
+    ``~/.gemini/config/skills`` for agy.
     """
     if harness is HarnessId.CODEX:
         return resolve_codex_managed_skills_dir()
+    if harness in (HarnessId.GROK, HarnessId.AGY):
+        return cli_layout(harness).skills_dir
     return harness_config_dir(harness, claude_config_dir) / "skills"
 
 

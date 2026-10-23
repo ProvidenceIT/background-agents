@@ -12,12 +12,15 @@ from ..credentials.provider_credential_client import RuntimeCredentialClient
 from ..memories import append_memory, memory_text
 from ..opencode_server import resolve_opencode_global_config_dir
 from ..session_tools_contract import enabled_gates_from_env
+from .agy import AgyHarness
 from .base import (
     DEFAULT_HARNESS_ID,
     DETERMINISTIC_FAILURE_EXIT_CODE,
     AgentHarness,
+    AgyHarnessConfig,
     BridgeEvent,
     EventSink,
+    GrokHarnessConfig,
     HarnessId,
     HarnessProcessOwner,
     HarnessPrompt,
@@ -31,6 +34,8 @@ from .claude import ClaudeHarness, ClaudeHarnessConfig
 from .claude_env import OAUTH_MANAGED_ENV_VAR
 from .claude_tools import ToolServerConfig
 from .codex import DEFAULT_CODEX_MODEL, CodexHarness, CodexHarnessConfig
+from .codex_tools import write_tool_config
+from .grok import GrokHarness
 from .opencode import OpencodeHarness
 from .opencode_client import OpenCodeClient
 
@@ -130,7 +135,49 @@ def build_agent_harness(
                 log=log,
                 limits=limits,
             )
+        case HarnessId.GROK | HarnessId.AGY:
+            return _build_cli_harness(harness_id, identity=identity, log=log, limits=limits)
     raise ValueError(f"Unsupported harness: {harness_id}")
+
+
+def _build_cli_harness(
+    harness_id: HarnessId,
+    *,
+    identity: BridgeIdentity,
+    log: StructuredLogger,
+    limits: PromptLimits,
+) -> AgentHarness:
+    """grok and agy: one child per turn, configured from the ``CliStager`` handoff."""
+    # Imported here: cli_stager imports this package's env modules, so a
+    # module-level import would be a cycle whichever side loads first.
+    from ..cli_stager import CliHarnessHandoff, cli_layout
+
+    handoff = CliHarnessHandoff.read(cli_layout(harness_id).handoff_path)
+    session_config = _session_config_from_env()
+    mcp_servers = _mcp_servers_from(session_config)
+    if mcp_servers:
+        # Repository MCP servers are not wired into these CLIs; say so rather
+        # than start a session that silently lacks them.
+        log.warn(f"{harness_id.value}.mcp_servers_unsupported", count=len(mcp_servers))
+    config_class = GrokHarnessConfig if harness_id is HarnessId.GROK else AgyHarnessConfig
+    config = config_class(
+        workdir=handoff.workdir,
+        config_dir=handoff.config_dir,
+        cli_home=handoff.cli_home,
+        # Without a session model the harness's own default applies.
+        default_model=str(session_config.get("model") or config_class.default_model),
+        # Both CLIs read the workspace AGENTS.md themselves; memory is what
+        # they would otherwise not see.
+        memory_text=memory_text(handoff.config_dir),
+        # Written here, not by the stager: it carries the session's token.
+        tool_config_path=write_tool_config(
+            _tool_server_config(identity, has_repository=handoff.has_repository),
+            handoff.config_dir,
+        ),
+    )
+    if isinstance(config, GrokHarnessConfig):
+        return GrokHarness(config=config, log=log, limits=limits)
+    return AgyHarness(config=config, log=log, limits=limits)
 
 
 def _tool_server_config(identity: BridgeIdentity, *, has_repository: bool) -> ToolServerConfig:
