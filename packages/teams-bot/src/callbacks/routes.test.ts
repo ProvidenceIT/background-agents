@@ -955,6 +955,24 @@ describe("POST /callbacks/direct_message", () => {
     });
   });
 
+  it("answers 403 when the person cannot be reached (the app is not installed for them)", async () => {
+    for (const status of [403, 404]) {
+      const h = harness({
+        connector: {
+          "POST /teams/v3/conversations": () => json({ error: { code: "Forbidden" } }, status),
+        },
+      });
+      const refused = await h.callback("direct_message", directMessage());
+      expect(refused.status).toBe(403);
+      expect(await refused.json()).toEqual({ error: "recipient unreachable" });
+    }
+    // A throttled connector is not a verdict about the person.
+    const throttled = harness({
+      connector: { "POST /teams/v3/conversations": () => json({ error: "slow down" }, 429) },
+    });
+    expect((await throttled.callback("direct_message", directMessage())).status).toBe(503);
+  });
+
   it("uses the connector endpoint the tenant's activities named, and lets a failed post be retried", async () => {
     let failCreate = true;
     const h = harness({
