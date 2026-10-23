@@ -132,23 +132,45 @@ export interface AgentNoticeSanitizeOptions {
 }
 
 const LINK_REMOVED = "[link removed]";
-const URL_PATTERN = /\b(?:https?:\/\/|www\.)[^\s<>()\]]+/gi;
+/** Any scheme with `//`, and `www.` hosts. */
+const URL_PATTERN = /\b(?:[a-z][a-z0-9+.-]*:\/\/|www\.)[^\s<>()\]]+/gi;
+/** Not inside a word, path, address or URL that an earlier pass already judged. */
+const BARE_START = String.raw`(?<![\p{L}\p{N}_@./:\-])`;
+const BARE_HOST = String.raw`(?:(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+\p{L}{2,63}|\d{1,3}(?:\.\d{1,3}){3})`;
+/** `host.tld/…` or `host:port/…` without a scheme: chat clients link these. */
+const BARE_PATH_PATTERN = new RegExp(
+  String.raw`${BARE_START}${BARE_HOST}(?::\d{1,5})?\/[^\s<>()\]]*`,
+  "gu"
+);
+/** A lone `host.tld`. File names look the same, so their extensions are spared. */
+const BARE_HOST_PATTERN = new RegExp(String.raw`${BARE_START}${BARE_HOST}(?![\p{L}\p{N}_-])`, "gu");
+const FILE_EXTENSIONS = new Set(
+  (
+    "c cfg cjs conf cpp cs css csv env go h html ini java js json jsx kt lock log md mdx mjs " +
+    "php py rb rs scss sh sql svg swift tf toml ts tsx txt vue xml yaml yml"
+  ).split(" ")
+);
+/** Passes that can expose another match once their own match is removed. */
+const MAX_SANITIZE_PASSES = 5;
+
 /** C0 controls but tab and newline, DEL, zero-width and bidi overrides. */
 function isInvisible(char: string): boolean {
   const code = char.codePointAt(0) ?? 0;
   return (
     (code < 0x20 && code !== 0x09 && code !== 0x0a) ||
     code === 0x7f ||
+    code === 0xad ||
     (code >= 0x200b && code <= 0x200f) ||
     (code >= 0x202a && code <= 0x202e) ||
     (code >= 0x2060 && code <= 0x2064) ||
+    (code >= 0x2066 && code <= 0x2069) ||
     code === 0xfeff
   );
 }
 
 function isAllowedLink(raw: string, hosts: readonly string[]): boolean {
   try {
-    const url = new URL(raw.startsWith("www.") ? `https://${raw}` : raw);
+    const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
     if (url.protocol !== "https:") return false;
     const host = url.hostname.toLowerCase();
     return [...hosts, "github.com"].some(
@@ -159,31 +181,43 @@ function isAllowedLink(raw: string, hosts: readonly string[]): boolean {
   }
 }
 
+function withoutMarkupLinksAndMentions(text: string, hosts: readonly string[]): string {
+  const judge = (link: string) => (isAllowedLink(link, hosts) ? link : LINK_REMOVED);
+  // Teams mention entities and any other markup.
+  let next = text.replace(/<at>[\s\S]*?<\/at>/gi, "");
+  next = next.replace(/<[^>]*>/g, "");
+  // Markdown links keep their label; the target is judged like a bare link.
+  next = next.replace(
+    /!?\[([^\]]*)\]\(([^)\s]*)[^)]*\)/g,
+    (_match, label: string, target: string) =>
+      isAllowedLink(target, hosts) ? `${label} ${target}` : label
+  );
+  next = next.replace(URL_PATTERN, judge);
+  next = next.replace(BARE_PATH_PATTERN, judge);
+  next = next.replace(BARE_HOST_PATTERN, (host) => {
+    const extension = host.slice(host.lastIndexOf(".") + 1).toLowerCase();
+    return FILE_EXTENSIONS.has(extension) ? host : judge(host);
+  });
+  // @everyone, @channel and @handles lose the sigil.
+  return next.replace(/(?<!\w)@+/g, "");
+}
+
 /**
  * The agent's words as a notice may carry them: plain text on at most a few
  * lines, no markup, no mention that could ping someone, and no link except to
- * this deployment or GitHub. A prompt-injected agent can still choose the
- * words, so the route that calls this is the only control: it never lets the
- * agent pick the recipient.
+ * this deployment or GitHub, with or without a scheme. Invisible characters go
+ * first so they cannot split a link or mention past the filters, and the
+ * filters repeat until removing one match no longer assembles another. A
+ * prompt-injected agent can still choose the words, so the route that calls
+ * this is the only control: it never lets the agent pick the recipient.
  */
 export function sanitizeAgentNoticeText(raw: string, options: AgentNoticeSanitizeOptions): string {
-  let text = raw.normalize("NFKC");
-  // Teams mention entities and any other markup.
-  text = text.replace(/<at>[\s\S]*?<\/at>/gi, "");
-  text = text.replace(/<[^>]*>/g, "");
-  // Markdown links keep their label; the target is judged like a bare link.
-  text = text.replace(
-    /!?\[([^\]]*)\]\(([^)\s]*)[^)]*\)/g,
-    (_match, label: string, target: string) =>
-      isAllowedLink(target, options.allowedLinkHosts) ? `${label} ${target}` : label
-  );
-  text = text.replace(URL_PATTERN, (url) =>
-    isAllowedLink(url, options.allowedLinkHosts) ? url : LINK_REMOVED
-  );
-  // @everyone, @channel and @handles lose the sigil.
-  text = text.replace(/(^|[^\w@])@(?=[\w.-])/g, "$1");
-  // Control and zero-width characters, then whitespace runs and blank lines.
-  text = [...text].filter((char) => !isInvisible(char)).join("");
+  let text = [...raw.normalize("NFKC")].filter((char) => !isInvisible(char)).join("");
+  for (let pass = 0; pass < MAX_SANITIZE_PASSES; pass++) {
+    const next = withoutMarkupLinksAndMentions(text, options.allowedLinkHosts);
+    if (next === text) break;
+    text = next;
+  }
   text = text
     .split("\n")
     .map((line) => line.replace(/\s+/g, " ").trim())

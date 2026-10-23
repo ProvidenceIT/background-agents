@@ -109,6 +109,50 @@ describe("agent notices", () => {
     expect(sanitizeAgentNoticeText("mail me at a@b.example", hosts)).toBe("mail me at a@b.example");
   });
 
+  it("sees through zero-width characters hidden in links and mentions", () => {
+    const none = { allowedLinkHosts: [] };
+    expect(sanitizeAgentNoticeText("see ht​tps://evil.example/x now", none)).toBe(
+      "see [link removed] now"
+    );
+    expect(sanitizeAgentNoticeText("see w​ww.evil.example now", none)).toBe(
+      "see [link removed] now"
+    );
+    expect(sanitizeAgentNoticeText("@​everyone hi", none)).toBe("everyone hi");
+    expect(sanitizeAgentNoticeText("＠everyone hi", none)).toBe("everyone hi");
+    // Removing one piece of markup must not assemble another.
+    expect(sanitizeAgentNoticeText("@<b></b>@everyone h<i>ttps://evil.example", none)).toBe(
+      "everyone [link removed]"
+    );
+  });
+
+  it("removes scheme-less links to hosts outside the allowlist", () => {
+    expect(sanitizeAgentNoticeText("Re-auth needed: evil-login.example/oi", hosts)).toBe(
+      "Re-auth needed: [link removed]"
+    );
+    expect(sanitizeAgentNoticeText("go to login-providenceit.com now", hosts)).toBe(
+      "go to [link removed] now"
+    );
+    expect(sanitizeAgentNoticeText("try 10.0.0.1/reset or evil.sh:8080/x", hosts)).toBe(
+      "try [link removed] or [link removed]"
+    );
+    expect(sanitizeAgentNoticeText("ftp://evil.example/x", hosts)).toBe("[link removed]");
+    expect(sanitizeAgentNoticeText("open oi.example.test/session/1", hosts)).toBe(
+      "open oi.example.test/session/1"
+    );
+    expect(sanitizeAgentNoticeText("open github.com/acme/widgets/pull/7", hosts)).toBe(
+      "open github.com/acme/widgets/pull/7"
+    );
+  });
+
+  it("keeps file names, paths and file:line references", () => {
+    expect(
+      sanitizeAgentNoticeText(
+        "Fixed notices.ts:186 and packages/shared/src/notices.ts, see README.md and v1.2.3",
+        hosts
+      )
+    ).toBe("Fixed notices.ts:186 and packages/shared/src/notices.ts, see README.md and v1.2.3");
+  });
+
   it("collapses whitespace and control characters and caps the length", () => {
     expect(sanitizeAgentNoticeText("a​\u0007b\n\n\n  c   d  ", hosts)).toBe("ab\nc d");
     expect(sanitizeAgentNoticeText("x".repeat(900), hosts)).toHaveLength(500);
