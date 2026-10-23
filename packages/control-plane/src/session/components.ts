@@ -510,6 +510,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         lastTurnLimit: () => sessionCoreRepository.getLastTurnLimit(),
         // Read only on a transition, after the composition below has run.
         shutdown: (): SandboxShutdownState | null => shutdown.snapshot(),
+        watchingUserIds: () =>
+          Array.from(wsManager.getAuthenticatedClients(), (client) => client.userId),
       },
       record: (facts) =>
         recordSessionNotices(facts, {

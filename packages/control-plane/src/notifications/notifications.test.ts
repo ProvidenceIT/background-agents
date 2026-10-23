@@ -17,7 +17,13 @@ import {
   runSessionNoticesJob,
 } from "./drainer";
 import { SessionNoticeStore } from "./notice-store";
-import { OWNER_OID, seedOwner, seedSession, silentLogger } from "./notifications.test-support";
+import {
+  OWNER,
+  OWNER_OID,
+  seedOwner,
+  seedSession,
+  silentLogger,
+} from "./notifications.test-support";
 import {
   SessionNoticeRecorder,
   recordSessionNotices,
@@ -60,6 +66,7 @@ function reading(overrides: Partial<SettlementReading> = {}): SettlementReading 
     activeDurationMs: 12 * 60 * 1000,
     lastTurnLimit: null,
     shutdown: null,
+    watchingUserIds: [],
     ...overrides,
   };
 }
@@ -99,7 +106,8 @@ describe("settledSessionFacts", () => {
       },
       revision: 7,
       spawnSource: "user",
-      repliedInTeamsThread: false,
+      repliedInChatThread: false,
+      watchingUserIds: [],
     });
     expect(noticeEnvelopeSchema.parse(facts.envelope)).toEqual(facts.envelope);
   });
@@ -144,7 +152,7 @@ describe("settledSessionFacts", () => {
       })
     );
     expect(facts.envelope).toMatchObject({ prNumber: null, prUrl: null });
-    expect(facts.repliedInTeamsThread).toBe(true);
+    expect(facts.repliedInChatThread).toBe(true);
   });
 });
 
@@ -236,19 +244,48 @@ describe("session notices", () => {
       expect(String(row!.payload)).not.toContain(TITLE);
     });
 
-    it("skips the Teams DM when the Teams thread already got the reply", async () => {
+    it("skips the Teams DM when a Teams, Slack or Linear thread already got the reply", async () => {
       await configure({ enabled: true, mode: "live" });
       expect(
         await record(
           facts({ latestTerminalMessage: { source: "msteams", callback_context: "{}" } })
         )
       ).toBe(0);
-      // A Slack thread is a different channel: the owner still hears on Teams.
+      // Slack and Linear threads got their bot's reply too: no second notice.
+      for (const [revision, source] of [
+        [8, "slack"],
+        [9, "linear"],
+      ] as const) {
+        expect(
+          await record(
+            facts({ revision, latestTerminalMessage: { source, callback_context: "{}" } })
+          )
+        ).toBe(0);
+      }
+      // A prompt without a thread to answer still gets the DM.
       expect(
         await record(
-          facts({ revision: 8, latestTerminalMessage: { source: "slack", callback_context: "{}" } })
+          facts({
+            revision: 10,
+            latestTerminalMessage: { source: "slack", callback_context: null },
+          })
         )
       ).toBe(1);
+    });
+
+    it("skips the Teams DM while the owner has the session open, not for someone else", async () => {
+      await configure({ enabled: true, mode: "live" });
+      expect(await record(facts({ watchingUserIds: ["user-other", OWNER] }))).toBe(0);
+      expect(await record(facts({ revision: 8, watchingUserIds: ["user-other"] }))).toBe(1);
+    });
+
+    it("tells the owner of each turn that ends while they are away", async () => {
+      await configure({ enabled: true, mode: "live" });
+      // Two prompts, two settles: each is a run the owner did not watch end.
+      expect(await record(facts({ revision: 3 }))).toBe(1);
+      expect(await record(facts({ revision: 5, watchingUserIds: [OWNER] }))).toBe(0);
+      expect(await record(facts({ revision: 7, status: "failed" }))).toBe(1);
+      expect((await rows()).map((row) => row.revision)).toEqual([3, 7]);
     });
 
     it("leaves motion's sessions to motion unless told otherwise", async () => {
@@ -611,6 +648,7 @@ describe("SessionNoticeRecorder", () => {
       activeDurationMs: () => 1_000,
       lastTurnLimit: () => null,
       shutdown: () => null,
+      watchingUserIds: () => ["user-watching"],
     };
     const recorder = new SessionNoticeRecorder({
       backgroundTasks,
@@ -629,6 +667,8 @@ describe("SessionNoticeRecorder", () => {
     repo_name: "widgets",
     spawn_source: "user" as const,
     parent_session_id: null,
+    // The row as it was before the transition: a turn was running.
+    status: "active" as const,
   };
 
   it("records a root session that completed or failed, in the background", async () => {
@@ -659,6 +699,31 @@ describe("SessionNoticeRecorder", () => {
       ["cancelled", 5, NOW, null],
       ["archived", 6, NOW + 1, null],
     ]);
+  });
+
+  it("owes the owner nothing when a session settles without a turn ending", async () => {
+    const { recorder, submitted, recorded, source } = setup();
+    source.artifacts = () => {
+      throw new Error("not read when no turn ended");
+    };
+    // Unarchiving re-derives completed or failed from the messages of the earlier run.
+    recorder.settled({ ...root, status: "archived" }, SESSION, "completed", 9, NOW);
+    recorder.settled({ ...root, status: "archived" }, SESSION, "failed", 10, NOW);
+    recorder.settled({ ...root, status: "created" }, SESSION, "completed", 11, NOW);
+    for (const entry of submitted) await entry.task();
+    // Motion's doorbell still hears of the status change; the owner does not.
+    expect(recorded.map((f) => [f.status, f.revision, f.envelope])).toEqual([
+      ["completed", 9, null],
+      ["failed", 10, null],
+      ["completed", 11, null],
+    ]);
+  });
+
+  it("passes on who is watching the session when a turn ends", async () => {
+    const { recorder, submitted, recorded } = setup();
+    recorder.settled(root, SESSION, "completed", 3, NOW);
+    for (const entry of submitted) await entry.task();
+    expect(recorded[0]?.watchingUserIds).toEqual(["user-watching"]);
   });
 
   it("ignores other statuses, child sessions and health checks", () => {

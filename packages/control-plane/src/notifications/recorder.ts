@@ -53,6 +53,7 @@ export async function recordSessionNotices(
   const session = {
     ...facts,
     ownerUserId: row?.user_id ?? null,
+    ownerWatching: row?.user_id ? facts.watchingUserIds.includes(row.user_id) : false,
     externalRef:
       row?.external_ref_service && row.external_ref
         ? { service: row.external_ref_service, ref: row.external_ref }
@@ -95,6 +96,8 @@ export interface SettlementReading {
   activeDurationMs: number;
   lastTurnLimit: TurnLimit | null;
   shutdown: SandboxShutdownState | null;
+  /** Users with the session open in a client when it settled. */
+  watchingUserIds: readonly string[];
 }
 
 function isHttpsUrl(value: string | null): value is string {
@@ -136,9 +139,9 @@ function noticeReason(reading: SettlementReading, status: NoticeStatus): NoticeR
   return status;
 }
 
-function ownerEnvelope(reading: SettlementReading): NoticeEnvelope | null {
+function ownerEnvelope(reading: SettlementReading, owed: boolean): NoticeEnvelope | null {
   const status = reading.status;
-  if (!isNoticeStatus(status)) return null;
+  if (!owed || !isNoticeStatus(status)) return null;
   const reason = noticeReason(reading, status);
   const { repo_owner: owner, repo_name: name } = reading.session;
   return {
@@ -152,17 +155,27 @@ function ownerEnvelope(reading: SettlementReading): NoticeEnvelope | null {
   };
 }
 
+/** Sources whose bot answers the prompt's own thread when the turn ends. */
+const CHAT_REPLY_SOURCES = ["msteams", "slack", "linear"] as const;
+
 /** The closed facts a notice is built from; nothing else of the session leaves. */
-export function settledSessionFacts(reading: SettlementReading): SettledSessionFacts {
+export function settledSessionFacts(
+  reading: SettlementReading,
+  { owed = true }: { owed?: boolean } = {}
+): SettledSessionFacts {
   const message = reading.latestTerminalMessage;
   return {
     sessionId: reading.publicSessionId,
     status: reading.status,
     occurredAtMs: reading.occurredAtMs,
-    envelope: ownerEnvelope(reading),
+    envelope: ownerEnvelope(reading, owed),
     revision: reading.revision,
     spawnSource: reading.session.spawn_source,
-    repliedInTeamsThread: message?.source === "msteams" && message.callback_context !== null,
+    repliedInChatThread:
+      message !== null &&
+      message.callback_context !== null &&
+      (CHAT_REPLY_SOURCES as readonly string[]).includes(message.source),
+    watchingUserIds: reading.watchingUserIds,
   };
 }
 
@@ -173,6 +186,8 @@ export interface SettlementSource {
   activeDurationMs(): number;
   lastTurnLimit(): TurnLimit | null;
   shutdown(): SandboxShutdownState | null;
+  /** Users with an authenticated client connected to the session. */
+  watchingUserIds(): readonly string[];
 }
 
 function isNoticeStatus(status: SessionStatus | SettledStatus): status is NoticeStatus {
@@ -194,8 +209,12 @@ export class SessionNoticeRecorder {
     }
   ) {}
 
+  /** `session` is the row as it was before the transition. */
   settled(
-    session: Pick<SessionRow, "repo_owner" | "repo_name" | "spawn_source" | "parent_session_id">,
+    session: Pick<
+      SessionRow,
+      "repo_owner" | "repo_name" | "spawn_source" | "parent_session_id" | "status"
+    >,
     publicSessionId: string,
     status: SessionStatus,
     revision: number,
@@ -207,21 +226,27 @@ export class SessionNoticeRecorder {
     if (session.spawn_source === "healthcheck") return;
     const { source } = this.deps;
     let facts: SettledSessionFacts;
-    // Cancel and archive raise no owner notice, so their storage is not read.
-    const owed = isNoticeStatus(status);
+    // Only a turn that ends tells the owner: cancel and archive are their own
+    // act, and unarchiving re-derives the status of a run that already ended.
+    // Neither reads the session's storage.
+    const owed = isNoticeStatus(status) && session.status === "active";
     try {
-      facts = settledSessionFacts({
-        session,
-        publicSessionId,
-        status,
-        revision,
-        occurredAtMs,
-        latestTerminalMessage: owed ? source.latestTerminalMessage() : null,
-        artifacts: owed ? source.artifacts() : [],
-        activeDurationMs: owed ? source.activeDurationMs() : 0,
-        lastTurnLimit: owed ? source.lastTurnLimit() : null,
-        shutdown: owed ? source.shutdown() : null,
-      });
+      facts = settledSessionFacts(
+        {
+          session,
+          publicSessionId,
+          status,
+          revision,
+          occurredAtMs,
+          latestTerminalMessage: owed ? source.latestTerminalMessage() : null,
+          artifacts: owed ? source.artifacts() : [],
+          activeDurationMs: owed ? source.activeDurationMs() : 0,
+          lastTurnLimit: owed ? source.lastTurnLimit() : null,
+          shutdown: owed ? source.shutdown() : null,
+          watchingUserIds: owed ? source.watchingUserIds() : [],
+        },
+        { owed }
+      );
     } catch (error) {
       // A notice is best effort; the transition it describes has already happened.
       this.deps.log.error("session_notice.read_failed", { session_id: publicSessionId, error });

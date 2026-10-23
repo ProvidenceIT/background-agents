@@ -29,19 +29,26 @@ export interface SettledSessionFacts {
   status: SettledStatus;
   /** When the transition was projected (the session's `updated_at`). */
   occurredAtMs: number;
-  /** The owner's closed notice; null for `cancelled` and `archived`, which raise none. */
+  /**
+   * The owner's closed notice; null for `cancelled` and `archived`, which raise
+   * none, and for a settle that did not end a running turn (unarchive).
+   */
   envelope: NoticeEnvelope | null;
   /** The status revision this notice belongs to; one notice per revision. */
   revision: number;
   spawnSource: SpawnSource;
-  /** The last finished turn came from a Teams thread, which the bot already answered. */
-  repliedInTeamsThread: boolean;
+  /** The last finished turn came from a Teams, Slack or Linear thread, which its bot answered. */
+  repliedInChatThread: boolean;
+  /** Users with the session open when it settled; never stored. */
+  watchingUserIds: readonly string[];
 }
 
 /** The facts plus what the control plane adds from the index and settings. */
 export interface SettledSession extends SettledSessionFacts {
   /** The owner's user id from the session index; null for a session with no owner. */
   ownerUserId: string | null;
+  /** The owner had the session open when it settled, so saw it end. */
+  ownerWatching: boolean;
   /** The ref the creating service attached (`sessions.external_ref*`), or null. */
   externalRef: { service: string; ref: string } | null;
   settings: ResolvedNotificationSettings;
