@@ -66,7 +66,12 @@ export type MotionFailure =
   | "unauthorized"
   | "rate_limited"
   /** motion could not be reached, timed out or answered something unexpected. */
-  | "unavailable";
+  | "unavailable"
+  /**
+   * A write went out but its answer did not come back usable: motion may have
+   * applied it. motion's notes take no idempotency key, so this is not retried.
+   */
+  | "outcome_unknown";
 
 export type MotionResult<T> = { ok: true; value: T } | { ok: false; reason: MotionFailure };
 
@@ -142,6 +147,8 @@ export function createMotionTaskClient(deps: {
     path: string,
     body?: unknown
   ): Promise<MotionResult<unknown>> {
+    // Past this point a POST may have been applied; only a refusal says it was not.
+    const lost: MotionFailure = method === "POST" ? "outcome_unknown" : "unavailable";
     let response: Response;
     try {
       response = await doFetch(`${deps.baseUrl}${path}`, {
@@ -155,15 +162,18 @@ export function createMotionTaskClient(deps: {
         signal: AbortSignal.timeout(MOTION_REQUEST_TIMEOUT_MS),
       });
     } catch {
-      return { ok: false, reason: "unavailable" };
+      return { ok: false, reason: lost };
     }
-    if (!response.ok) return { ok: false, reason: failureFor(response.status) };
+    if (!response.ok) {
+      const failure = failureFor(response.status);
+      return { ok: false, reason: failure === "unavailable" ? lost : failure };
+    }
     try {
       const parsed = record(await response.json());
-      if (parsed?.success !== true) return { ok: false, reason: "unavailable" };
+      if (parsed?.success !== true) return { ok: false, reason: lost };
       return { ok: true, value: parsed.data };
     } catch {
-      return { ok: false, reason: "unavailable" };
+      return { ok: false, reason: lost };
     }
   }
 
@@ -197,7 +207,7 @@ export function createMotionTaskClient(deps: {
       });
       if (!result.ok) return result;
       const noteId = stringOrNull(record(result.value)?.id);
-      return noteId ? { ok: true, value: { noteId } } : { ok: false, reason: "unavailable" };
+      return noteId ? { ok: true, value: { noteId } } : { ok: false, reason: "outcome_unknown" };
     },
   };
 }

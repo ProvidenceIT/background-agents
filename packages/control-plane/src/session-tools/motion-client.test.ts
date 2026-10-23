@@ -106,6 +106,35 @@ describe("motion task client", () => {
     });
     expect(await down.getTask("dw_1")).toEqual({ ok: false, reason: "unavailable" });
   });
+
+  it("cannot say whether a note was added once its POST went out and failed", async () => {
+    const lookup = { "GET /api/v1/open-inspect/delegated-work/dw_1": ok({ taskId: "task_1" }) };
+    const note = { title: "Findings", content: "Body" };
+    for (const answer of [
+      () => new Response("{}", { status: 502 }),
+      () => new Response("not json", { status: 201 }),
+      () => {
+        throw new DOMException("The operation timed out.", "TimeoutError");
+      },
+    ]) {
+      const { client } = fakeMotion({ ...lookup, "POST /api/v1/notes": answer });
+      expect(await client.addNote("dw_1", note)).toEqual({ ok: false, reason: "outcome_unknown" });
+    }
+    // A refusal is definite: nothing was added.
+    const limited = fakeMotion({
+      ...lookup,
+      "POST /api/v1/notes": () => new Response("{}", { status: 429 }),
+    });
+    expect(await limited.client.addNote("dw_1", note)).toEqual({
+      ok: false,
+      reason: "rate_limited",
+    });
+    // The lookup before the POST is safe to repeat.
+    const down = fakeMotion({
+      "GET /api/v1/open-inspect/delegated-work/dw_1": () => new Response("{}", { status: 503 }),
+    });
+    expect(await down.client.addNote("dw_1", note)).toEqual({ ok: false, reason: "unavailable" });
+  });
 });
 
 describe("motion refs and configuration", () => {

@@ -174,6 +174,11 @@ const MOTION_REFUSALS: Record<MotionFailure, { status: number; message: string }
   },
   rate_limited: { status: 429, message: "motion is rate limiting. Try again in a minute." },
   unavailable: { status: 502, message: "motion is unavailable right now. Try again later." },
+  outcome_unknown: {
+    status: 502,
+    message:
+      "motion did not confirm the note; it may have been added. Do not retry, or the Task may get it twice.",
+  },
 };
 
 /** The motion client and the session's delegated work, or the route's refusal. */

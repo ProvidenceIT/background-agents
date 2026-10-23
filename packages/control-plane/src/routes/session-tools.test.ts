@@ -385,5 +385,15 @@ describe("session tool routes", () => {
       expect(response.status).toBe(502);
       expect(await response.json()).toMatchObject({ reason: "unauthorized" });
     });
+
+    it("tells the agent not to retry a note whose outcome is unknown", async () => {
+      await enable(["motion_write"]);
+      fake.addNote = async () => ({ ok: false, reason: "outcome_unknown" });
+      const response = await addNote({ title: "Findings", content: "Rounding in export.ts" });
+      expect(response.status).toBe(502);
+      const body = (await response.json()) as { reason: string; error: string };
+      expect(body.reason).toBe("outcome_unknown");
+      expect(body.error).toMatch(/Do not retry/);
+    });
   });
 });
