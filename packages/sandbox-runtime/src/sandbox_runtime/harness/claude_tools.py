@@ -2,7 +2,8 @@
 
 These are the same tools OpenCode gets as ``.opencode/tool/*.js`` plugins,
 ported over the same control-plane side channels (``/sessions/:id/children``,
-``/pr``, ``/slack-notify``, ``/media``, ``/sandbox-memory``). They run
+``/pr``, ``/slack-notify``, ``/media``, ``/sandbox-memory``, and the session
+tools' ``/notify`` and ``/motion/*``). They run
 inside the bridge process, so they see the bridge's environment rather than
 the child's clean one, and no credential has to reach the ``claude`` process
 for them to work.
@@ -24,7 +25,8 @@ import httpx
 
 from ..memory_contract import MEMORY_TOOL_SPECS
 from ..repo_config import load_repo_manifest
-from .memory_tools import MemoryTools
+from ..session_tools_contract import enabled_session_tool_specs
+from .contract_tools import ContractTools
 from .tool_results import error_text, text_result
 
 if TYPE_CHECKING:
@@ -85,6 +87,8 @@ class ToolServerConfig:
     repo_manifest_path: Path
     has_repository: bool
     slack_notify_enabled: bool
+    # Gates of the generated session tools the control plane enabled; none by default.
+    session_tools: frozenset[str] = frozenset()
 
 
 class ControlPlaneToolClient:
@@ -934,7 +938,8 @@ def build_tools(client: ControlPlaneToolClient) -> list[Any]:
             },
         )(handlers.upload_media)
     )
-    tools.extend(MemoryTools(client, MEMORY_TOOL_SPECS).build())
+    tools.extend(ContractTools(client, enabled_session_tool_specs(config.session_tools)).build())
+    tools.extend(ContractTools(client, MEMORY_TOOL_SPECS).build())
     return tools
 
 

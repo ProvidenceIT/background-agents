@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from ..log_config import JSONFormatter, get_logger
+from ..session_tools_contract import parse_enabled_gates
 from .claude_tools import (
     OI_TOOL_SERVER_NAME,
     ControlPlaneToolClient,
@@ -48,6 +49,7 @@ def write_tool_config(config: ToolServerConfig, directory: Path) -> Path:
         "repo_manifest_path": str(config.repo_manifest_path),
         "has_repository": config.has_repository,
         "slack_notify_enabled": config.slack_notify_enabled,
+        "session_tools": sorted(config.session_tools),
     }
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -65,6 +67,8 @@ def read_tool_config(path: Path) -> ToolServerConfig:
         repo_manifest_path=Path(str(raw["repo_manifest_path"])),
         has_repository=bool(raw["has_repository"]),
         slack_notify_enabled=bool(raw["slack_notify_enabled"]),
+        # Absent in a file an older runtime wrote: no session tools.
+        session_tools=parse_enabled_gates(",".join(raw.get("session_tools", []))),
     )
 
 
