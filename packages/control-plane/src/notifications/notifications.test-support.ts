@@ -42,15 +42,20 @@ export async function seedOwner(db: SqlDatabase, oid: string | null = OWNER_OID)
 export async function seedSession(
   db: SqlDatabase,
   sessionId: string,
-  fields: { userId?: string | null } = {}
+  fields: { userId?: string | null; externalRef?: { service: string; ref: string } } = {}
 ): Promise<void> {
   await db
     .prepare(
       `INSERT INTO sessions (id, title, repo_owner, repo_name, model, status, user_id, visibility,
-         created_at, updated_at)
+         external_ref_service, external_ref, created_at, updated_at)
        VALUES (?, 'Acme client secret plan', 'acme', 'widgets', 'anthropic/claude-sonnet-4-6',
-         'completed', ?, 'private', 1, 1)`
+         'completed', ?, 'private', ?, ?, 1, 1)`
     )
-    .bind(sessionId, fields.userId === undefined ? OWNER : fields.userId)
+    .bind(
+      sessionId,
+      fields.userId === undefined ? OWNER : fields.userId,
+      fields.externalRef?.service ?? null,
+      fields.externalRef?.ref ?? null
+    )
     .run();
 }

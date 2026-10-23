@@ -10,8 +10,8 @@ import type { NoticeChannelRegistry } from "./registry";
  * Sends the outbox's due notices, from the every-minute scheduler tick. Each
  * row is claimed before it is sent (see notice-store.ts), handed to the
  * channel that addressed it and settled by the channel's outcome. A notice
- * that could not go out within `NOTICE_MAX_AGE_MS` is dropped: "your session
- * finished" a day late is noise.
+ * that could not go out within its channel's `maxAgeMs` (else
+ * `NOTICE_MAX_AGE_MS`) is dropped: "your session finished" a day late is noise.
  */
 
 /** Rows one tick sends at most; the rest wait a minute. */
@@ -42,11 +42,11 @@ export async function drainSessionNotices(
       log.warn("session_notice.failed", { ...fields, error_code: code });
       result.failed += 1;
     };
-    if (nowMs - notice.createdAt > NOTICE_MAX_AGE_MS) {
+    const channel = registry.get(notice.channel);
+    if (nowMs - notice.createdAt > (channel?.maxAgeMs ?? NOTICE_MAX_AGE_MS)) {
       await fail("expired");
       continue;
     }
-    const channel = registry.get(notice.channel);
     if (!channel) {
       await fail("channel_unavailable");
       continue;
@@ -64,7 +64,8 @@ export async function drainSessionNotices(
     } else if (outcome.kind === "permanent" || notice.attempts >= NOTICE_MAX_ATTEMPTS) {
       await fail(outcome.code);
     } else {
-      const delayMs = NOTICE_RETRY_BASE_MS * 2 ** (notice.attempts - 1);
+      const backoffMs = NOTICE_RETRY_BASE_MS * 2 ** (notice.attempts - 1);
+      const delayMs = Math.max(backoffMs, outcome.retryAfterMs ?? 0);
       await store.retryLater(notice.id, outcome.code, nowMs + delayMs, nowMs);
       result.retried += 1;
     }

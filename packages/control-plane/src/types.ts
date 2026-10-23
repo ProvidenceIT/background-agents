@@ -44,6 +44,9 @@ export interface EnvConfig {
   SERVICE_AUTH_SECRET_MOTION?: string;
   SERVICE_AUTH_SECRET_PROMPT_LIBRARY?: string;
   SERVICE_AUTH_SECRET_HEALTHCHECK?: string;
+  // Signs the outbound doorbell to motion (src/notifications); not a
+  // verification key, and distinct from SERVICE_AUTH_SECRET_MOTION.
+  SERVICE_AUTH_SECRET_MOTION_CALLBACK?: string;
   // Comma-separated owner/name repositories the prompt-library service may import
   // skills from; unset ⇒ DEFAULT_PROMPT_LIBRARY_SKILL_REPOSITORIES.
   PROMPT_LIBRARY_SKILL_REPOSITORIES?: string;
@@ -65,6 +68,7 @@ export interface EnvConfig {
   SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
+  MOTION_CALLBACK_URL?: string; // motion's base URL for the session doorbell; unset ⇒ no doorbell
   ALLOWED_USERS?: string;
   ALLOWED_EMAIL_DOMAINS?: string;
   ALLOWED_EMAILS?: string;

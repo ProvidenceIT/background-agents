@@ -26,11 +26,18 @@ import {
   type SettlementSource,
 } from "./recorder";
 import { NoticeChannelRegistry, type SettledSessionFacts } from "./registry";
+import { createNoticeChannelRegistry } from "./channels";
+import {
+  MOTION_DOORBELL_MAX_AGE_MS,
+  MOTION_NOTICE_CHANNEL,
+  motionDoorbellChannel,
+} from "./senders/motion-doorbell";
 import { teamsDirectMessageChannel } from "./senders/teams-dm";
 
 const SESSION = "9f2c4e1a7b3d5f60a1b2c3d4e5f60718";
 const TITLE = "Acme client secret plan";
 const NOW = Date.UTC(2026, 9, 23, 12);
+const OCCURRED_AT_MS = NOW - 2_000;
 
 function migratedDatabase(): NodeSqlDatabase {
   const sqlite = new DatabaseSync(":memory:");
@@ -47,6 +54,7 @@ function reading(overrides: Partial<SettlementReading> = {}): SettlementReading 
     publicSessionId: SESSION,
     status: "completed",
     revision: 7,
+    occurredAtMs: OCCURRED_AT_MS,
     latestTerminalMessage: { source: "web", callback_context: null },
     artifacts: [],
     activeDurationMs: 12 * 60 * 1000,
@@ -76,6 +84,9 @@ describe("settledSessionFacts", () => {
       })
     );
     expect(facts).toEqual({
+      sessionId: SESSION,
+      status: "completed",
+      occurredAtMs: OCCURRED_AT_MS,
       envelope: {
         sessionId: SESSION,
         status: "completed",
@@ -91,6 +102,12 @@ describe("settledSessionFacts", () => {
       repliedInTeamsThread: false,
     });
     expect(noticeEnvelopeSchema.parse(facts.envelope)).toEqual(facts.envelope);
+  });
+
+  it("owes the owner nothing for a cancel or an archive", () => {
+    for (const status of ["cancelled", "archived"] as const) {
+      expect(settledSessionFacts(reading({ status }))).toMatchObject({ status, envelope: null });
+    }
   });
 
   it("names a usage limit with its reset, and a held sandbox above it", () => {
@@ -366,6 +383,221 @@ describe("session notices", () => {
   });
 });
 
+describe("motion doorbell notices", () => {
+  const MOTION_SESSION = "00112233445566778899aabbccddeeff";
+  const REF = "providence/delegated-work/cmh9z8y7x0000wxyz9876abcd";
+  const log = silentLogger();
+  let db: NodeSqlDatabase;
+  let posted: DirectMessagePayload[];
+  let pokes: Array<{ url: string; body: string; headers: Headers }>;
+  let reply: () => Response;
+
+  const fetchStub = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    pokes.push({
+      url: String(input),
+      body: String(init?.body),
+      headers: new Headers(init?.headers),
+    });
+    return reply();
+  }) as typeof fetch;
+
+  const registry = () =>
+    new NoticeChannelRegistry([
+      teamsDirectMessageChannel({
+        db,
+        post: async (payload) => {
+          posted.push(payload);
+          return { ok: true };
+        },
+        log,
+      }),
+      motionDoorbellChannel({
+        callbackUrl: "https://motion.example.test",
+        secret: "doorbell-secret",
+        log,
+        fetch: fetchStub,
+      }),
+    ]);
+
+  const motionFacts = (overrides: Partial<SettlementReading> = {}) =>
+    settledSessionFacts(
+      reading({
+        publicSessionId: MOTION_SESSION,
+        session: { repo_owner: "acme", repo_name: "widgets", spawn_source: "motion" },
+        ...overrides,
+      })
+    );
+  const record = (f: SettledSessionFacts, nowMs = NOW) =>
+    recordSessionNotices(f, { db, registry: registry(), nowMs });
+  const drain = (nowMs = NOW) =>
+    drainSessionNotices(new SessionNoticeStore(db), registry(), log, nowMs);
+  const configure = (settings: NotificationSettings) =>
+    new IntegrationSettingsStore(db).setGlobal("notifications", { defaults: settings });
+  const rows = async () =>
+    (
+      await db
+        .prepare(
+          `SELECT channel, revision, status, recipient_ref, state, payload, attempts, error_code,
+             next_attempt_at FROM session_notices ORDER BY id`
+        )
+        .all<Record<string, unknown>>()
+    ).results;
+
+  beforeEach(async () => {
+    db = migratedDatabase();
+    posted = [];
+    pokes = [];
+    reply = () => new Response(null, { status: 202 });
+    await seedOwner(db);
+    await seedSession(db, MOTION_SESSION, { externalRef: { service: "motion", ref: REF } });
+    await seedSession(db, SESSION);
+  });
+  afterEach(() => db.close());
+
+  it("records one doorbell per revision, and leaves the Teams DM to motion by default", async () => {
+    await configure({ enabled: true, mode: "live" });
+    expect(await record(motionFacts())).toBe(1);
+    expect(await record(motionFacts())).toBe(0);
+    expect(await record(motionFacts({ revision: 8, status: "cancelled" }))).toBe(1);
+    expect(await record(motionFacts({ revision: 9, status: "archived" }))).toBe(1);
+    expect(await rows()).toEqual([
+      expect.objectContaining({ channel: "motion", revision: 7, status: "completed" }),
+      expect.objectContaining({ channel: "motion", revision: 8, status: "cancelled" }),
+      expect.objectContaining({ channel: "motion", revision: 9, status: "archived" }),
+    ]);
+    const [first] = await rows();
+    expect(first).toMatchObject({ recipient_ref: REF, state: "pending" });
+    expect(JSON.parse(String(first!.payload))).toEqual({
+      type: "session.settled",
+      sessionId: MOTION_SESSION,
+      externalRef: REF,
+      status: "completed",
+      revision: 7,
+      occurredAt: new Date(OCCURRED_AT_MS).toISOString(),
+    });
+  });
+
+  it("also DMs the owner when skipMotionSessions is off, but never for a cancel", async () => {
+    await configure({ enabled: true, mode: "live", skipMotionSessions: false });
+    expect(await record(motionFacts())).toBe(2);
+    expect(await record(motionFacts({ revision: 8, status: "cancelled" }))).toBe(1);
+    expect((await rows()).map((row) => [row.channel, row.revision])).toEqual([
+      ["teams", 7],
+      ["motion", 7],
+      ["motion", 8],
+    ]);
+  });
+
+  it("rings for no session without a motion ref, and not while the mode is off", async () => {
+    await configure({ enabled: true, mode: "live", channels: { teams: false } });
+    expect(await record(settledSessionFacts(reading()))).toBe(0);
+    await configure({ enabled: true, mode: "off" });
+    expect(await record(motionFacts())).toBe(0);
+    expect(await rows()).toEqual([]);
+  });
+
+  it("records shadow doorbells and never sends them", async () => {
+    await configure({ enabled: true, mode: "shadow" });
+    expect(await record(motionFacts())).toBe(1);
+    expect(await drain()).toEqual({ sent: 0, failed: 0, retried: 0 });
+    expect(pokes).toEqual([]);
+    expect(await rows()).toEqual([expect.objectContaining({ state: "shadow" })]);
+  });
+
+  it("sends the stored body once, then is done", async () => {
+    await configure({ enabled: true, mode: "live" });
+    await record(motionFacts());
+    expect(await drain()).toEqual({ sent: 1, failed: 0, retried: 0 });
+    expect(await drain(NOW + 60_000)).toEqual({ sent: 0, failed: 0, retried: 0 });
+    const [row] = await rows();
+    expect(pokes).toEqual([
+      expect.objectContaining({
+        url: "https://motion.example.test/api/v1/open-inspect/events",
+        body: row!.payload,
+      }),
+    ]);
+    expect(pokes[0]!.headers.get("x-openinspect-actor")).toBeNull();
+    expect(posted).toEqual([]);
+  });
+
+  it("waits out motion's Retry-After when it is longer than the backoff", async () => {
+    await configure({ enabled: true, mode: "live" });
+    await record(motionFacts());
+    reply = () => new Response(null, { status: 429, headers: { "Retry-After": "240" } });
+    expect(await drain()).toEqual({ sent: 0, failed: 0, retried: 1 });
+    expect(await rows()).toEqual([
+      expect.objectContaining({ next_attempt_at: NOW + 240_000, error_code: "http_429" }),
+    ]);
+    expect(await drain(NOW + 120_000)).toEqual({ sent: 0, failed: 0, retried: 0 });
+    reply = () => new Response(null, { status: 202 });
+    expect(await drain(NOW + 240_000)).toEqual({ sent: 1, failed: 0, retried: 0 });
+    expect(pokes).toHaveLength(2);
+  });
+
+  it("gives up a 401 at once, and a row motion's sweep has long covered", async () => {
+    await configure({ enabled: true, mode: "live" });
+    await record(motionFacts());
+    await record(motionFacts({ revision: 8, status: "failed" }), NOW + 1);
+    reply = () => new Response(null, { status: 401 });
+    const store = new SessionNoticeStore(db);
+    await store.retryLater(2, "http_503", NOW + MOTION_DOORBELL_MAX_AGE_MS, NOW);
+    expect(await drain()).toEqual({ sent: 0, failed: 1, retried: 0 });
+    expect(await drain(NOW + MOTION_DOORBELL_MAX_AGE_MS + 2)).toEqual({
+      sent: 0,
+      failed: 1,
+      retried: 0,
+    });
+    expect(pokes).toHaveLength(1);
+    expect((await rows()).map((row) => row.error_code)).toEqual(["http_401", "expired"]);
+  });
+
+  describe("configuration", () => {
+    const motionEnv = {
+      MOTION_CALLBACK_URL: "https://motion.example.test/",
+      SERVICE_AUTH_SECRET_MOTION_CALLBACK: "doorbell-secret",
+    };
+    const channelIds = (env: Partial<Env>) =>
+      createNoticeChannelRegistry(env as Env, db, log)
+        .list()
+        .map((channel) => channel.id);
+
+    it("is absent unless both the URL and its secret are set, and valid", () => {
+      expect(channelIds(motionEnv)).toEqual([MOTION_NOTICE_CHANNEL]);
+      expect(channelIds({ MOTION_CALLBACK_URL: motionEnv.MOTION_CALLBACK_URL })).toEqual([]);
+      expect(
+        channelIds({
+          SERVICE_AUTH_SECRET_MOTION_CALLBACK: motionEnv.SERVICE_AUTH_SECRET_MOTION_CALLBACK,
+        })
+      ).toEqual([]);
+      expect(
+        channelIds({ ...motionEnv, MOTION_CALLBACK_URL: "http://motion.example.test" })
+      ).toEqual([]);
+      // The inbound motion key does not turn the outbound doorbell on.
+      expect(
+        channelIds({
+          MOTION_CALLBACK_URL: motionEnv.MOTION_CALLBACK_URL,
+          SERVICE_AUTH_SECRET_MOTION: "x",
+        })
+      ).toEqual([]);
+    });
+
+    it("sends from the scheduled job through the configured URL in live mode", async () => {
+      vi.stubGlobal("fetch", fetchStub);
+      try {
+        await configure({ enabled: true, mode: "live" });
+        await record(motionFacts());
+        await runSessionNoticesJob(motionEnv as Env, db, log, NOW);
+        expect(pokes.map((poke) => poke.url)).toEqual([
+          "https://motion.example.test/api/v1/open-inspect/events",
+        ]);
+        expect(pokes[0]!.headers.get("x-openinspect-service")).toBe("open-inspect");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+  });
+});
+
 describe("SessionNoticeRecorder", () => {
   function setup() {
     const submitted: Array<{ name: string; task: () => Promise<unknown> }> = [];
@@ -401,27 +633,41 @@ describe("SessionNoticeRecorder", () => {
 
   it("records a root session that completed or failed, in the background", async () => {
     const { recorder, submitted, recorded } = setup();
-    recorder.settled(root, SESSION, "completed", 3);
-    recorder.settled(root, SESSION, "failed", 4);
+    recorder.settled(root, SESSION, "completed", 3, NOW);
+    recorder.settled(root, SESSION, "failed", 4, NOW);
     expect(recorded).toEqual([]);
     expect(submitted.map((entry) => entry.name)).toEqual([
       "session_notice.record",
       "session_notice.record",
     ]);
     for (const entry of submitted) await entry.task();
-    expect(recorded.map((f) => [f.revision, f.envelope.status])).toEqual([
+    expect(recorded.map((f) => [f.revision, f.envelope?.status])).toEqual([
       [3, "completed"],
       [4, "failed"],
     ]);
   });
 
+  it("records a cancel or an archive without reading the session's storage", async () => {
+    const { recorder, submitted, recorded, source } = setup();
+    source.artifacts = () => {
+      throw new Error("not read on a cancel or an archive");
+    };
+    recorder.settled(root, SESSION, "cancelled", 5, NOW);
+    recorder.settled(root, SESSION, "archived", 6, NOW + 1);
+    for (const entry of submitted) await entry.task();
+    expect(recorded.map((f) => [f.status, f.revision, f.occurredAtMs, f.envelope])).toEqual([
+      ["cancelled", 5, NOW, null],
+      ["archived", 6, NOW + 1, null],
+    ]);
+  });
+
   it("ignores other statuses, child sessions and health checks", () => {
     const { recorder, submitted } = setup();
-    for (const status of ["created", "active", "archived", "cancelled"] as const) {
-      recorder.settled(root, SESSION, status, 1);
+    for (const status of ["created", "active"] as const) {
+      recorder.settled(root, SESSION, status, 1, NOW);
     }
-    recorder.settled({ ...root, parent_session_id: "parent" }, SESSION, "completed", 1);
-    recorder.settled({ ...root, spawn_source: "healthcheck" }, SESSION, "completed", 1);
+    recorder.settled({ ...root, parent_session_id: "parent" }, SESSION, "completed", 1, NOW);
+    recorder.settled({ ...root, spawn_source: "healthcheck" }, SESSION, "completed", 1, NOW);
     expect(submitted).toEqual([]);
   });
 
@@ -430,7 +676,7 @@ describe("SessionNoticeRecorder", () => {
     source.artifacts = () => {
       throw new Error("storage");
     };
-    expect(() => recorder.settled(root, SESSION, "completed", 1)).not.toThrow();
+    expect(() => recorder.settled(root, SESSION, "completed", 1, NOW)).not.toThrow();
     expect(submitted).toEqual([]);
   });
 });

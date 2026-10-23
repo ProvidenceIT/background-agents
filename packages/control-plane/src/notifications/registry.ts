@@ -1,6 +1,6 @@
 import type { NoticeEnvelope } from "@open-inspect/shared/notices";
 import type { ResolvedNotificationSettings } from "@open-inspect/shared/types/integrations";
-import type { SpawnSource } from "@open-inspect/shared/types/sessions";
+import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { ClaimedSessionNotice } from "./notice-store";
 
 /**
@@ -10,9 +10,27 @@ import type { ClaimedSessionNotice } from "./notice-store";
  * (see `channels.ts`): neither the recorder nor the drainer changes.
  */
 
+/**
+ * The statuses a root session can settle into. The owner hears of
+ * `completed` and `failed` (archive and cancel are their own act); motion's
+ * doorbell rings for all four, since each ends the run it delegated.
+ */
+export const SETTLED_STATUSES = ["completed", "failed", "cancelled", "archived"] as const;
+export type SettledStatus = (typeof SETTLED_STATUSES)[number];
+
+export function isSettledStatus(status: SessionStatus): status is SettledStatus {
+  return (SETTLED_STATUSES as readonly SessionStatus[]).includes(status);
+}
+
 /** What the session's runtime knows when a root session settles. */
 export interface SettledSessionFacts {
-  envelope: NoticeEnvelope;
+  /** The public session id. */
+  sessionId: string;
+  status: SettledStatus;
+  /** When the transition was projected (the session's `updated_at`). */
+  occurredAtMs: number;
+  /** The owner's closed notice; null for `cancelled` and `archived`, which raise none. */
+  envelope: NoticeEnvelope | null;
   /** The status revision this notice belongs to; one notice per revision. */
   revision: number;
   spawnSource: SpawnSource;
@@ -24,6 +42,8 @@ export interface SettledSessionFacts {
 export interface SettledSession extends SettledSessionFacts {
   /** The owner's user id from the session index; null for a session with no owner. */
   ownerUserId: string | null;
+  /** The ref the creating service attached (`sessions.external_ref*`), or null. */
+  externalRef: { service: string; ref: string } | null;
   settings: ResolvedNotificationSettings;
 }
 
@@ -40,11 +60,16 @@ export interface NoticeAddress {
  * settled as failed. `code` is short and fixed (`http_403`), never a body.
  */
 export type NoticeDeliveryOutcome =
-  { kind: "sent" } | { kind: "retryable"; code: string } | { kind: "permanent"; code: string };
+  | { kind: "sent" }
+  /** `retryAfterMs`: the receiver asked for at least this long before the next attempt. */
+  | { kind: "retryable"; code: string; retryAfterMs?: number }
+  | { kind: "permanent"; code: string };
 
 export interface NoticeChannel {
   /** Stored in `session_notices.channel`. */
   readonly id: string;
+  /** How long a row may wait to go out before it is dropped; defaults to NOTICE_MAX_AGE_MS. */
+  readonly maxAgeMs?: number;
   isEnabled(settings: ResolvedNotificationSettings): boolean;
   /** Whom to tell about this session on this channel; empty to stay silent. */
   address(session: SettledSession): Promise<NoticeAddress[]>;

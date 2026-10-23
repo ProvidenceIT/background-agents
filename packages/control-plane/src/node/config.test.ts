@@ -42,6 +42,16 @@ describe("readEnvConfig", () => {
     ).toBe('{"ZHIPU_API_KEY":["u1"]}');
   });
 
+  it("rejects a motion callback URL the doorbell could not sign for at startup", () => {
+    expect(() =>
+      readEnvConfig({ ...REQUIRED, MOTION_CALLBACK_URL: "http://motion.providenceit.nl" })
+    ).toThrow("MOTION_CALLBACK_URL");
+    expect(
+      readEnvConfig({ ...REQUIRED, MOTION_CALLBACK_URL: "https://motion.providenceit.nl/" })
+        .MOTION_CALLBACK_URL
+    ).toBe("https://motion.providenceit.nl/");
+  });
+
   it("names every missing required variable at once", () => {
     expect(() => readEnvConfig({ DEPLOYMENT_NAME: "test", TOKEN_ENCRYPTION_KEY: "" })).toThrow(
       "Missing required configuration: GITHUB_BOT_USERNAME, TOKEN_ENCRYPTION_KEY, PROVIDER_ACCOUNTS_ENCRYPTION_KEY, REPO_SECRETS_ENCRYPTION_KEY"

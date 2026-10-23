@@ -58,19 +58,27 @@ describe("SessionStatusService.beginTransition", () => {
 });
 
 describe("SessionStatusService session notices", () => {
-  it("hands each status change to the notice recorder with its new revision", async () => {
-    const h = harness();
-    const session = createMockSession();
+  it("hands each status change to the notice recorder with its revision and time", async () => {
+    // The mock session is stamped with the clock; a frozen one keeps it equal across calls.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.UTC(2026, 9, 23, 12));
+    try {
+      const h = harness();
+      const session = createMockSession();
 
-    await h.service.transition("completed");
+      await h.service.transition("completed");
 
-    expect(h.notices.settled).toHaveBeenCalledTimes(1);
-    expect(h.notices.settled).toHaveBeenCalledWith(
-      session,
-      session.session_name || session.id,
-      "completed",
-      session.status_revision + 1
-    );
+      expect(h.notices.settled).toHaveBeenCalledTimes(1);
+      expect(h.notices.settled).toHaveBeenCalledWith(
+        session,
+        session.session_name || session.id,
+        "completed",
+        session.status_revision + 1,
+        Math.max(Date.now(), session.updated_at + 1)
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("raises no notice when the status did not change", async () => {

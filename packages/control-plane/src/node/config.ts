@@ -20,6 +20,7 @@ import type { EnvConfig } from "../types";
 import { parseTeamsEnforcementMode } from "../authorization/teams-enforcement";
 import { parseGitHubTeamSyncIntervalMs } from "../teams/github-team-sync";
 import { parseSubscriptionSecretOwners } from "../session/subscription-secret-owners";
+import { parseMotionCallbackUrl } from "../notifications/senders/motion-doorbell";
 
 /** A source of configuration values, `process.env` in production. */
 export type ConfigSource = Record<string, string | undefined>;
@@ -52,6 +53,7 @@ const ENV_CONFIG_KEYS = {
   SERVICE_AUTH_SECRET_MOTION: true,
   SERVICE_AUTH_SECRET_PROMPT_LIBRARY: true,
   SERVICE_AUTH_SECRET_HEALTHCHECK: true,
+  SERVICE_AUTH_SECRET_MOTION_CALLBACK: true,
   PROMPT_LIBRARY_SKILL_REPOSITORIES: true,
   SLACK_BOT_TOKEN: true,
   GITHUB_APP_ID: true,
@@ -65,6 +67,7 @@ const ENV_CONFIG_KEYS = {
   SCM_PROVIDER: true,
   WORKER_URL: true,
   WEB_APP_URL: true,
+  MOTION_CALLBACK_URL: true,
   ALLOWED_USERS: true,
   ALLOWED_EMAIL_DOMAINS: true,
   ALLOWED_EMAILS: true,
@@ -191,6 +194,7 @@ export function readEnvConfig(source: ConfigSource): EnvConfig {
   parseTeamsEnforcementMode(config.TEAMS_ENFORCEMENT);
   parseSubscriptionSecretOwners(config.SUBSCRIPTION_SECRET_OWNERS);
   parseGitHubTeamSyncIntervalMs(config);
+  if (config.MOTION_CALLBACK_URL !== undefined) parseMotionCallbackUrl(config.MOTION_CALLBACK_URL);
   return config as EnvConfig;
 }
 

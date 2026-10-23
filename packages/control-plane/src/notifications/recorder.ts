@@ -12,7 +12,12 @@ import type { Logger } from "../logger";
 import type { BackgroundTasks } from "../platform-ports";
 import type { ArtifactRow, MessageRow, SessionRow } from "../session/types";
 import { SessionNoticeStore } from "./notice-store";
-import type { NoticeChannelRegistry, SettledSessionFacts } from "./registry";
+import {
+  isSettledStatus,
+  type NoticeChannelRegistry,
+  type SettledSessionFacts,
+  type SettledStatus,
+} from "./registry";
 
 /**
  * Writes a settled root session's notices into the outbox, one row per
@@ -37,23 +42,35 @@ export async function recordSessionNotices(
   if (!settings.enabled || settings.mode === "off") return 0;
   const channels = deps.registry.list().filter((channel) => channel.isEnabled(settings));
   if (channels.length === 0) return 0;
-  const owner = await deps.db
-    .prepare("SELECT user_id FROM sessions WHERE id = ?")
-    .bind(facts.envelope.sessionId)
-    .first<{ user_id: string | null }>();
-  const session = { ...facts, ownerUserId: owner?.user_id ?? null, settings };
+  const row = await deps.db
+    .prepare("SELECT user_id, external_ref_service, external_ref FROM sessions WHERE id = ?")
+    .bind(facts.sessionId)
+    .first<{
+      user_id: string | null;
+      external_ref_service: string | null;
+      external_ref: string | null;
+    }>();
+  const session = {
+    ...facts,
+    ownerUserId: row?.user_id ?? null,
+    externalRef:
+      row?.external_ref_service && row.external_ref
+        ? { service: row.external_ref_service, ref: row.external_ref }
+        : null,
+    settings,
+  };
   const store = new SessionNoticeStore(deps.db);
   let written = 0;
   for (const channel of channels) {
     for (const address of await channel.address(session)) {
       const inserted = await store.insert(
         {
-          sessionId: facts.envelope.sessionId,
+          sessionId: facts.sessionId,
           revision: facts.revision,
-          status: facts.envelope.status,
+          status: facts.status,
           channel: channel.id,
           recipientRef: address.recipientRef,
-          reasonCode: facts.envelope.reason,
+          reasonCode: facts.envelope?.reason ?? facts.status,
           payload: address.payload,
           state: settings.mode === "shadow" ? "shadow" : "pending",
         },
@@ -69,8 +86,9 @@ export async function recordSessionNotices(
 export interface SettlementReading {
   session: Pick<SessionRow, "repo_owner" | "repo_name" | "spawn_source">;
   publicSessionId: string;
-  status: NoticeStatus;
+  status: SettledStatus;
   revision: number;
+  occurredAtMs: number;
   latestTerminalMessage: Pick<MessageRow, "source" | "callback_context"> | null;
   /** Newest first, as the artifact repository lists them. */
   artifacts: readonly Pick<ArtifactRow, "type" | "url" | "metadata">[];
@@ -111,28 +129,37 @@ function latestPullRequest(
  * A held sandbox outranks a usage limit: the person has to recover it before
  * waiting for the reset helps.
  */
-function noticeReason(reading: SettlementReading): NoticeReason {
+function noticeReason(reading: SettlementReading, status: NoticeStatus): NoticeReason {
   const phase = reading.shutdown?.phase;
   if (phase === "failed" || phase === "unknown") return "recovery_needed";
-  if (reading.status === "failed" && reading.lastTurnLimit !== null) return "limit_hit";
-  return reading.status;
+  if (status === "failed" && reading.lastTurnLimit !== null) return "limit_hit";
+  return status;
+}
+
+function ownerEnvelope(reading: SettlementReading): NoticeEnvelope | null {
+  const status = reading.status;
+  if (!isNoticeStatus(status)) return null;
+  const reason = noticeReason(reading, status);
+  const { repo_owner: owner, repo_name: name } = reading.session;
+  return {
+    sessionId: reading.publicSessionId,
+    status,
+    reason,
+    repo: owner && name ? `${owner}/${name}` : null,
+    ...latestPullRequest(reading.artifacts),
+    activeDurationMs: Math.max(0, Math.round(reading.activeDurationMs)),
+    resetsAtMs: reason === "limit_hit" ? (reading.lastTurnLimit?.resetsAtMs ?? null) : null,
+  };
 }
 
 /** The closed facts a notice is built from; nothing else of the session leaves. */
 export function settledSessionFacts(reading: SettlementReading): SettledSessionFacts {
-  const reason = noticeReason(reading);
-  const { repo_owner: owner, repo_name: name } = reading.session;
   const message = reading.latestTerminalMessage;
   return {
-    envelope: {
-      sessionId: reading.publicSessionId,
-      status: reading.status,
-      reason,
-      repo: owner && name ? `${owner}/${name}` : null,
-      ...latestPullRequest(reading.artifacts),
-      activeDurationMs: Math.max(0, Math.round(reading.activeDurationMs)),
-      resetsAtMs: reason === "limit_hit" ? (reading.lastTurnLimit?.resetsAtMs ?? null) : null,
-    },
+    sessionId: reading.publicSessionId,
+    status: reading.status,
+    occurredAtMs: reading.occurredAtMs,
+    envelope: ownerEnvelope(reading),
     revision: reading.revision,
     spawnSource: reading.session.spawn_source,
     repliedInTeamsThread: message?.source === "msteams" && message.callback_context !== null,
@@ -148,7 +175,7 @@ export interface SettlementSource {
   shutdown(): SandboxShutdownState | null;
 }
 
-function isNoticeStatus(status: SessionStatus): status is NoticeStatus {
+function isNoticeStatus(status: SessionStatus | SettledStatus): status is NoticeStatus {
   return status === "completed" || status === "failed";
 }
 
@@ -171,25 +198,29 @@ export class SessionNoticeRecorder {
     session: Pick<SessionRow, "repo_owner" | "repo_name" | "spawn_source" | "parent_session_id">,
     publicSessionId: string,
     status: SessionStatus,
-    revision: number
+    revision: number,
+    occurredAtMs: number
   ): void {
-    if (!isNoticeStatus(status)) return;
+    if (!isSettledStatus(status)) return;
     // Children report to their parent; only the root session tells a person.
     if (session.parent_session_id) return;
     if (session.spawn_source === "healthcheck") return;
     const { source } = this.deps;
     let facts: SettledSessionFacts;
+    // Cancel and archive raise no owner notice, so their storage is not read.
+    const owed = isNoticeStatus(status);
     try {
       facts = settledSessionFacts({
         session,
         publicSessionId,
         status,
         revision,
-        latestTerminalMessage: source.latestTerminalMessage(),
-        artifacts: source.artifacts(),
-        activeDurationMs: source.activeDurationMs(),
-        lastTurnLimit: source.lastTurnLimit(),
-        shutdown: source.shutdown(),
+        occurredAtMs,
+        latestTerminalMessage: owed ? source.latestTerminalMessage() : null,
+        artifacts: owed ? source.artifacts() : [],
+        activeDurationMs: owed ? source.activeDurationMs() : 0,
+        lastTurnLimit: owed ? source.lastTurnLimit() : null,
+        shutdown: owed ? source.shutdown() : null,
       });
     } catch (error) {
       // A notice is best effort; the transition it describes has already happened.
@@ -203,7 +234,7 @@ export class SessionNoticeRecorder {
           this.deps.log.info("session_notice.recorded", {
             session_id: publicSessionId,
             revision,
-            reason: facts.envelope.reason,
+            reason: facts.envelope?.reason ?? status,
             notices: written,
           });
         }

@@ -53,10 +53,14 @@ export function teamsDirectMessageChannel(deps: TeamsDirectMessageChannelDeps): 
     isEnabled: (settings) => settings.channels.teams,
 
     async address(session) {
+      // Archive and cancel are the owner's own act.
+      if (session.envelope === null) return [];
       // The thread the prompt came from already got the bot's reply.
       if (session.repliedInTeamsThread) return [];
       // Motion tells its own users about the work it delegated.
-      if (session.spawnSource === "motion" && session.settings.skipMotionSessions) return [];
+      const fromMotion =
+        session.spawnSource === "motion" || session.externalRef?.service === "motion";
+      if (fromMotion && session.settings.skipMotionSessions) return [];
       if (session.ownerUserId === null) return [];
       const oid = await ownerObjectId(deps.db, session.ownerUserId);
       if (oid === null) {

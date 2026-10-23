@@ -235,7 +235,7 @@ export class SessionStatusService {
     this.notifyParentOfStatusChange(session, publicSessionId, status);
 
     // The owner's notice, once per revision (src/notifications).
-    this.notices?.settled(session, publicSessionId, status, revision);
+    this.notices?.settled(session, publicSessionId, status, revision, updatedAt);
   }
 
   /**
