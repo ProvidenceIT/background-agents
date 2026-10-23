@@ -697,6 +697,8 @@ function RepoOverrideRow({
   const handleModelChange = (newModel: string) => {
     setModel(newModel);
     setDirty(true);
+    const pinned = harnessForModelPick(effectiveHarness, newModel);
+    if (pinned !== effectiveHarness) setHarness(pinned);
 
     if (effort && newModel && !isValidReasoningEffort(newModel, effort)) {
       setEffort("");
@@ -782,7 +784,9 @@ function RepoOverrideRow({
             <SelectValue placeholder="Default model" />
           </SelectTrigger>
           <SelectContent>
-            {filterModelOptionsForHarness(effectiveHarness, enabledModelOptions).map((group) => (
+            {filterModelOptionsForHarness(effectiveHarness, enabledModelOptions, {
+              switchable: true,
+            }).map((group) => (
               <SelectGroup key={group.category}>
                 <SelectLabel>{group.category}</SelectLabel>
                 {group.models.map((m) => (

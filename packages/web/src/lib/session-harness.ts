@@ -100,6 +100,7 @@ export function resolveHarnessModelSelection({
   enabledModelOptions,
   loading,
   switchable = false,
+  holdPinnedElsewhere = false,
 }: {
   harness: HarnessId;
   preference: ModelPreference;
@@ -108,10 +109,28 @@ export function resolveHarnessModelSelection({
   loading: boolean;
   /** The picker's harness follows the model; see `filterModelOptionsForHarness`. */
   switchable?: boolean;
+  /**
+   * The harness is fixed (an existing session): a preference pinned to another
+   * harness holds submission with the fork hint instead of resolving to a
+   * model of another provider without a word.
+   */
+  holdPinnedElsewhere?: boolean;
 }): HarnessModelSelection {
   const options = filterModelOptionsForHarness(harness, enabledModelOptions, { switchable });
   if (loading) {
     return { availability: { status: "loading" }, options, ...resolveModelPreference(preference) };
+  }
+  const pinned = holdPinnedElsewhere ? pinnedElsewhere(harness, preference.model) : null;
+  if (pinned) {
+    const label = getHarnessLabel(pinned);
+    return {
+      availability: {
+        status: "unavailable",
+        message: `${preference.model} runs only on ${label}; fork this session onto ${label}, or pick another model.`,
+      },
+      options,
+      ...resolveModelPreference(preference),
+    };
   }
   const models = filterModelsForHarness(harness, enabledModels);
   if (models.length === 0) {

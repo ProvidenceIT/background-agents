@@ -63,7 +63,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     base_sha: null,
     current_sha: null,
     agent_session_id: null,
-    harness: "opencode",
+    harness: "claude",
     model: "anthropic/claude-haiku-4-5",
     reasoning_effort: null,
     status: "active",
@@ -1424,7 +1424,7 @@ describe("SessionMessageQueue", () => {
     "dispatches a resumed %s session through the OpenAI replacement",
     async (model) => {
       const h = buildQueue();
-      h.repository.getSession.mockReturnValue(createSession({ model }));
+      h.repository.getSession.mockReturnValue(createSession({ model, harness: "opencode" }));
       h.repository.getNextPendingMessage.mockReturnValue(createMessage());
       h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
 
@@ -1508,6 +1508,7 @@ describe("SessionMessageQueue", () => {
 
   it("fails an unavailable prompt model before spawning or dispatching", async () => {
     const h = buildQueue();
+    h.repository.getSession.mockReturnValue(createSession({ harness: "opencode" }));
     h.repository.getNextPendingMessage.mockReturnValueOnce(
       createMessage({ model: "xai/grok-4.5" })
     );
@@ -1533,10 +1534,11 @@ describe("SessionMessageQueue", () => {
 
   it("continues with the next prompt after rejecting unavailable authentication", async () => {
     const h = buildQueue();
+    h.repository.getSession.mockReturnValue(createSession({ harness: "opencode" }));
     const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getNextPendingMessage
       .mockReturnValueOnce(createMessage({ id: "blocked", model: "xai/grok-4.5" }))
-      .mockReturnValueOnce(createMessage({ id: "eligible", model: "anthropic/claude-haiku-4-5" }));
+      .mockReturnValueOnce(createMessage({ id: "eligible", model: "openai/gpt-6-sol" }));
     h.getProviderAuthenticationError.mockImplementation(async (model) =>
       model === "xai/grok-4.5" ? "No xAI authentication is configured" : null
     );
@@ -1706,7 +1708,7 @@ describe("SessionMessageQueue", () => {
     const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getNextPendingMessage.mockReturnValue(createMessage());
     h.repository.getSession.mockReturnValue(
-      createSession({ model: "xai/grok-build-0.1", reasoning_effort: "high" })
+      createSession({ harness: "opencode", model: "xai/grok-build-0.1", reasoning_effort: "high" })
     );
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 

@@ -55,11 +55,24 @@ FAKE_GROK = """#!{python}
 import json, os, stat, subprocess, sys, time, urllib.parse
 args = sys.argv[1:]
 def opt(flag):
-    return args[args.index(flag) + 1] if flag in args else None
+    # Like grok's clap parser: ``--flag=value`` or ``--flag value``, where a separate
+    # value that starts with "-" is read as another flag.
+    for index, arg in enumerate(args):
+        if arg.startswith(flag + "="):
+            return arg[len(flag) + 1:]
+        if arg == flag:
+            value = args[index + 1]
+            if value.startswith("-"):
+                sys.stderr.write("error: unexpected argument '%s' found\\n" % value)
+                sys.exit(2)
+            return value
+    return None
 home = os.environ["GROK_HOME"]
 session = opt("-s") or opt("-r")
 cwd = opt("--cwd") or os.getcwd()
 prompt_file = opt("--prompt-file")
+for flag in ("--single", "--model", "--rules", "--reasoning-effort"):
+    opt(flag)
 file_info = None
 if prompt_file:
     file_info = {{
@@ -97,6 +110,16 @@ with open(os.environ["FAKE_GROK_TRANSCRIPT"]) as transcript:
         sys.stdout.flush()
 sys.exit(int(os.environ.get("FAKE_GROK_EXIT", "0")))
 """
+
+
+def flag_value(argv: list[str], flag: str) -> str | None:
+    """The value of ``flag`` in a recorded argv, given as ``flag=value`` or ``flag value``."""
+    for index, arg in enumerate(argv):
+        if arg.startswith(flag + "="):
+            return arg[len(flag) + 1 :]
+        if arg == flag:
+            return argv[index + 1]
+    return None
 
 
 class Rig:
@@ -199,17 +222,17 @@ async def test_pong_turn_argv_env_and_outcome(tmp_path: Path) -> None:
     assert outcome.message_cost_usd == pytest.approx(0.02184296)
     [run] = rig.runs()
     argv = run["argv"]
-    assert argv[argv.index("-p") + 1] == "Reply with PONG"
-    assert "-" not in argv
+    assert "--single=Reply with PONG" in argv
+    assert "-" not in argv and "-p" not in argv
     assert argv[argv.index("-s") + 1] == session_id
     assert "-r" not in argv
     for flag, value in (
         ("--output-format", "streaming-json"),
         ("--cwd", str(rig.workdir)),
-        ("-m", "grok-4.7-build-fast"),
+        ("--model", "grok-4.7-build-fast"),
         ("--reasoning-effort", "high"),
     ):
-        assert argv[argv.index(flag) + 1] == value
+        assert flag_value(argv, flag) == value
     assert "--always-approve" in argv
     assert "--no-auto-update" in argv
     assert "-c" not in argv and "--continue" not in argv
@@ -279,8 +302,8 @@ async def test_large_prompt_goes_through_a_private_file_that_is_removed(tmp_path
     text = "x" * (PROMPT_ARGV_LIMIT_BYTES + 1)
     assert (await harness.run_prompt(prompt(text), rig.emit)).success
     [run] = rig.runs()
-    assert "-p" not in run["argv"]
-    path = Path(run["argv"][run["argv"].index("--prompt-file") + 1])
+    assert flag_value(run["argv"], "--single") is None
+    path = Path(flag_value(run["argv"], "--prompt-file") or "")
     assert run["prompt_file"] == {"mode": 0o600, "bytes": len(text)}
     assert not path.exists()
 
@@ -352,7 +375,21 @@ async def test_open_writes_config_with_the_oi_server(tmp_path: Path) -> None:
     await harness.create_session()
     assert (await harness.run_prompt(prompt(), rig.emit)).success
     [run] = rig.runs()
-    assert run["argv"][run["argv"].index("--rules") + 1] == "Remember: tabs."
+    assert "--rules=Remember: tabs." in run["argv"]
+
+
+@pytest.mark.parametrize("text", ["- fix the bug\n- then the tests", "--rules"])
+async def test_prompt_and_memory_that_start_with_a_dash_stay_values(
+    tmp_path: Path, text: str
+) -> None:
+    rig = Rig(tmp_path)
+    harness = rig.build(memory_text="- prefer tabs")
+    await harness.open()
+    await harness.create_session()
+    assert (await harness.run_prompt(prompt(text), rig.emit)).success
+    [run] = rig.runs()
+    assert flag_value(run["argv"], "--single") == text
+    assert flag_value(run["argv"], "--rules") == "- prefer tabs"
 
 
 @pytest.mark.parametrize(

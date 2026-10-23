@@ -250,7 +250,7 @@ async def test_a_staged_grok_session_runs_a_turn(tmp_path: Path):
     (run,) = rig.runs()
     assert run["env"]["GROK_HOME"] == str(stager.layout.cli_home)
     assert "XAI_API_KEY" not in run["env"]
-    assert run["argv"][run["argv"].index("--cwd") + 1] == str(home / "workspace")
+    assert f"--cwd={home / 'workspace'}" in run["argv"]
     assert test_grok_harness.FAKE_TOKEN not in json.dumps(run)
     assert IDENTITY_TOKEN not in json.dumps(run["argv"])
 

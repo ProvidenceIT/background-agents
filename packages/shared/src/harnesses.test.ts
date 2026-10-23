@@ -219,6 +219,21 @@ describe("harnessSupportsProviderAuth", () => {
     expect(harnessSupportsProviderAuth("opencode", "xai", "provider_account")).toBe(true);
   });
 
+  it("runs xAI on a subscription home only through SuperGrok", () => {
+    // The home holds a pushed SuperGrok token that only the grok CLI reads.
+    expect(harnessSupportsProviderAuth("opencode", "xai", "auth_home")).toBe(false);
+    expect(checkHarnessCompatibility("opencode", "xai/grok-4.7", { xai: "auth_home" })).toEqual({
+      code: "provider_auth",
+      message:
+        "The OpenCode harness cannot run xai on a subscription home; use the SuperGrok harness.",
+    });
+    expect(checkHarnessCompatibility("grok", "xai/grok-4.7", { xai: "auth_home" })).toBeNull();
+  });
+
+  it("lets OpenCode run every xAI model on a key, the SuperGrok defaults included", () => {
+    expect(harnessSupportsModel("opencode", "xai/grok-4.7-build-fast")).toBe(true);
+  });
+
   it("selects no auth mode for a provider the harness has no row for", () => {
     expect(harnessSupportsProviderAuth("claude", "openai", "provider_account")).toBe(false);
     expect(harnessSupportsProviderAuth("claude", "openai", "api_key")).toBe(false);

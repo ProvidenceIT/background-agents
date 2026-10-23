@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import json
 import os
 import sys
 from pathlib import Path
@@ -79,6 +80,47 @@ async def test_reaping_a_finished_child_stops_what_it_left_behind(tmp_path: Path
     assert not group_alive(process.pid)
     await asyncio.sleep(0.1)
     assert not _pid_alive(grandchild)
+
+
+# Runs as a child subreaper that never reaps orphans, like PID 1 on a pod: the
+# leader's background sleep is reparented to it and stays in the group as a zombie.
+_NON_REAPING_INIT = """
+import asyncio, ctypes, json, os, sys, time
+from pathlib import Path
+from sandbox_runtime.harness.cli_process import group_alive, spawn_group, terminate_group
+PR_SET_CHILD_SUBREAPER = 36
+assert ctypes.CDLL(None, use_errno=True).prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0
+async def main():
+    process = await spawn_group(
+        ["sh", "-c", "sleep 30 & exec sleep 30"],
+        cwd=Path(sys.argv[1]), env=os.environ, cli_label="Test",
+    )
+    await asyncio.sleep(0.2)
+    started = time.monotonic()
+    stopped = await terminate_group(process, 4.0)
+    elapsed = time.monotonic() - started
+    zombies = [
+        p.name for p in Path("/proc").iterdir() if p.name.isdigit()
+        and (p / "stat").exists()
+        and (p / "stat").read_text().rpartition(")")[2].split()[:3:2] == ["Z", str(process.pid)]
+    ]
+    print(json.dumps({"stopped": stopped, "elapsed": elapsed, "zombies": len(zombies),
+                      "alive": group_alive(process.pid)}))
+asyncio.run(main())
+"""
+
+
+async def test_a_zombie_left_in_the_group_does_not_keep_it_alive(tmp_path: Path) -> None:
+    result = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", _NON_REAPING_INIT, str(tmp_path), stdout=asyncio.subprocess.PIPE
+    )
+    stdout, _ = await asyncio.wait_for(result.communicate(), 20)
+    assert result.returncode == 0
+    outcome = json.loads(stdout)
+    assert outcome["zombies"] >= 1  # the case under test really happened
+    assert outcome["stopped"] is True
+    assert outcome["alive"] is False
+    assert outcome["elapsed"] < 1.5
 
 
 async def test_terminating_an_already_gone_group_is_a_success(tmp_path: Path) -> None:

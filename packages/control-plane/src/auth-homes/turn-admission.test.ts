@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyMigrations } from "../node/migrate";
 import { createNodeSqlDatabase } from "../node/sqlite-database";
 import { HOUSEHOLD, seedHousehold, type HouseholdFixture } from "./auth-homes.test-support";
+import { UserAuthHomeStore } from "./store";
 import {
   admitNewSession,
   AuthHomeTurnRefusedError,
@@ -313,6 +314,44 @@ describe("admitNewSession", () => {
     expect(admission).toMatchObject({ kind: "refused", refusal: { kind: "harness" } });
     if (admission.kind !== "refused") throw new Error("expected refusal");
     expect(newSessionRefusalResponse(admission.refusal).status).toBe(400);
+  });
+
+  it("serves xAI from a home only on SuperGrok: OpenCode has no credential for the pushed token", async () => {
+    await new UserAuthHomeStore(fixture.db).register({
+      id: "H3",
+      ownerUserIds: [HOUSEHOLD.owner],
+      pvcName: "sf-home-owner-grok",
+      nodeName: "sandbox-node-1",
+      providers: ["xai"],
+      now: 3,
+    });
+    const providerAuth = [
+      { provider: "xai", authMode: "api_key", selectionSource: "installation_default" },
+    ] as const;
+    const opencode = await admitSession({
+      harness: "opencode",
+      model: "xai/grok-4.7",
+      providerAuth: [...providerAuth],
+    });
+    expect(opencode).toMatchObject({
+      kind: "refused",
+      refusal: {
+        kind: "harness",
+        message:
+          "The OpenCode harness cannot run xai on a subscription home; use the SuperGrok harness.",
+      },
+    });
+
+    const grok = await admitSession({
+      harness: "grok",
+      model: "xai/grok-4.7",
+      providerAuth: [...providerAuth],
+    });
+    if (grok.kind !== "admitted") throw new Error("expected admission");
+    expect(grok.authHomeId).toBe("H3");
+    expect(grok.providerAuth).toEqual([
+      { provider: "xai", authMode: "auth_home", selectionSource: "auth_home_own" },
+    ]);
   });
 
   it("leaves the installation's auth alone when no home is registered", async () => {

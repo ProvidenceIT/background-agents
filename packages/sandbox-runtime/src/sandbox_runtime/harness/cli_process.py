@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import os
 import signal
+from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from .base import HarnessStartError
@@ -29,7 +30,6 @@ from .base import HarnessStartError
 if TYPE_CHECKING:
     import collections
     from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-    from pathlib import Path
 
     from ..log_config import StructuredLogger
 
@@ -129,7 +129,34 @@ async def read_stderr_tail(
 
 
 def group_alive(pgid: int) -> bool:
-    """Whether any process is still in process group ``pgid``."""
+    """Whether any live (non-zombie) process is still in process group ``pgid``.
+
+    Zombies do not count: on a pod nothing reaps the orphans that end up
+    under PID 1, so a tool process that died after its leader stays in the
+    group as a zombie for good, and ``killpg(pgid, 0)`` still finds it.
+    """
+    try:
+        entries = list(Path("/proc").iterdir())
+    except OSError:
+        return _group_signalable(pgid)
+    if not entries:
+        return _group_signalable(pgid)
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        # State is field 3 and the process group field 5; the name before ")" may hold spaces.
+        fields = raw.rpartition(")")[2].split()
+        if len(fields) > 2 and fields[2] == str(pgid) and fields[0] not in ("Z", "X", "x"):
+            return True
+    return False
+
+
+def _group_signalable(pgid: int) -> bool:
+    """``group_alive`` without ``/proc``: any member, zombies included."""
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:

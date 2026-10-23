@@ -116,3 +116,13 @@ async def test_a_session_model_is_still_the_default(tmp_path: Path) -> None:
     config = await _started_config(server, tmp_path)
 
     assert config["model"] == "openai/gpt-6.1-sol"
+
+
+async def test_the_anthropic_provider_is_disabled_for_every_agent(tmp_path: Path) -> None:
+    # A repo's agent or subagent file can name anthropic/...; the prompt guard never sees it.
+    server = make_opencode_server({"ANTHROPIC_API_KEY": "placeholder-key"}, workspace_path=tmp_path)
+
+    config = await _started_config(server, tmp_path)
+
+    assert "anthropic" in config["disabled_providers"]
+    assert "anthropic" not in config.get("provider", {})

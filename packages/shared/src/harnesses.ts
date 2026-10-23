@@ -52,7 +52,9 @@ export const HARNESS_CATALOG = {
     modelFamilies: "any",
     providerAuth: {
       openai: ["api_key", "provider_account", "auth_home"],
-      xai: ["api_key", "provider_account", "auth_home"],
+      // A home carrying xai holds a pushed SuperGrok token, which only the
+      // grok CLI reads; OpenCode has no credential for it there.
+      xai: ["api_key", "provider_account"],
     },
     resume: "session_id",
   },
@@ -289,6 +291,11 @@ function providerAuthMessage(
   const label = getHarnessLabel(harness);
   if (runsOnlyOnAuthHome(harness, provider)) {
     return `The ${label} harness runs ${provider} only on a subscription home; enrol one under Settings > Subscription homes.`;
+  }
+  if (mode === "auth_home") {
+    const other = HARNESS_IDS.find((id) => harnessSupportsProviderAuth(id, provider, mode));
+    const hint = other ? `; use the ${getHarnessLabel(other)} harness` : "";
+    return `The ${label} harness cannot run ${provider} on a subscription home${hint}.`;
   }
   return mode === "provider_account"
     ? `The ${label} harness cannot use a connected ${provider} account; select an API key for this session.`

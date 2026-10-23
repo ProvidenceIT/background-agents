@@ -5,13 +5,14 @@ pushes into the subscription home (``grok_env``, ``pushed_token``); the
 child gets it from ``grok_auth`` through ``GROK_AUTH_PROVIDER_COMMAND`` and
 keeps its state in a pod-local ``GROK_HOME``. Each turn runs
 
-    grok -p <prompt> --output-format streaming-json --always-approve
-         --no-auto-update --cwd <workdir> -m <model> [--reasoning-effort <e>]
-         [--rules <memory>] (-s <new id> | -r <id>)
+    grok --single=<prompt> --output-format streaming-json --always-approve
+         --no-auto-update --cwd=<workdir> --model=<model>
+         [--reasoning-effort=<e>] [--rules=<memory>] (-s <new id> | -r <id>)
 
-in its own process group (``cli_process``). The prompt is the argv element
-after ``-p`` (``-p -`` would send a literal dash); one too long for a single
-argv string goes through a 0600 ``--prompt-file`` instead.
+in its own process group (``cli_process``). Free text is bound to its flag
+in one argv element: grok reads a separate value that starts with ``-``
+(a markdown bullet) as a flag. A prompt too long for a single argv string
+goes through a 0600 ``--prompt-file`` instead.
 
 The harness names the conversation itself: ``create_session`` picks a UUID,
 so the bridge persists it before the first turn ends, and that turn starts
@@ -188,13 +189,14 @@ class GrokHarness:
         prompt_text: str | None,
         prompt_file: Path | None,
     ) -> list[str]:
+        # Values that come from users ride in ``--flag=value``: grok's parser reads a
+        # separate argv element that starts with ``-`` ("- fix the bug") as a flag.
         argv = [self.config.binary]
         if prompt_file is not None:
-            argv.extend(["--prompt-file", str(prompt_file)])
+            argv.append(f"--prompt-file={prompt_file}")
         else:
             assert prompt_text is not None
-            # The text itself: ``-p`` takes its value, and ``-p -`` is a literal dash.
-            argv.extend(["-p", prompt_text])
+            argv.append(f"--single={prompt_text}")
         argv.extend(
             [
                 "--output-format",
@@ -202,16 +204,14 @@ class GrokHarness:
                 # The pod is the sandbox; a pod GROK_HOME carries no approval preference.
                 "--always-approve",
                 "--no-auto-update",
-                "--cwd",
-                str(self.config.workdir),
-                "-m",
-                model,
+                f"--cwd={self.config.workdir}",
+                f"--model={model}",
             ]
         )
         if reasoning_effort:
-            argv.extend(["--reasoning-effort", reasoning_effort])
+            argv.append(f"--reasoning-effort={reasoning_effort}")
         if self.config.memory_text:
-            argv.extend(["--rules", self.config.memory_text])
+            argv.append(f"--rules={self.config.memory_text}")
         assert self.session_id is not None
         if session_dir(self.config.cli_home, self.session_id) is not None:
             argv.extend(["-r", self.session_id])

@@ -106,6 +106,11 @@ with open(os.environ["FAKE_AGY_TRANSCRIPT"]) as transcript:
                 os._exit(1)
             signal.signal(signal.SIGTERM, interrupted)
             continue
+        if '"init"' in line:
+            # agy keeps each conversation it starts or resumes in a database.
+            conversations = os.path.join(os.environ["HOME"], ".gemini/antigravity-cli/conversations")
+            os.makedirs(conversations, exist_ok=True)
+            open(os.path.join(conversations, json.loads(line)["conversation_id"] + ".db"), "a").close()
         sys.stdout.write(line)
         sys.stdout.flush()
 sys.exit(int(os.environ.get("FAKE_AGY_EXIT", "0")))
@@ -214,6 +219,12 @@ def result_line(conversation: str = CONVERSATION, status: str = "SUCCESS", **fie
             "result": {"conversation_id": conversation, "status": status, **fields},
         }
     )
+
+
+def conversation_db(rig: Rig, conversation: str) -> None:
+    directory = rig.home / ".gemini" / "antigravity-cli" / "conversations"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{conversation}.db").write_bytes(b"")
 
 
 def alive(pid: int) -> bool:
@@ -381,10 +392,40 @@ class TestHarness:
 
     async def test_a_lost_conversation_warns_and_adopts_the_new_id(self, rig: Rig):
         rig.harness.session_id = OTHER_CONVERSATION
+        conversation_db(rig, OTHER_CONVERSATION)
         outcome = await rig.harness.run_prompt(prompt(), rig.emit)
         assert outcome.success
         argv = rig.starts()[0]["argv"]
         assert argv[argv.index("--conversation") + 1] == OTHER_CONVERSATION
+        assert rig.harness.session_id == CONVERSATION
+        warnings = [e["message"] for e in rig.events if e["type"] == "warning"]
+        assert warnings == [LOST_CONVERSATION_WARNING]
+
+    async def test_memory_follows_a_conversation_agy_lost(self, tmp_path: Path):
+        rig = Rig(tmp_path)
+        rig.harness = rig.build(memory_text="Use tabs.")
+        await rig.harness.open()
+        rig.harness.session_id = OTHER_CONVERSATION
+        conversation_db(rig, OTHER_CONVERSATION)
+        await rig.harness.run_prompt(prompt("hello"), rig.emit)
+        await rig.harness.run_prompt(prompt("again"), rig.emit)
+        await rig.harness.run_prompt(prompt("third"), rig.emit)
+        # agy answered the resume with a fresh conversation: its next prompt carries the notes.
+        first, second, third = (start["argv"][1] for start in rig.starts())
+        assert first == "hello"
+        assert second.startswith("Use tabs.") and second.endswith("again")
+        assert third == "third"
+
+    async def test_a_conversation_gone_from_disk_starts_fresh_with_memory(self, tmp_path: Path):
+        rig = Rig(tmp_path)
+        rig.harness = rig.build(memory_text="Use tabs.")
+        await rig.harness.open()
+        rig.harness.session_id = OTHER_CONVERSATION
+        outcome = await rig.harness.run_prompt(prompt("hello"), rig.emit)
+        assert outcome.success
+        argv = rig.starts()[0]["argv"]
+        assert "--conversation" not in argv
+        assert argv[1].startswith("Use tabs.") and argv[1].endswith("hello")
         assert rig.harness.session_id == CONVERSATION
         warnings = [e["message"] for e in rig.events if e["type"] == "warning"]
         assert warnings == [LOST_CONVERSATION_WARNING]
@@ -481,6 +522,15 @@ class TestHarness:
         assert not alive(runs[0]["pid"])
         assert not alive(grandchild)
 
+    async def test_an_agy_that_lingers_after_its_result_is_stopped_tree_and_all(self, rig: Rig):
+        rig.script(init_line(), "#spawn 30", result_line(), "#sleep 30")
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+        assert outcome.success
+        runs = rig.runs()
+        grandchild = next(run["grandchild"] for run in runs if "grandchild" in run)
+        assert not alive(runs[0]["pid"])
+        assert not alive(grandchild)
+
     async def test_cancelling_the_turn_kills_agy(self, rig: Rig):
         rig.script(init_line(), "#sleep 30", result_line())
         task = asyncio.create_task(rig.harness.run_prompt(prompt(), rig.emit))
@@ -523,7 +573,7 @@ class TestLiveAgy:
             pytest.skip("the local agy access token has under 15 minutes left")
         root = os.environ.get("OI_LIVE_AGY_DIR")
         scratch = Path(root) / tmp_path.name if root else tmp_path
-        scratch.mkdir(parents=True)
+        scratch.mkdir(parents=True, exist_ok=True)
         rig = Rig(scratch)
         rig.push(source["expires_at"] - time.time(), access_token=source["access_token"])
         rig.environ = {

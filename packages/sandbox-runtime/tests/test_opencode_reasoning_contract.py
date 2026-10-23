@@ -16,6 +16,8 @@ Source SHA-256: e4677e698a53d3b8b11c569c0ecc2f5722cd8126677bf5f7dbff23daf942a17b
 Subset SHA-256: 121c3cf245d515b9862685a084ca8fdb1b9200ab672cca1658949b1dd0de6265
 Reconcile this frozen fixture with shared model/effort definitions when changing
 models or the binary. Mocks verify serialization, not live provider acceptance.
+The runtime disables OpenCode's Anthropic provider (Anthropic models run only on
+Claude Agent); the Anthropic catalog entries stay to show they are refused.
 """
 
 import json
@@ -25,6 +27,7 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -107,7 +110,10 @@ def anthropic_events(model):
 
 @pytest.fixture
 async def wire_server(tmp_path, reasoning_config, request):
-    assert subprocess.check_output([BINARY, "--version"], text=True).strip() == "1.18.29"
+    assert subprocess.check_output([BINARY, "--version"], text=True).strip() in (
+        "1.18.29",
+        "1.18.34",
+    )
     captured = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -125,6 +131,8 @@ async def wire_server(tmp_path, reasoning_config, request):
                         "thinking",
                         "output_config",
                         "system",
+                        "instructions",
+                        "input",
                         "tools",
                     )
                 }
@@ -168,8 +176,9 @@ async def wire_server(tmp_path, reasoning_config, request):
             ):
                 shutil.copy(source / name, destination / name)
         config["agent"] = {"build": {"options": {"reasoningEffort": "high"}}}
+        # Anthropic too: a configured endpoint and key must not bring it back.
         for provider in ("openai", "anthropic"):
-            config["provider"].setdefault(provider, {})["options"] = {
+            config.setdefault("provider", {}).setdefault(provider, {})["options"] = {
                 "baseURL": f"http://127.0.0.1:{mock.server_port}/v1",
                 "apiKey": "test-only",
             }
@@ -254,51 +263,48 @@ def submit(call, captured, model, effort, session=None):
 @pytest.mark.parametrize("wire_server", ["memory"], indirect=True)
 async def test_memory_text_and_tool_contract_reach_real_opencode_provider_request(wire_server):
     call, captured = wire_server
-    sent, _ = submit(call, captured, "anthropic/claude-sonnet-4-6", None)
-    assert "WIRE_MEMORY_SENTINEL: prefer local verification." in json.dumps(sent["system"])
+    sent, _ = submit(call, captured, "openai/gpt-5.6-sol", None)
+    prompt = json.dumps([sent["instructions"], sent["input"]])
+    assert "WIRE_MEMORY_SENTINEL: prefer local verification." in prompt
     tools = {tool["name"]: tool for tool in sent["tools"]}
     assert {"memory_read", "memory_write", "memory_search"} <= tools.keys()
-    assert tools["memory_search"]["input_schema"]["required"] == ["query"]
-    assert "environmentId" not in tools["memory_search"]["input_schema"]["properties"]
-    assert "memoryId" in tools["memory_read"]["input_schema"]["properties"]
-    assert "ownerUserId" not in tools["memory_write"]["input_schema"]["properties"]
-    assert "environmentId" not in tools["memory_write"]["input_schema"]["properties"]
+    assert tools["memory_search"]["parameters"]["required"] == ["query"]
+    assert "environmentId" not in tools["memory_search"]["parameters"]["properties"]
+    assert "memoryId" in tools["memory_read"]["parameters"]["properties"]
+    assert "ownerUserId" not in tools["memory_write"]["parameters"]["properties"]
+    assert "environmentId" not in tools["memory_write"]["parameters"]["properties"]
 
 
 async def test_all_fixture_efforts_reach_provider(wire_server):
     call, captured = wire_server
     catalog = json.loads(CATALOG.read_text())
-    for provider, group in catalog.items():
-        for model_id, model in group["models"].items():
-            manual = model_id in {"claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5"}
-            efforts = (
-                ["high", "max"]
-                if manual
-                else next(
-                    option["values"]
-                    for option in model["reasoning_options"]
-                    if option["type"] == "effort"
-                )
+    for model_id, model in catalog["openai"]["models"].items():
+        efforts = next(
+            option["values"] for option in model["reasoning_options"] if option["type"] == "effort"
+        )
+        for effort in efforts:
+            sent, _ = submit(call, captured, f"openai/{model_id}", effort)
+            assert sent["reasoning"]["effort"] == effort, f"openai/{model_id} {effort}"
+
+
+async def test_anthropic_models_never_reach_a_provider(wire_server):
+    call, captured = wire_server
+    catalog = json.loads(CATALOG.read_text())
+    for model_id in catalog["anthropic"]["models"]:
+        session = call("/session", {"title": "Reasoning contract"})["id"]
+        captured.clear()
+        try:
+            result = call(
+                f"/session/{session}/message",
+                {
+                    "model": {"providerID": "anthropic", "modelID": model_id},
+                    "parts": [{"type": "text", "text": "Reply only OK."}],
+                },
             )
-            for effort in efforts:
-                sent, _ = submit(call, captured, f"{provider}/{model_id}", effort)
-                context = f"{provider}/{model_id} {effort}"
-                if provider == "openai":
-                    assert sent["reasoning"]["effort"] == effort, context
-                elif manual:
-                    assert sent["thinking"] == {
-                        "type": "enabled",
-                        "budget_tokens": 16000 if effort == "high" else 31999,
-                    }, context
-                    expected = (
-                        {"effort": "high"}
-                        if model_id == "claude-opus-4-5" and effort == "high"
-                        else None
-                    )
-                    assert sent["output_config"] == expected, context
-                else:
-                    assert sent["thinking"]["type"] == "adaptive", context
-                    assert sent["output_config"]["effort"] == effort, context
+        except urllib.error.HTTPError:
+            result = None
+        assert result is None or result["info"].get("error"), model_id
+        assert not captured, model_id
 
 
 async def test_defaults_and_switching(wire_server):
@@ -308,10 +314,6 @@ async def test_defaults_and_switching(wire_server):
     assert sent["reasoning"]["effort"] == "high"
     sent, session = submit(call, captured, "openai/gpt-5.6-sol", "low", session)
     assert sent["reasoning"]["effort"] == "low"
-    sent, session = submit(call, captured, "anthropic/claude-opus-4-5", "max", session)
-    assert sent["thinking"] == {"type": "enabled", "budget_tokens": 31999}
-    sent, _ = submit(call, captured, "anthropic/claude-haiku-4-5", None)
-    assert sent["thinking"] is None
 
 
 async def test_unsupported_request_options_do_not_override_defaults(wire_server):
@@ -333,19 +335,3 @@ async def test_unsupported_request_options_do_not_override_defaults(wire_server)
             result = call(f"/session/{session}/message", body)
             assert not result["info"].get("error")
             assert captured[-1]["reasoning"]["effort"] == "high"
-    for model in ("claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-5"):
-        session = call("/session", {"title": "Reasoning contract"})["id"]
-        captured.clear()
-        result = call(
-            f"/session/{session}/message",
-            {
-                "model": {
-                    "providerID": "anthropic",
-                    "modelID": model,
-                    "options": {"thinking": {"type": "enabled", "budgetTokens": 31999}},
-                },
-                "parts": base["parts"],
-            },
-        )
-        assert not result["info"].get("error")
-        assert captured[-1]["thinking"] is None

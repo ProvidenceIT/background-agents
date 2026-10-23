@@ -334,7 +334,7 @@ export const MODEL_CATALOG = [
       {
         id: "xai/grok-4.7-build-fast",
         name: "Grok 4.7 Build Fast",
-        description: "Fast Grok coding model, SuperGrok harness only",
+        description: "Fast Grok coding model",
         reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
       },
       {

@@ -20,11 +20,12 @@ ALTER TABLE automations RENAME COLUMN harness_next TO harness;
 
 -- An OpenCode automation on an Anthropic model would fail its next run, so it
 -- moves to Claude Agent. A model id with no provider prefix is an Anthropic
--- one. Sessions keep their harness (fixed at create); their next turn is
--- refused with a hint to fork onto Claude Agent.
+-- one, except a bare gpt-* id, which the shared code reads as OpenAI
+-- (normalizeModelId). Sessions keep their harness (fixed at create); their
+-- next turn is refused with a hint to fork onto Claude Agent.
 UPDATE automations SET harness = 'claude'
   WHERE harness = 'opencode'
-    AND (model LIKE 'anthropic/%' OR model NOT LIKE '%/%');
+    AND (model LIKE 'anthropic/%' OR (model NOT LIKE '%/%' AND model NOT LIKE 'gpt-%'));
 
 -- Integration settings saved an OpenCode + Anthropic pair that the next save
 -- would refuse. The store writes them with JSON.stringify, one harness per

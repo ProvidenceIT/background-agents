@@ -104,3 +104,28 @@ describe("resolveHarnessModelSelection", () => {
     expect(select("claude", "openai/gpt-6.1-sol")).toBe("anthropic/claude-sonnet-4-6");
   });
 });
+
+describe("resolveHarnessModelSelection on a session's fixed harness", () => {
+  const hold = (harness: "opencode" | "claude", model: string) =>
+    resolveHarnessModelSelection({
+      harness,
+      preference: { model },
+      enabledModels: ["openai/gpt-6-sol", "anthropic/claude-sonnet-4-6"],
+      enabledModelOptions: [],
+      loading: false,
+      holdPinnedElsewhere: true,
+    }).availability;
+
+  it("holds an OpenCode session on an Anthropic model with the fork hint, not another provider", () => {
+    expect(hold("opencode", "anthropic/claude-sonnet-4-6")).toEqual({
+      status: "unavailable",
+      message:
+        "anthropic/claude-sonnet-4-6 runs only on Claude Agent; fork this session onto Claude Agent, or pick another model.",
+    });
+  });
+
+  it("lets a model the harness runs through", () => {
+    expect(hold("opencode", "openai/gpt-6-sol")).toEqual({ status: "available" });
+    expect(hold("claude", "anthropic/claude-sonnet-4-6")).toEqual({ status: "available" });
+  });
+});

@@ -484,23 +484,10 @@ class OpenCodeServer:
             "permission": opencode_permission(
                 user_invoked_skill_names(resolve_opencode_global_config_dir() / "skills")
             ),
-            "provider": {
-                "anthropic": {
-                    "models": {
-                        model: {
-                            "variants": {
-                                effort: {"thinking": {"type": "enabled", "budgetTokens": budget}}
-                                for effort, budget in (("high", 16_000), ("max", 31_999))
-                            }
-                        }
-                        for model in (
-                            "claude-haiku-4-5",
-                            "claude-sonnet-4-5",
-                            "claude-opus-4-5",
-                        )
-                    }
-                }
-            },
+            # Anthropic models run only on Claude Agent. The prompt guard covers the
+            # turn's model; this covers every other way OpenCode picks one (a repo's
+            # agent or subagent file naming anthropic/...), with any key in the env.
+            "disabled_providers": ["anthropic"],
         }
         # A session without a model has no default to write ("/" is not a
         # model); every prompt then names its own, or the harness refuses it.

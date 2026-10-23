@@ -572,6 +572,36 @@ describe("GitHubIntegrationSettings", () => {
     );
   });
 
+  it("switches a repo on OpenCode to Claude Agent when an Anthropic model is picked, keeping it", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: { defaults: { autoReviewOnOpen: true } },
+      repos: [{ repo: "acme/web", settings: { harness: "opencode" } }],
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    const row = repoOverrideRow("acme/web");
+    await user.click(within(row).getByRole("combobox", { name: "Model" }));
+    await user.click(await screen.findByRole("option", { name: "Claude Sonnet 4.6" }));
+    expect(within(row).getByRole("combobox", { name: "Agent harness" })).toHaveTextContent(
+      "Claude Agent"
+    );
+    await user.click(within(row).getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github/repos/acme/web",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: { model: "anthropic/claude-sonnet-4-6", harness: "claude" },
+        }),
+      })
+    );
+  }, 20000);
+
   it("returns a repo harness override to the global harness", async () => {
     const user = userEvent.setup();
     setupSWR({

@@ -146,6 +146,9 @@ class AgyHarness:
         self._auth_failure: str | None = None
         self._account_tag: str | None = None
         self._kill_task: asyncio.Task[bool] | None = None
+        # agy started a fresh conversation in place of the one asked for; the
+        # memory notes it never saw go ahead of the next prompt.
+        self._memory_pending = False
 
     @property
     def subscription_slot(self) -> str | None:
@@ -208,9 +211,13 @@ class AgyHarness:
     def turn_text(self, prompt: HarnessPrompt) -> str:
         """The prompt, with the memory notes ahead of it when a conversation starts."""
         memory = self.config.memory_text
-        if self.session_id is None and memory:
+        if self._needs_memory() and memory:
             return f"{memory}\n\n---\n\n{prompt.text}"
         return prompt.text
+
+    def _needs_memory(self) -> bool:
+        """agy has no per-turn rules flag: a conversation gets the notes in its first prompt."""
+        return self.session_id is None or self._memory_pending
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
         try:
@@ -232,6 +239,16 @@ class AgyHarness:
         )
         token_budget = token.expires_in_seconds() - TOKEN_EXPIRY_MARGIN_SECONDS
         budget = min(max_duration, token_budget)
+        if self.session_id is not None and not agy_env.conversation_exists(
+            self.config.cli_home, self.session_id
+        ):
+            # Asking for it would get a fresh conversation without the memory notes.
+            self.log.warn("agy.session.lost", requested=self.session_id)
+            await emit(
+                {"type": "warning", "scope": "provider", "message": LOST_CONVERSATION_WARNING}
+            )
+            self.session_id = None
+        with_memory = self._needs_memory()
         text = self.turn_text(prompt)
         stdin_prompt = len(text.encode("utf-8")) > PROMPT_ARGV_LIMIT_BYTES
         argv = self.build_argv(model, stdin_prompt=stdin_prompt, text=text)
@@ -257,7 +274,10 @@ class AgyHarness:
         refresher = asyncio.create_task(self._rewrite_token(token))
         try:
             async with asyncio.timeout(budget):
-                return await self._run_child(argv, text if stdin_prompt else None, state, emit)
+                outcome = await self._run_child(argv, text if stdin_prompt else None, state, emit)
+            if outcome.success and with_memory:
+                self._memory_pending = False
+            return outcome
         except asyncio.CancelledError:
             await self._terminate(self.limits.prompt_cleanup_timeout_seconds)
             raise
@@ -323,9 +343,7 @@ class AgyHarness:
                 if translation.outcome is not None:
                     outcome = translation.outcome
                     break
-            returncode = await cli_process.reap_group(
-                process, self.limits.prompt_cleanup_timeout_seconds, log=self.log, log_prefix="agy"
-            )
+            returncode = await self._reap(process)
             await asyncio.wait({stderr_task}, timeout=STDERR_SETTLE_SECONDS)
         finally:
             for task in (stderr_task, *tasks):
@@ -365,6 +383,7 @@ class AgyHarness:
             await emit(
                 {"type": "warning", "scope": "provider", "message": LOST_CONVERSATION_WARNING}
             )
+            self._memory_pending = True
         self.session_id = reported
         self.log.info("agy.session.ensure", agent_session_id=reported, action="created")
 
@@ -410,6 +429,20 @@ class AgyHarness:
 
     async def stop_execution(self, timeout_seconds: float) -> bool:
         return await self._terminate(timeout_seconds)
+
+    async def _reap(self, process: asyncio.subprocess.Process) -> int | None:
+        """Wait for an agy that reported its result; one that lingers is stopped tree and all.
+
+        ``cli_process.reap_group`` would stop only the group, and miss the
+        commands agy runs in sessions of their own.
+        """
+        timeout_seconds = self.limits.prompt_cleanup_timeout_seconds
+        with contextlib.suppress(TimeoutError):
+            async with asyncio.timeout(timeout_seconds):
+                await process.wait()
+        if process.returncode is None or cli_process.group_alive(process.pid):
+            await self._terminate(timeout_seconds)
+        return process.returncode
 
     async def _terminate(self, timeout_seconds: float) -> bool:
         """Stop agy's process group and every process it started outside it.

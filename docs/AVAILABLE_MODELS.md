@@ -77,7 +77,7 @@ instructions.
 | `xai/grok-4.5`            | Grok 4.5            | Grok for chat, coding, and agentic tools        | low, medium, high        | high           |
 | `xai/grok-4.6`            | Grok 4.6            | Grok for chat, coding, and agentic tools        | low, medium, high, xhigh | high           |
 | `xai/grok-4.7`            | Grok 4.7            | Latest Grok for chat, coding, and agentic tools | low, medium, high, xhigh | high           |
-| `xai/grok-4.7-build-fast` | Grok 4.7 Build Fast | Fast Grok coding model, SuperGrok harness only  | low, medium, high, xhigh | high           |
+| `xai/grok-4.7-build-fast` | Grok 4.7 Build Fast | Fast Grok coding model                          | low, medium, high, xhigh | high           |
 | `xai/grok-build-0.1`      | Grok Build 0.1      | Coding model for SuperGrok subscribers          | Not configurable         | N/A            |
 
 ## Google Antigravity

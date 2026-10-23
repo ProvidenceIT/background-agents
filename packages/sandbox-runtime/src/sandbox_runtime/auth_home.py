@@ -151,6 +151,8 @@ def _read_expires_at(path: Path) -> int | str | None:
 _AUTH_HOME_ENV_FILE = "env"
 # Shorter values are not credentials and would redact ordinary words.
 _MIN_SECRET_CHARS = 8
+# Pushed access tokens kept after a newer push replaced them, per file.
+_PUSHED_TOKENS_KEPT = 16
 # A Claude subscription token has this shape whether or not it is the one in
 # the home (a stale copy, one pasted into a prompt).
 _CLAUDE_OAUTH_TOKEN = re.compile(r"sk-ant-oat01-[A-Za-z0-9_-]+")
@@ -167,11 +169,17 @@ class AuthHomeSecretRedactor:
     in Codex's ``auth.json`` and in every Codex pool slot's, the pushed
     SuperGrok and Antigravity access tokens, plus anything shaped like a
     Claude token. The files are re-read only when they change.
+
+    A pushed token stays redacted after the next push replaces it: it is
+    valid until it expires, and the CLIs' own copies in the pod lag behind
+    the push.
     """
 
     def __init__(self, home: Path) -> None:
         self._home = home
         self._cache: dict[str, tuple[tuple[int, int] | None, tuple[str, ...]]] = {}
+        # Insertion-ordered, oldest first; a dict serves as an ordered set.
+        self._pushed_seen: dict[str, dict[str, None]] = {}
 
     @classmethod
     def from_environ(cls, environ: Mapping[str, str] = os.environ) -> AuthHomeSecretRedactor | None:
@@ -193,8 +201,18 @@ class AuthHomeSecretRedactor:
             values.update(self._read(relative, _json_string_values))
         for spec in pushed_token.PUSHED_CLIS.values():
             relative = f"{spec.directory}/{pushed_token.ACCESS_FILE}"
-            values.update(self._read(relative, _pushed_token_values))
+            values.update(self._remember(relative, self._read(relative, _pushed_token_values)))
         return tuple(sorted(values, key=len, reverse=True))
+
+    def _remember(self, relative: str, current: tuple[str, ...]) -> tuple[str, ...]:
+        """``current`` plus the last ``_PUSHED_TOKENS_KEPT`` values ``relative`` held."""
+        seen = self._pushed_seen.setdefault(relative, {})
+        for value in current:
+            seen.pop(value, None)
+            seen[value] = None
+        while len(seen) > _PUSHED_TOKENS_KEPT:
+            del seen[next(iter(seen))]
+        return tuple(seen)
 
     def redact(self, event: dict[str, Any]) -> dict[str, Any]:
         """``event`` with every credential value replaced; the input is not changed."""

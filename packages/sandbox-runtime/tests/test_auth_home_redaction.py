@@ -1,6 +1,7 @@
 """Credentials of a mounted subscription home never leave the bridge in an event."""
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -172,6 +173,35 @@ def test_redacts_both_pushed_access_tokens_and_follows_a_new_push(tmp_path: Path
     )
     redacted = redactor.redact(_tool_result("ya29.placeholder-next-push"))
     assert redacted["output"] == "***"
+
+
+def test_a_pushed_token_stays_redacted_after_the_next_push(tmp_path: Path):
+    # The replaced token still works until it expires, and agy's own copy lags the push.
+    home = _pushed_home(tmp_path)
+    redactor = AuthHomeSecretRedactor(home)
+    assert redactor.redact(_tool_result(AGY_ACCESS))["output"] == "***"
+
+    (home / "agy" / "access.json").write_text(
+        json.dumps({"schema": 1, "access_token": "ya29.placeholder-next-push", "expires_at": 1})
+    )
+    redacted = redactor.redact(_tool_result(f"{AGY_ACCESS} ya29.placeholder-next-push"))
+    assert redacted["output"] == "*** ***"
+
+
+def test_only_the_last_pushed_tokens_are_kept(tmp_path: Path):
+    home = _pushed_home(tmp_path)
+    redactor = AuthHomeSecretRedactor(home)
+    redactor.redact(_tool_result(""))
+    access = home / "grok" / "access.json"
+    for index in range(20):
+        access.write_text(
+            json.dumps({"schema": 1, "access_token": f"xai-placeholder-push-{index:02d}"})
+        )
+        # Same size each time; a distinct mtime marks each push as new.
+        os.utime(access, ns=(index * 10**9, index * 10**9))
+        redactor.redact(_tool_result(""))
+    redacted = redactor.redact(_tool_result("xai-placeholder-push-00 xai-placeholder-push-19"))
+    assert redacted["output"] == "xai-placeholder-push-00 ***"
 
 
 def test_the_pushed_files_ordinary_fields_are_not_redacted(tmp_path: Path):

@@ -18,7 +18,11 @@ import {
   type ValidModel,
 } from "@open-inspect/shared/models";
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
-import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
+import {
+  filterModelOptionsForHarness,
+  harnessForModelPick,
+  shouldClearModelForHarness,
+} from "@/lib/session-harness";
 import { HarnessSelect } from "./harness-select";
 import { GitHubHarnessWarning } from "./github-harness-warning";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -207,11 +211,16 @@ function RepoOverrideRow({
   // no longer silently produce it, and the mismatch is spelled out below.
   const effectiveHarness: HarnessId = harness ?? defaultHarness ?? DEFAULT_HARNESS;
   const effectiveModel = model || defaultModel;
-  const visibleModelOptions = filterModelOptionsForHarness(effectiveHarness, enabledModelOptions);
+  // Models pinned to another harness stay listed: picking one switches to it.
+  const visibleModelOptions = filterModelOptionsForHarness(effectiveHarness, enabledModelOptions, {
+    switchable: true,
+  });
 
   const handleModelChange = (newModel: string) => {
     setModel(newModel);
     setDirty(true);
+    const pinned = harnessForModelPick(effectiveHarness, newModel);
+    if (pinned !== effectiveHarness) setHarness(pinned);
 
     if (effort && newModel && !isValidReasoningEffort(newModel, effort)) {
       setEffort("");

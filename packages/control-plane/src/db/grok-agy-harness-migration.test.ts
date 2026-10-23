@@ -49,6 +49,7 @@ describe("migration 0101 (grok and agy harnesses, Anthropic on Claude Agent)", (
        ${insertAutomation("a-anthropic", "anthropic/claude-sonnet-4-6", "opencode")}
        ${insertAutomation("a-bare-claude", "claude-sonnet-4-6", "opencode")}
        ${insertAutomation("a-no-slash", "sonnet", "opencode")}
+       ${insertAutomation("a-bare-gpt", "gpt-5.4", "opencode")}
        ${insertAutomation("a-xai", "xai/grok-4.7", "opencode")}
        ${insertAutomation("a-codex", "openai/gpt-6-sol", "codex")}
        ${insertAutomation("a-claude", "anthropic/claude-opus-4-7", "claude")}
@@ -82,6 +83,8 @@ describe("migration 0101 (grok and agy harnesses, Anthropic on Claude Agent)", (
     expect(db.prepare("SELECT id, harness FROM automations ORDER BY id").all()).toEqual([
       { id: "a-anthropic", harness: "claude" },
       { id: "a-bare-claude", harness: "claude" },
+      // A bare gpt-* id is OpenAI's (normalizeModelId), so it stays on OpenCode.
+      { id: "a-bare-gpt", harness: "opencode" },
       { id: "a-claude", harness: "claude" },
       { id: "a-codex", harness: "codex" },
       { id: "a-no-slash", harness: "claude" },

@@ -130,6 +130,28 @@ describe("ForkSessionDialog", () => {
     expect(push).toHaveBeenCalledWith("/session/session-2");
   });
 
+  it("starts a legacy OpenCode session on an Anthropic model on Claude Agent, keeping its model", async () => {
+    const calls = stubFetch(({ url }) =>
+      url.endsWith("/handoff")
+        ? Response.json({ handoff: "Draft" })
+        : Response.json({ sessionId: "session-4", forkedFromSessionId: "session-1", created: true })
+    );
+    render(
+      <ForkSessionDialog open onOpenChange={vi.fn()} source={{ ...SOURCE, harness: "opencode" }} />
+    );
+    await screen.findByDisplayValue("Draft");
+
+    expect(screen.getByTestId("agent")).toHaveTextContent("claude anthropic/claude-opus-5");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    });
+
+    expect(postedBodies(calls)[0]).toMatchObject({
+      harness: "claude",
+      model: "anthropic/claude-opus-5",
+    });
+  });
+
   it("forks onto another agent with a model that agent can run", async () => {
     const calls = stubFetch(({ url }) =>
       url.endsWith("/handoff")

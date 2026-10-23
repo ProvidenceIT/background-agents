@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from sandbox_runtime import pushed_token
 from sandbox_runtime.harness import HarnessStartError, agy_env
 from sandbox_runtime.harness.codex_tools import TOOL_SERVER_MODULE
 from sandbox_runtime.pushed_token import PushedToken
@@ -90,6 +91,20 @@ class TestTokenFile:
         assert payload["token"]["token_type"] == "Bearer"
         assert payload["token"]["expiry"].endswith("Z")
         assert 1790 <= payload["token"]["expires_in"] <= 1800
+
+    def test_a_refresh_token_in_the_push_never_reaches_agy(self, tmp_path: Path):
+        # Egress cannot keep a pod from refreshing (www.googleapis.com serves a token
+        # endpoint too); what keeps it from refreshing is that no refresh token is here.
+        push(tmp_path, 3000)
+        access = tmp_path / "agy" / "access.json"
+        raw = json.loads(access.read_text())
+        raw.update(refresh_token="placeholder-refresh-token", id_token="placeholder-id-token")
+        access.write_text(json.dumps(raw))
+        pushed = pushed_token.read_file(access, "agy")
+        path = agy_env.write_token(tmp_path / "home", pushed)
+        text = path.read_text()
+        assert "refresh_token" not in text and "id_token" not in text
+        assert "placeholder-refresh-token" not in text and "placeholder-id-token" not in text
 
     def test_rewrite_replaces_the_file_and_leaves_no_temp(self, tmp_path: Path):
         agy_env.write_token(tmp_path, token(1000))
