@@ -417,7 +417,11 @@ Automations:
   on (`shadow` rows are never sent) and drained each minute in `live` mode. The payload is the
   channel's closed message, the `NoticeEnvelope` for a Teams DM and the doorbell body for motion
   (`channel = 'motion'`, recipient the session's external ref): never a title, prompt, agent text,
-  error string or cost.
+  error string or cost. The one exception is `channel = 'teams-agent'`: a `notify_user` notice the
+  session's agent asked for (`src/session-tools/notify-user.ts`, revision = its ordinal, at most
+  five per session and one a minute). Its cleaned text (mentions, markup and foreign links removed)
+  is kept only until the row settles, then dropped; the row keeps its SHA-256 and length. Shadow
+  rows never hold the text.
 - `subscription_sharing`: the single-row (`id = 'global'`) workspace policy, `household` (default,
   read when the row is absent) or `owner_only`, managed by `/subscription-sharing`.
 - `auth_home_leases` and `auth_home_lease_queue`: the Codex seat, one running Codex session per home

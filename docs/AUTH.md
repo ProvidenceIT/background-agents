@@ -555,6 +555,15 @@ its permission ceiling alone admits it nowhere.
   `SERVICE_AUTH_SECRET_MOTION` so one leaked key does not open both directions. Motion trusts the
   body only to pick the row it re-reads from the control plane. Motion is not a callback destination
   (`CALLBACK_DESTINATIONS`), and the doorbell key is not a verification key here.
+- **Agent session tools.** The sandbox-only routes `POST /sessions/:id/notify`,
+  `GET /sessions/:id/motion/task` and `POST /sessions/:id/motion/notes` serve the agent's
+  `notify_user`, `motion_get_task` and `motion_add_note` (`src/routes/session-tools.ts`). Sandbox
+  admission grants nothing specific: each route checks its own gate from the `session-tools`
+  integration (none enabled by default) on every call. `notify` only ever DMs the session's owner;
+  the agent cannot name a recipient. The motion routes refuse sessions whose external ref is not a
+  motion delegated-work ref, and call motion REST v1 with `MOTION_API_KEY`, which stays in the
+  control plane (never in global secrets, which sandboxes receive). They read the Task and add
+  notes; no call can change a Task's status.
 - **Ten opt-in routes.** A route admits an opt-in service only when its policy names it in
   `optInServices`; every other route answers 403 `service_capability_required` before the actor is
   resolved, whatever the ceiling says. Motion is named on exactly `POST /sessions`, `GET /sessions`,
