@@ -2,7 +2,7 @@ import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
 import { createNoticeChannelRegistry } from "./channels";
-import { SessionNoticeStore } from "./notice-store";
+import { SessionNoticeStore, withoutFreeText } from "./notice-store";
 import { loadNotificationSettings } from "./recorder";
 import type { NoticeChannelRegistry } from "./registry";
 
@@ -37,8 +37,10 @@ export async function drainSessionNotices(
   const result: NoticeDrainResult = { sent: 0, failed: 0, retried: 0 };
   for (const notice of await store.claimDue(nowMs, NOTICE_DRAIN_BATCH)) {
     const fields = { notice_id: notice.id, session_id: notice.sessionId, channel: notice.channel };
+    // A settled row keeps no agent text, whatever the outcome.
+    const settledPayload = withoutFreeText(notice.payload);
     const fail = async (code: string) => {
-      await store.markFailed(notice.id, code, nowMs);
+      await store.markFailed(notice.id, code, nowMs, settledPayload);
       log.warn("session_notice.failed", { ...fields, error_code: code });
       result.failed += 1;
     };
@@ -59,7 +61,7 @@ export async function drainSessionNotices(
       outcome = { kind: "retryable", code: "deliver_threw" } as const;
     }
     if (outcome.kind === "sent") {
-      await store.markSent(notice.id, nowMs);
+      await store.markSent(notice.id, nowMs, settledPayload);
       result.sent += 1;
     } else if (outcome.kind === "permanent" || notice.attempts >= NOTICE_MAX_ATTEMPTS) {
       await fail(outcome.code);

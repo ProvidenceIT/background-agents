@@ -2,6 +2,7 @@ import { noticeEnvelopeSchema, renderTeamsNoticeText } from "@open-inspect/share
 import {
   ENTRA_OBJECT_ID_PATTERN,
   MSTEAMS_DIRECT_MESSAGE_KIND,
+  type DirectMessageDelivery,
   type DirectMessagePoster,
 } from "../../auth-homes/expiry-digest";
 import type { SqlDatabase } from "../../db/sql-database";
@@ -17,6 +18,16 @@ export const TEAMS_NOTICE_CHANNEL = "teams";
  */
 const PERMANENT_HTTP_STATUSES = new Set([400, 401, 403, 404, 410, 413, 422]);
 
+/** How the bot's answer settles a notice row. */
+export function teamsDeliveryOutcome(delivery: DirectMessageDelivery): NoticeDeliveryOutcome {
+  if (delivery.ok) return { kind: "sent" };
+  if (delivery.httpStatus === null) return { kind: "retryable", code: "unreachable" };
+  const code = `http_${delivery.httpStatus}`;
+  return PERMANENT_HTTP_STATUSES.has(delivery.httpStatus)
+    ? { kind: "permanent", code }
+    : { kind: "retryable", code };
+}
+
 export interface TeamsDirectMessageChannelDeps {
   db: SqlDatabase;
   post: DirectMessagePoster;
@@ -26,7 +37,7 @@ export interface TeamsDirectMessageChannelDeps {
 }
 
 /** The owner's Entra object id, or null when they never signed in with Microsoft. */
-async function ownerObjectId(db: SqlDatabase, userId: string): Promise<string | null> {
+export async function ownerObjectId(db: SqlDatabase, userId: string): Promise<string | null> {
   const rows = await db
     .prepare(
       `SELECT provider_user_id FROM user_identities
@@ -90,12 +101,7 @@ export function teamsDirectMessageChannel(deps: TeamsDirectMessageChannelDeps): 
         text: renderTeamsNoticeText(envelope, { webAppUrl: deps.webAppUrl }),
         timestamp: nowMs,
       });
-      if (delivery.ok) return { kind: "sent" };
-      if (delivery.httpStatus === null) return { kind: "retryable", code: "unreachable" };
-      const code = `http_${delivery.httpStatus}`;
-      return PERMANENT_HTTP_STATUSES.has(delivery.httpStatus)
-        ? { kind: "permanent", code }
-        : { kind: "retryable", code };
+      return teamsDeliveryOutcome(delivery);
     },
   };
 }

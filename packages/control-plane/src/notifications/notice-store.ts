@@ -52,6 +52,24 @@ interface ClaimedRow {
   created_at: number;
 }
 
+/**
+ * What a row keeps once it settles: its payload without the agent's words.
+ * Only `notify_user` notices carry a `text` field; the audit keeps their hash
+ * and length. Any other payload is returned unchanged.
+ */
+export function withoutFreeText(payload: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return payload;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return payload;
+  if (!("text" in parsed)) return payload;
+  const { text: _text, ...rest } = parsed as Record<string, unknown>;
+  return JSON.stringify(rest);
+}
+
 export class SessionNoticeStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -122,26 +140,29 @@ export class SessionNoticeStore {
     return claimed;
   }
 
-  async markSent(id: number, nowMs: number): Promise<void> {
+  /** `payload` replaces the stored one (see {@link withoutFreeText}); the row is settled. */
+  async markSent(id: number, nowMs: number, payload?: string): Promise<void> {
     await this.db
       .prepare(
         `UPDATE session_notices
-         SET state = 'sent', delivered_at = ?, claimed_at = NULL, error_code = NULL, updated_at = ?
+         SET state = 'sent', delivered_at = ?, claimed_at = NULL, error_code = NULL,
+           payload = COALESCE(?, payload), updated_at = ?
          WHERE id = ? AND state = 'pending'`
       )
-      .bind(nowMs, nowMs, id)
+      .bind(nowMs, payload ?? null, nowMs, id)
       .run();
   }
 
   /** Settle a notice that will never be sent; `errorCode` is a short code, never a response body. */
-  async markFailed(id: number, errorCode: string, nowMs: number): Promise<void> {
+  async markFailed(id: number, errorCode: string, nowMs: number, payload?: string): Promise<void> {
     await this.db
       .prepare(
         `UPDATE session_notices
-         SET state = 'failed', claimed_at = NULL, error_code = ?, updated_at = ?
+         SET state = 'failed', claimed_at = NULL, error_code = ?,
+           payload = COALESCE(?, payload), updated_at = ?
          WHERE id = ? AND state = 'pending'`
       )
-      .bind(errorCode, nowMs, id)
+      .bind(errorCode, payload ?? null, nowMs, id)
       .run();
   }
 

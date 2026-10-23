@@ -5,6 +5,7 @@ import type { Logger } from "../logger";
 import type { Env } from "../types";
 import { NoticeChannelRegistry, type NoticeChannel } from "./registry";
 import { motionDoorbellChannel, parseMotionCallbackUrl } from "./senders/motion-doorbell";
+import { teamsAgentNoticeChannel } from "./senders/teams-agent";
 import { teamsDirectMessageChannel } from "./senders/teams-dm";
 
 /**
@@ -20,13 +21,10 @@ export function createNoticeChannelRegistry(
   const channels: NoticeChannel[] = [];
   const teamsSecret = callbackSigningSecret(env, "teams-bot");
   if (env.TEAMS_BOT && teamsSecret) {
+    const post = teamsDirectMessagePoster(env.TEAMS_BOT, teamsSecret);
     channels.push(
-      teamsDirectMessageChannel({
-        db,
-        post: teamsDirectMessagePoster(env.TEAMS_BOT, teamsSecret),
-        log,
-        webAppUrl: env.WEB_APP_URL,
-      })
+      teamsDirectMessageChannel({ db, post, log, webAppUrl: env.WEB_APP_URL }),
+      teamsAgentNoticeChannel({ post, webAppUrl: env.WEB_APP_URL })
     );
   }
   // Motion's doorbell needs both its URL and its own secret; either unset is off.
