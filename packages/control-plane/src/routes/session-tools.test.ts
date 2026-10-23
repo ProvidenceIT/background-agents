@@ -113,6 +113,14 @@ describe("session tool routes", () => {
       expect(await openSessionToolGates(db, bare, motion)).toEqual([]);
     });
 
+    it("opens nothing anywhere, repository-less sessions included, when no repo is enabled", async () => {
+      const repoless = { sessionId: MOTION_SESSION, repoOwner: null, repoName: null };
+      await enable(["notify", "motion_read", "motion_write"]);
+      expect(await openSessionToolGates(db, FULL_ENV, repoless)).toHaveLength(3);
+      await enable(["notify", "motion_read", "motion_write"], []);
+      expect(await openSessionToolGates(db, FULL_ENV, repoless)).toEqual([]);
+    });
+
     it("honours the repository allowlist", async () => {
       await enable(["notify"], ["acme/other"]);
       expect(

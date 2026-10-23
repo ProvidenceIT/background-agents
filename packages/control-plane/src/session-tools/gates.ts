@@ -54,7 +54,10 @@ export async function configuredSessionToolGates(
   const repo =
     target.repoOwner && target.repoName ? `${target.repoOwner}/${target.repoName}` : null;
   if (repo === null) {
+    // An allowlist scopes repositories, so a session without one follows the
+    // defaults; but an empty allowlist is the integration switched off.
     const global = await store.getGlobal("session-tools");
+    if (Array.isArray(global?.enabledRepos) && global.enabledRepos.length === 0) return [];
     return resolveSessionToolGates({ enabledRepos: null, settings: global?.defaults }, null);
   }
   return resolveSessionToolGates(await store.getResolvedConfig("session-tools", repo), repo);
