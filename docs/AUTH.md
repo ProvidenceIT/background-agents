@@ -563,7 +563,11 @@ its permission ceiling alone admits it nowhere.
   the agent cannot name a recipient. The motion routes refuse sessions whose external ref is not a
   motion delegated-work ref, and call motion REST v1 with `MOTION_API_KEY`, which stays in the
   control plane (never in global secrets, which sandboxes receive). They read the Task and add
-  notes; no call can change a Task's status.
+  notes; no call can change a Task's status. The open gates reach the sandbox as
+  `AGENT_SESSION_TOOLS` on the Kubernetes, Daytona and E2B providers only: Modal sandboxes do not
+  receive it yet, so the tools stay off there whatever the settings say. A session without a
+  repository follows the integration's defaults, except that an empty `enabledRepos` closes every
+  session.
 - **Ten opt-in routes.** A route admits an opt-in service only when its policy names it in
   `optInServices`; every other route answers 403 `service_capability_required` before the actor is
   resolved, whatever the ceiling says. Motion is named on exactly `POST /sessions`, `GET /sessions`,
