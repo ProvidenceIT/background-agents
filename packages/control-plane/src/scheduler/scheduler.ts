@@ -8,11 +8,7 @@
  * - RunComplete: callback from SessionDO on execution completion
  */
 
-import {
-  DEFAULT_HARNESS,
-  getValidHarnessOrDefault,
-  type HarnessId,
-} from "@open-inspect/shared/harnesses";
+import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import {
   matchesConditions,
   conditionRegistry,
@@ -42,6 +38,7 @@ import {
   EXECUTION_TIMEOUT_FAILURE_REASON,
   parseAutomationTriggerFields,
   toAutomationRun,
+  automationHarness,
   isDuplicateKeyError,
   type AutomationRow,
   type AutomationRunRow,
@@ -616,7 +613,7 @@ export class Scheduler {
             this.db,
             automation.id,
             automation.user_id,
-            getValidHarnessOrDefault(automation.harness)
+            automationHarness(automation)
           ),
         };
       } catch (error) {
@@ -1931,7 +1928,7 @@ export class Scheduler {
     // The run is its owner's background activity: the home is resolved for
     // the owner, gated by the owner's consent on this automation.
     const triggerActorUserId = automation.user_id ?? executionPrincipal.platformUserId;
-    const harness = getValidHarnessOrDefault(automation.harness);
+    const harness = automationHarness(automation);
     const sessionAdmission = await admitNewSession({
       db: this.db,
       requestId: run.id,

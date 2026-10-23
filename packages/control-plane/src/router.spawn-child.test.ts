@@ -270,27 +270,45 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     );
   });
 
-  it("rejects a child whose model needs an auth mode the harness cannot select", async () => {
+  it("spawns an Anthropic child of an OpenCode parent on Claude Agent", async () => {
     const store = makeStore();
-    store.getCompleteProviderAuth.mockResolvedValue([
-      ...parentProviderAuth,
-      {
-        provider: "anthropic",
-        authMode: "provider_account",
-        providerAccountId: "3".repeat(32),
-        selectionSource: "installation_default",
-      },
-    ]);
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
     });
-    const { env } = makeSuccessfulEnv(spawnContext);
+    const { env, childStub } = makeSuccessfulEnv({ ...spawnContext, harness: "opencode" });
+
+    const response = await makeRequest(env, {
+      title: "Child task",
+      prompt: "Do the thing",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    expect(response.status).toBe(201);
+    await expect(getInitBody(childStub)).resolves.toMatchObject({
+      harness: "claude",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+  });
+
+  it("rejects a child whose model needs an auth mode the harness cannot select", async () => {
+    // The parent's openai row is a connected account; Codex runs only on a home.
+    const codexParent: TestSpawnContext = {
+      ...spawnContext,
+      harness: "codex",
+      model: "openai/gpt-5.6-sol",
+    };
+    vi.mocked(getEffectiveEnabledModels).mockResolvedValue(["openai/gpt-5.6-sol"]);
+    const store = makeStore(null, codexParent);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    const { env } = makeSuccessfulEnv(codexParent);
 
     const response = await makeRequest(env);
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
-      error: expect.stringContaining("select an API key"),
+      error: expect.stringContaining("only on a subscription home"),
     });
     expect(store.create).not.toHaveBeenCalled();
   });

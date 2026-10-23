@@ -1,4 +1,4 @@
-import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
+import { checkHarnessCompatibility, resolveHarnessForModel } from "@open-inspect/shared/harnesses";
 import { parseBody } from "./body";
 import { Hono } from "hono";
 import { admit } from "../routing/admit";
@@ -236,8 +236,9 @@ export async function handleSpawnChild(
     return error(`Model "${body.model}" is not enabled`, 400);
   }
   const model = resolveEnabledModel({ model: requestedModel, enabledModels });
-  // The child runs on the parent's harness; the requested model must run there.
-  const harness = spawnContext.harness;
+  // The child runs on the parent's harness, or on the model's own harness when
+  // the parent's cannot run it (an Anthropic child of an OpenCode parent).
+  const harness = resolveHarnessForModel(spawnContext.harness, model);
   const harnessIncompatibility = checkHarnessCompatibility(harness, model);
   if (harnessIncompatibility) {
     return error(harnessIncompatibility.message, 400);

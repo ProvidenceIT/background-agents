@@ -16,6 +16,8 @@ import {
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
 } from "../router.test-support";
+import { harnessForModel } from "@open-inspect/shared/harnesses";
+import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { SubscriptionSharingStore, UserAuthHomeStore } from "../auth-homes/store";
 import { sessionCreateRoutes } from "./session-create";
 
@@ -231,6 +233,37 @@ describe("POST /sessions with auth homes", () => {
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: string }).error).toBe(
       "The Codex harness runs openai only on a subscription home; enrol one under Settings > Subscription homes."
+    );
+    expect(await sessionCount()).toBe(0);
+  });
+
+  it("runs an Anthropic model on Claude Agent when no harness is asked for", async () => {
+    const response = await post(OWNER, { model: MODEL });
+
+    expect(response.status).toBe(201);
+    expect(await store.prepare("SELECT harness, model FROM sessions").first()).toEqual({
+      harness: "claude",
+      model: MODEL,
+    });
+  });
+
+  it("runs the default model on its own harness when neither is asked for", async () => {
+    const response = await post(OWNER, {});
+
+    expect(response.status).toBe(201);
+    expect(await store.prepare("SELECT harness, model FROM sessions").first()).toEqual({
+      harness: harnessForModel(DEFAULT_MODEL),
+      model: DEFAULT_MODEL,
+    });
+    expect(harnessForModel(DEFAULT_MODEL)).toBe("claude");
+  });
+
+  it("refuses an Anthropic model asked for on OpenCode, pointing at Claude Agent", async () => {
+    const response = await post(OWNER, { model: MODEL, harness: "opencode" });
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain(
+      "It runs only on Claude Agent"
     );
     expect(await sessionCount()).toBe(0);
   });

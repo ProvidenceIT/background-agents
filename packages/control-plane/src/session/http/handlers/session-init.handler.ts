@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Logger } from "../../../logger";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
-import { getValidHarnessOrDefault, harnessIdSchema } from "@open-inspect/shared/harnesses";
+import { harnessForModel, harnessIdSchema } from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { normalizeSandboxSettings } from "../../../sandbox/settings";
@@ -186,7 +186,8 @@ export class SessionInitHandler {
         repoName,
         repoId: hasRepoOwner ? body.repoId : null,
         baseBranch,
-        harness: getValidHarnessOrDefault(body.harness),
+        // No harness given: the model's own, as on session create.
+        harness: body.harness ?? harnessForModel(model),
         model,
         reasoningEffort,
         status: "created",

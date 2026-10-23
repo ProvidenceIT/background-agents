@@ -491,6 +491,7 @@ const sampleAutomation = {
   trigger_type: "schedule",
   schedule_cron: "0 9 * * *",
   schedule_tz: "UTC",
+  harness: "claude",
   model: "anthropic/claude-sonnet-4-6",
   reasoning_effort: null,
   enabled: 1,
@@ -3835,7 +3836,7 @@ describe("Scheduler", () => {
     };
     const teamAutomation: AutomationRow = {
       ...sampleAutomation,
-      harness: "opencode",
+      harness: "claude",
       owner_team_id: teamId,
       event_type: null,
       trigger_config: null,

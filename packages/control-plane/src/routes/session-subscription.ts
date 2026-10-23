@@ -7,6 +7,7 @@ import type {
   SessionSubscription,
   SessionSubscriptionResponse,
 } from "@open-inspect/shared/types/session-subscription";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { UserAuthHomeStore } from "../auth-homes/store";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import { SessionIndexStore } from "../db/session-index";
@@ -19,11 +20,12 @@ import type { SessionRouteContext } from "./session-route";
 
 /**
  * The providers whose harness reports which home pool slot a turn spent: the Claude
- * harness (claude/pool) and the Codex harness (codex-pool). Codex turns are the
- * ledger rows of the Codex harness; every other slot is a Claude one.
+ * harness (claude/pool) and the Codex harness (codex-pool). Each lists only its own
+ * harness's ledger rows, so a Grok or Antigravity turn never counts in the Claude pool.
  */
 const SLOT_PROVIDERS = new Set<AuthHomeProviderId>(["anthropic", "openai"]);
 const CODEX_SLOT_PROVIDER = "openai" satisfies AuthHomeProviderId;
+const CLAUDE_SLOT_HARNESS = "claude" satisfies HarnessId;
 
 /** Z.AI has no provider-auth row: only a home carries it, else workspace secrets do. */
 const ZAI_PROVIDER = "zai-coding-plan" satisfies AuthHomeProviderId;
@@ -95,7 +97,7 @@ export async function handleSessionSubscription(
   const accounts = new ModelProviderAccountStore(ctx.db);
   const ledger = new UsageLedgerStore(ctx.db);
   const [claudeSlots, codexSlots] = await Promise.all([
-    ledger.slotsForSession(row.id, { except: CODEX_SEAT }),
+    ledger.slotsForSession(row.id, { only: CLAUDE_SLOT_HARNESS, orUnrecorded: true }),
     ledger.slotsForSession(row.id, { only: CODEX_SEAT }),
   ]);
   const spent = await Promise.all(

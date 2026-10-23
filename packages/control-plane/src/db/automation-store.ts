@@ -9,6 +9,7 @@ import { isWorkspaceAdmin, WORKSPACE_ADMIN_ROLE_KEYS } from "@open-inspect/share
 import {
   DEFAULT_HARNESS,
   getValidHarnessOrDefault,
+  resolveHarnessForModel,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import type {
@@ -267,6 +268,15 @@ function toAutomationRepository(row: AutomationRepositoryRow): AutomationReposit
 }
 
 /** Map an automation row plus its repository and environment rows to the response shape. */
+/**
+ * The harness an automation runs on: its stored one, or its model's own when
+ * the stored one cannot run that model (an OpenCode row on an Anthropic model,
+ * written before Anthropic models moved to Claude Agent).
+ */
+export function automationHarness(row: Pick<AutomationRow, "harness" | "model">): HarnessId {
+  return resolveHarnessForModel(getValidHarnessOrDefault(row.harness), row.model);
+}
+
 export function toAutomation(
   row: AutomationRow,
   repositoryRows: AutomationRepositoryRow[],
@@ -282,7 +292,7 @@ export function toAutomation(
     triggerType,
     scheduleCron: row.schedule_cron,
     scheduleTz: row.schedule_tz,
-    harness: getValidHarnessOrDefault(row.harness),
+    harness: automationHarness(row),
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     enabled: row.enabled === 1,

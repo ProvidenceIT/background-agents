@@ -241,7 +241,7 @@ describe("admitNewSession", () => {
       actorUserId: HOUSEHOLD.owner,
       model: "anthropic/claude-sonnet-4-6",
       triggerKind: "prompt",
-      harness: "opencode",
+      harness: "claude",
       providerAuth: [
         { provider: "anthropic", authMode: "api_key", selectionSource: "installation_default" },
         { provider: "openai", authMode: "api_key", selectionSource: "installation_default" },

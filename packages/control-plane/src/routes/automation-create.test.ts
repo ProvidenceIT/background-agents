@@ -184,6 +184,39 @@ describe("automation create route", () => {
       expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
     });
 
+    it("runs an Anthropic model on Claude Agent when no harness is given", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "slack_event" });
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Slack triage",
+          instructions: "Triage the message",
+          model: "anthropic/claude-sonnet-4-6",
+          triggerType: "slack_event",
+          triggerConfig: {
+            conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+          },
+        },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ harness: "claude", model: "anthropic/claude-sonnet-4-6" })
+      );
+    });
+
+    it("refuses an Anthropic model asked for on OpenCode", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: { ...validBody, harness: "opencode", model: "anthropic/claude-sonnet-4-6" },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: expect.stringContaining("It runs only on Claude Agent"),
+      });
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+    });
+
     it("normalizes Slack channel IDs before persisting config and index rows", async () => {
       mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "slack_event" });
 
@@ -308,7 +341,7 @@ describe("automation create route", () => {
     it("rejects a pin the automation's harness cannot use", async () => {
       mockProviderAccountStore.getById.mockResolvedValue({
         id: "0123456789abcdef0123456789abcdef",
-        provider: "anthropic",
+        provider: "openai",
         status: "active",
         ownerUserId: "user-1",
         archivedAt: null,
@@ -317,9 +350,10 @@ describe("automation create route", () => {
       const res = await callRoute("POST", "/automations", {
         body: {
           ...validBody,
-          model: "anthropic/claude-sonnet-4-6",
+          harness: "codex",
+          model: "openai/gpt-6.1-sol",
           providerSelections: {
-            anthropic: {
+            openai: {
               mode: "provider_account",
               accountId: "0123456789abcdef0123456789abcdef",
             },
@@ -329,7 +363,7 @@ describe("automation create route", () => {
 
       expect(res.status).toBe(400);
       await expect(res.json()).resolves.toEqual({
-        error: expect.stringContaining("select an API key"),
+        error: expect.stringContaining("only on a subscription home"),
       });
       expect(mockBatch).not.toHaveBeenCalled();
     });

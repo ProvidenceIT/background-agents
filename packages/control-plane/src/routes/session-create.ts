@@ -4,7 +4,8 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { RepositoryRef, RepositoryPair } from "@open-inspect/shared/types/repositories";
 import {
   checkHarnessCompatibility,
-  getValidHarnessOrDefault,
+  harnessForModel,
+  isValidHarness,
 } from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
@@ -440,8 +441,9 @@ export async function createNewSession(
   }
 
   // Validate harness, model and reasoning effort once for both DO init and D1 index
-  const harness = getValidHarnessOrDefault(body.harness);
+  // No harness asked for: the model's own harness, so Anthropic lands on Claude Agent.
   const model = getValidModelOrDefault(body.model);
+  const harness = isValidHarness(body.harness) ? body.harness : harnessForModel(model);
   const harnessModelIncompatibility = checkHarnessCompatibility(harness, model);
   if (harnessModelIncompatibility) return error(harnessModelIncompatibility.message, 400);
   const reasoningEffort =

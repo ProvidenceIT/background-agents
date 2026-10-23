@@ -44,6 +44,13 @@ export interface HomeSubscriptionSlot {
   lastUsedAt: number;
 }
 
+/** Which harness's turns a slot listing keeps; see `slotsForSession`. */
+export interface SlotHarnessFilter {
+  only?: string;
+  orUnrecorded?: boolean;
+  except?: string;
+}
+
 const slotRowSchema = z.object({
   slot: z.string(),
   turns: z.number(),
@@ -124,14 +131,15 @@ export class UsageLedgerStore {
   /**
    * The subscription-home slots a session's settled turns spent, most recent first.
    * `harness.only` keeps the turns of one harness, `harness.except` drops them (turns
-   * with no recorded harness are kept by `except`), so a Claude and a Codex pool slot
-   * are never listed under each other's provider.
+   * with no recorded harness are kept by `except`, and by `only` with `orUnrecorded`),
+   * so a Claude, Codex or Grok pool slot is never listed under another's provider.
    */
   async slotsForSession(
     sessionId: string,
-    harness: { only?: string; except?: string } = {}
+    harness: SlotHarnessFilter = {}
   ): Promise<SessionSubscriptionSlot[]> {
     const only = harness.only ?? null;
+    const unrecorded = harness.orUnrecorded ? 1 : 0;
     const except = harness.except ?? null;
     const { results } = await this.db
       .prepare(
@@ -140,13 +148,13 @@ export class UsageLedgerStore {
            MAX(settled_at) AS last_used_at
          FROM usage_ledger
          WHERE session_id = ? AND subscription_slot IS NOT NULL
-           AND (? IS NULL OR harness = ?)
+           AND (? IS NULL OR harness = ? OR (? = 1 AND harness IS NULL))
            AND (? IS NULL OR harness IS NULL OR harness <> ?)
          GROUP BY subscription_slot
          ORDER BY last_used_at DESC, slot
          LIMIT ?`
       )
-      .bind(sessionId, only, only, except, except, MAX_SESSION_SUBSCRIPTION_SLOTS)
+      .bind(sessionId, only, only, unrecorded, except, except, MAX_SESSION_SUBSCRIPTION_SLOTS)
       .all();
     return results.map((raw) => {
       const row = slotRowSchema.parse(raw);
@@ -167,9 +175,10 @@ export class UsageLedgerStore {
    */
   async slotsForHome(
     homeId: string,
-    harness: { only?: string; except?: string } = {}
+    harness: SlotHarnessFilter = {}
   ): Promise<HomeSubscriptionSlot[]> {
     const only = harness.only ?? null;
+    const unrecorded = harness.orUnrecorded ? 1 : 0;
     const except = harness.except ?? null;
     const { results } = await this.db
       .prepare(
@@ -177,13 +186,13 @@ export class UsageLedgerStore {
          FROM usage_ledger l
          JOIN sessions s ON s.id = l.session_id
          WHERE s.auth_home_id = ? AND l.subscription_slot IS NOT NULL
-           AND (? IS NULL OR l.harness = ?)
+           AND (? IS NULL OR l.harness = ? OR (? = 1 AND l.harness IS NULL))
            AND (? IS NULL OR l.harness IS NULL OR l.harness <> ?)
          GROUP BY l.subscription_slot
          ORDER BY last_used_at DESC, slot
          LIMIT ?`
       )
-      .bind(homeId, only, only, except, except, MAX_SESSION_SUBSCRIPTION_SLOTS)
+      .bind(homeId, only, only, unrecorded, except, except, MAX_SESSION_SUBSCRIPTION_SLOTS)
       .all();
     return results
       .map((raw) => {

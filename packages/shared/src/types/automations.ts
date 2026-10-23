@@ -209,7 +209,7 @@ export const createAutomationRequestSchema = z.object({
   triggerType: automationTriggerTypeSchema.optional(),
   scheduleCron: z.string().optional(),
   scheduleTz: z.string().optional(),
-  /** Agent harness for the sessions this automation creates. Omission means the built-in harness. */
+  /** Agent harness for the sessions this automation creates. Omission means the model's harness. */
   harness: harnessIdSchema.optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().nullable().optional(),
