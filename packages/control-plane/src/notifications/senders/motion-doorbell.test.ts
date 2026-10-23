@@ -45,6 +45,7 @@ function settled(overrides: Partial<SettledSession> = {}): SettledSession {
     spawnSource: "motion",
     repliedInChatThread: false,
     watchingUserIds: [],
+    lastTurnDurationMs: null,
     ownerUserId: "user-owner",
     ownerWatching: false,
     externalRef: { service: "motion", ref: REF },

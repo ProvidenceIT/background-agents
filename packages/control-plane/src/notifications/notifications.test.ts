@@ -43,7 +43,7 @@ import {
   MOTION_NOTICE_CHANNEL,
   motionDoorbellChannel,
 } from "./senders/motion-doorbell";
-import { teamsDirectMessageChannel } from "./senders/teams-dm";
+import { teamsDirectMessageChannel, WATCHED_TURN_NOTICE_MIN_MS } from "./senders/teams-dm";
 
 const SESSION = "9f2c4e1a7b3d5f60a1b2c3d4e5f60718";
 const TITLE = "Acme client secret plan";
@@ -70,6 +70,7 @@ function reading(overrides: Partial<SettlementReading> = {}): SettlementReading 
     latestTerminalMessage: { source: "web", callback_context: null },
     artifacts: [],
     activeDurationMs: 12 * 60 * 1000,
+    lastTurnDurationMs: 60 * 1000,
     lastTurnLimit: null,
     shutdown: null,
     watchingUserIds: [],
@@ -114,6 +115,7 @@ describe("settledSessionFacts", () => {
       spawnSource: "user",
       repliedInChatThread: false,
       watchingUserIds: [],
+      lastTurnDurationMs: 60 * 1000,
     });
     expect(noticeEnvelopeSchema.parse(facts.envelope)).toEqual(facts.envelope);
   });
@@ -283,6 +285,21 @@ describe("session notices", () => {
       await configure({ enabled: true, mode: "live" });
       expect(await record(facts({ watchingUserIds: ["user-other", OWNER] }))).toBe(0);
       expect(await record(facts({ revision: 8, watchingUserIds: ["user-other"] }))).toBe(1);
+    });
+
+    it("still DMs a watching owner when the turn ran long", async () => {
+      await configure({ enabled: true, mode: "live" });
+      const watching = { watchingUserIds: [OWNER] };
+      expect(
+        await record(facts({ ...watching, lastTurnDurationMs: WATCHED_TURN_NOTICE_MIN_MS - 1 }))
+      ).toBe(0);
+      expect(
+        await record(
+          facts({ ...watching, revision: 8, lastTurnDurationMs: WATCHED_TURN_NOTICE_MIN_MS })
+        )
+      ).toBe(1);
+      // No start or end time counts as short.
+      expect(await record(facts({ ...watching, revision: 9, lastTurnDurationMs: null }))).toBe(0);
     });
 
     it("tells the owner of each turn that ends while they are away", async () => {
@@ -721,6 +738,7 @@ describe("SessionNoticeRecorder", () => {
       latestTerminalMessage: () => ({ source: "web", callback_context: null }),
       artifacts: () => [],
       activeDurationMs: () => 1_000,
+      lastTurnDurationMs: () => 1_000,
       lastTurnLimit: () => null,
       shutdown: () => null,
       watchingUserIds: () => ["user-watching"],
@@ -794,11 +812,12 @@ describe("SessionNoticeRecorder", () => {
     ]);
   });
 
-  it("passes on who is watching the session when a turn ends", async () => {
+  it("passes on who is watching the session and how long the turn ran", async () => {
     const { recorder, submitted, recorded } = setup();
     recorder.settled(root, SESSION, "completed", 3, NOW);
     for (const entry of submitted) await entry.task();
     expect(recorded[0]?.watchingUserIds).toEqual(["user-watching"]);
+    expect(recorded[0]?.lastTurnDurationMs).toBe(1_000);
   });
 
   it("ignores other statuses, child sessions and health checks", () => {

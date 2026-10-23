@@ -41,6 +41,8 @@ export interface SettledSessionFacts {
   repliedInChatThread: boolean;
   /** Users with the session open when it settled; never stored. */
   watchingUserIds: readonly string[];
+  /** How long the turn that ended ran; null when unknown. */
+  lastTurnDurationMs: number | null;
 }
 
 /** The facts plus what the control plane adds from the index and settings. */

@@ -94,6 +94,8 @@ export interface SettlementReading {
   /** Newest first, as the artifact repository lists them. */
   artifacts: readonly Pick<ArtifactRow, "type" | "url" | "metadata">[];
   activeDurationMs: number;
+  /** How long the turn that just ended ran; null when the turn has no start or end time. */
+  lastTurnDurationMs: number | null;
   lastTurnLimit: TurnLimit | null;
   shutdown: SandboxShutdownState | null;
   /** Users with the session open in a client when it settled. */
@@ -176,6 +178,7 @@ export function settledSessionFacts(
       message.callback_context !== null &&
       (CHAT_REPLY_SOURCES as readonly string[]).includes(message.source),
     watchingUserIds: reading.watchingUserIds,
+    lastTurnDurationMs: reading.lastTurnDurationMs,
   };
 }
 
@@ -184,6 +187,7 @@ export interface SettlementSource {
   latestTerminalMessage(): Pick<MessageRow, "source" | "callback_context"> | null;
   artifacts(): readonly Pick<ArtifactRow, "type" | "url" | "metadata">[];
   activeDurationMs(): number;
+  lastTurnDurationMs(): number | null;
   lastTurnLimit(): TurnLimit | null;
   shutdown(): SandboxShutdownState | null;
   /** Users with an authenticated client connected to the session. */
@@ -241,6 +245,7 @@ export class SessionNoticeRecorder {
           latestTerminalMessage: owed ? source.latestTerminalMessage() : null,
           artifacts: owed ? source.artifacts() : [],
           activeDurationMs: owed ? source.activeDurationMs() : 0,
+          lastTurnDurationMs: owed ? source.lastTurnDurationMs() : null,
           lastTurnLimit: owed ? source.lastTurnLimit() : null,
           shutdown: owed ? source.shutdown() : null,
           watchingUserIds: owed ? source.watchingUserIds() : [],

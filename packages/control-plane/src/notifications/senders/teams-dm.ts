@@ -16,6 +16,13 @@ export const TEAMS_NOTICE_CHANNEL = "teams";
  * person who has not installed the Teams app; retrying it would loop, which
  * is what the subscription-home sender's release-and-retry would do here.
  */
+/**
+ * A turn at least this long still gets a DM while the owner has the session
+ * open: the web app cannot tell a background tab from one being watched, and
+ * a long run is the one the owner has most likely left.
+ */
+export const WATCHED_TURN_NOTICE_MIN_MS = 5 * 60 * 1000;
+
 const PERMANENT_HTTP_STATUSES = new Set([400, 401, 403, 404, 410, 413, 422]);
 
 /** How the bot's answer settles a notice row. */
@@ -68,8 +75,9 @@ export function teamsDirectMessageChannel(deps: TeamsDirectMessageChannelDeps): 
       if (session.envelope === null) return [];
       // The thread the prompt came from already got the bot's reply.
       if (session.repliedInChatThread) return [];
-      // The owner had the session open and saw it end.
-      if (session.ownerWatching) return [];
+      // The owner had the session open and saw a short turn end.
+      const longTurn = (session.lastTurnDurationMs ?? 0) >= WATCHED_TURN_NOTICE_MIN_MS;
+      if (session.ownerWatching && !longTurn) return [];
       // Motion tells its own users about the work it delegated.
       const fromMotion =
         session.spawnSource === "motion" || session.externalRef?.service === "motion";

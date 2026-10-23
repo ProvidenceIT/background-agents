@@ -507,6 +507,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         latestTerminalMessage: () => messageRepository.getLatestTerminalMessage(),
         artifacts: () => artifactRepository.listArtifacts(),
         activeDurationMs: () => messageRepository.getActiveDurationMs(),
+        lastTurnDurationMs: () => {
+          const turn = messageRepository.getLatestTerminalMessage();
+          return turn?.started_at != null && turn.completed_at != null
+            ? Math.max(0, turn.completed_at - turn.started_at)
+            : null;
+        },
         lastTurnLimit: () => sessionCoreRepository.getLastTurnLimit(),
         // Read only on a transition, after the composition below has run.
         shutdown: (): SandboxShutdownState | null => shutdown.snapshot(),
