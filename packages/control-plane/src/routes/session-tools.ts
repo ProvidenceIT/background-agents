@@ -70,8 +70,9 @@ async function admitTool(
   }
   if (!open.includes(gate)) {
     logger.info("session_tool.denied", { session_id: sessionId, gate, reason: "gate_closed" });
+    // 404, not 403: the session is admitted; the tool just is not offered here.
     return refuse(
-      403,
+      404,
       "feature_disabled",
       "This tool is not enabled for this session. Do not retry; carry on without it."
     );
@@ -200,7 +201,7 @@ async function motionContext(
       ? delegatedWorkIdFromRef(row.external_ref)
       : null;
   if (delegatedWorkId === null) {
-    return refuse(403, "not_a_motion_session", "This session was not delegated from motion.");
+    return refuse(404, "not_a_motion_session", "This session was not delegated from motion.");
   }
   const client = clientFor(env);
   if (client === null) {

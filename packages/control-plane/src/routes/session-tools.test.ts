@@ -148,7 +148,7 @@ describe("session tool routes", () => {
     it("refuses while the gate is closed, which is the default", async () => {
       await notifications({ enabled: true, mode: "live" });
       const response = await notify({ message: "PR ready" });
-      expect(response.status).toBe(403);
+      expect(response.status).toBe(404);
       expect(await response.json()).toMatchObject({ reason: "feature_disabled" });
       expect(await rows()).toEqual([]);
     });
@@ -157,7 +157,7 @@ describe("session tool routes", () => {
       await enable(["notify"]);
       await notifications({ enabled: true, mode: "live" });
       const env = { ...FULL_ENV, TEAMS_BOT: undefined } as Env;
-      expect((await notify({ message: "PR ready" }, env)).status).toBe(403);
+      expect((await notify({ message: "PR ready" }, env)).status).toBe(404);
     });
 
     it("refuses while owner notices are off", async () => {
@@ -345,8 +345,8 @@ describe("session tool routes", () => {
       );
 
     it("refuses both while their gates are closed", async () => {
-      expect((await getTask()).status).toBe(403);
-      expect((await addNote({ title: "t", content: "c" })).status).toBe(403);
+      expect((await getTask()).status).toBe(404);
+      expect((await addNote({ title: "t", content: "c" })).status).toBe(404);
       expect(calls).toEqual([]);
     });
 
@@ -356,12 +356,12 @@ describe("session tool routes", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual(TASK);
       expect(calls).toEqual([["getTask", "dw_123"]]);
-      expect((await addNote({ title: "t", content: "c" })).status).toBe(403);
+      expect((await addNote({ title: "t", content: "c" })).status).toBe(404);
     });
 
     it("refuses a session motion did not start, even with the gates open", async () => {
       await enable(["motion_read", "motion_write"]);
-      expect((await getTask(SESSION)).status).toBe(403);
+      expect((await getTask(SESSION)).status).toBe(404);
       expect(calls).toEqual([]);
     });
 
