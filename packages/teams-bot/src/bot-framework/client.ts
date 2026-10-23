@@ -69,6 +69,19 @@ class BotFrameworkRequestError extends Error {
   }
 }
 
+/**
+ * The connector would not open a chat with this person: the app is not
+ * installed for them, or the tenant does not know them. Sending again the
+ * same way cannot succeed, so the caller's notice is settled, not retried.
+ */
+export function isUnreachableRecipient(error: unknown): boolean {
+  return (
+    error instanceof BotFrameworkRequestError &&
+    error.operation === "createConversation" &&
+    (error.status === 403 || error.status === 404)
+  );
+}
+
 export interface BotFrameworkClient {
   /** Post `text` as a reply to `replyToId`; in a channel this lands in (or starts) that post's thread. */
   replyToActivity(address: ActivityAddress, replyToId: string, text: string): Promise<SentActivity>;

@@ -4,8 +4,17 @@ import { harnessIdSchema } from "../harnesses";
 import { escapeRegExp } from "../regex";
 import { z } from "zod";
 import { teamSettingsSchema } from "./teams";
+import { SESSION_TOOL_GATES, sessionToolGateSchema, type SessionToolGate } from "../session-tools";
 
-export type IntegrationId = "github" | "linear" | "code-server" | "vnc" | "sandbox" | "slack";
+export type IntegrationId =
+  | "github"
+  | "linear"
+  | "code-server"
+  | "vnc"
+  | "sandbox"
+  | "slack"
+  | "notifications"
+  | "session-tools";
 
 /** Enforces the common shape for all integration configurations. */
 export interface IntegrationEntry<
@@ -621,6 +630,76 @@ export function matchRoutingRules(message: string, rules: SlackRoutingRule[]): S
 }
 
 /**
+ * Session notices to the owner (see `../notices.ts`). `mode` stages a rollout:
+ * `shadow` records each notice it would send and sends nothing, `live` sends.
+ * Global only: who is told is the owner, whatever the repository.
+ */
+export const notificationModeSchema = z.enum(["off", "shadow", "live"]);
+export type NotificationMode = z.infer<typeof notificationModeSchema>;
+
+export const notificationSettingsSchema = z.strictObject({
+  enabled: z.boolean().optional(),
+  mode: notificationModeSchema.optional(),
+  channels: z.strictObject({ teams: z.boolean().optional() }).optional(),
+  /** Leave sessions motion started to motion, which tells its own users. */
+  skipMotionSessions: z.boolean().optional(),
+});
+export type NotificationSettings = z.infer<typeof notificationSettingsSchema>;
+
+export interface ResolvedNotificationSettings {
+  enabled: boolean;
+  mode: NotificationMode;
+  channels: { teams: boolean };
+  skipMotionSessions: boolean;
+}
+
+export const NOTIFICATION_DEFAULTS: ResolvedNotificationSettings = {
+  enabled: false,
+  mode: "off",
+  channels: { teams: true },
+  skipMotionSessions: true,
+};
+
+export function resolveNotificationSettings(
+  settings: NotificationSettings | undefined
+): ResolvedNotificationSettings {
+  return {
+    enabled: settings?.enabled ?? NOTIFICATION_DEFAULTS.enabled,
+    mode: settings?.mode ?? NOTIFICATION_DEFAULTS.mode,
+    channels: {
+      teams: settings?.channels?.teams ?? NOTIFICATION_DEFAULTS.channels.teams,
+    },
+    skipMotionSessions: settings?.skipMotionSessions ?? NOTIFICATION_DEFAULTS.skipMotionSessions,
+  };
+}
+
+/**
+ * Session tools the agent may call (see `../session-tools.ts`), as the gates
+ * that install them. `enabledRepos` narrows which repositories get any; a
+ * repository override replaces the default list. Nothing is enabled unless a
+ * workspace admin lists it.
+ */
+export const sessionToolsSettingsSchema = z.strictObject({
+  tools: z.array(sessionToolGateSchema).max(SESSION_TOOL_GATES.length).optional(),
+});
+export type SessionToolsSettings = z.infer<typeof sessionToolsSettingsSchema>;
+
+/**
+ * The gates a session gets from its resolved settings: none unless its
+ * repository is allowed and a list names them. Repository-less sessions use
+ * the global default list.
+ */
+export function resolveSessionToolGates(
+  resolved: { enabledRepos: string[] | null; settings: SessionToolsSettings | undefined },
+  repo: string | null
+): SessionToolGate[] {
+  if (repo !== null && resolved.enabledRepos !== null) {
+    if (!resolved.enabledRepos.includes(repo.toLowerCase())) return [];
+  }
+  return [...new Set(resolved.settings?.tools ?? [])].sort();
+}
+
+/**
  * Integrations that accept environment-level setting overrides — the top layer
  * of the resolution chain (global defaults → primary-repo overrides →
  * environment overrides). Limited to the settings the session-scoped
@@ -676,6 +755,17 @@ export const integrationSettingsSchemas = {
       defaults: teamSettingsSchema.optional(),
     }),
     repo: z.strictObject({}),
+  },
+  notifications: {
+    global: z.strictObject({
+      enabledRepos: z.never().optional(),
+      defaults: notificationSettingsSchema.optional(),
+    }),
+    repo: z.strictObject({}),
+  },
+  "session-tools": {
+    global: integrationGlobalSettingsSchema(sessionToolsSettingsSchema),
+    repo: sessionToolsSettingsSchema,
   },
 } as const;
 
@@ -838,5 +928,15 @@ export const INTEGRATION_DEFINITIONS: {
     id: "slack",
     name: "Slack",
     description: "Agent-driven Slack notifications and mention policy",
+  },
+  {
+    id: "notifications",
+    name: "Session notices",
+    description: "Tell a session's owner on Teams when the session finishes or needs them",
+  },
+  {
+    id: "session-tools",
+    name: "Session tools",
+    description: "Tools the agent may call: notify the owner, read and annotate its motion Task",
   },
 ];

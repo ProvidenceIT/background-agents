@@ -1,6 +1,7 @@
 import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import { computeHmacHex } from "@open-inspect/shared/auth";
+import { formatSessionToolGates, SESSION_TOOLS_ENV_VAR } from "@open-inspect/shared/session-tools";
 import type { SourceControlProviderName } from "../source-control";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
@@ -374,6 +375,10 @@ export function buildSandboxEnvVars(
 
   if (config.agentSlackNotifyEnabled) {
     envVars.AGENT_SLACK_NOTIFY_ENABLED = "true";
+  }
+
+  if (config.agentSessionTools && config.agentSessionTools.length > 0) {
+    envVars[SESSION_TOOLS_ENV_VAR] = formatSessionToolGates(config.agentSessionTools);
   }
 
   applyScmCloneEnv(envVars, options.scmIdentity);

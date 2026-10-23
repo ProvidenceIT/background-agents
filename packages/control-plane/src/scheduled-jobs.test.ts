@@ -10,6 +10,7 @@ import type * as ImageBuildScheduler from "./image-builds/scheduler";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
 import type { Logger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
+import { runSessionNoticesJob } from "./notifications/drainer";
 import { Scheduler } from "./scheduler/scheduler";
 import type * as AbandonedDraftSweepModule from "./session/abandoned-draft-sweep";
 import {
@@ -31,6 +32,7 @@ import type { Env } from "./types";
 // the Terraform parity check below reads what the Worker really registers.
 vi.mock("./autofix/queue-health", () => ({ checkAutofixQueueHealth: vi.fn(async () => {}) }));
 vi.mock("./auth-homes/expiry-digest", () => ({ runAuthHomeNoticesJob: vi.fn(async () => {}) }));
+vi.mock("./notifications/drainer", () => ({ runSessionNoticesJob: vi.fn(async () => {}) }));
 vi.mock("./image-builds/scheduler", async (importOriginal) => ({
   ...(await importOriginal<typeof ImageBuildScheduler>()),
   runImageBuildScheduler: vi.fn(async () => ({})),
@@ -103,7 +105,7 @@ describe("SCHEDULED_JOBS", () => {
     expect(findScheduledJob("0 0 * * *")).toBeUndefined();
   });
 
-  it("runs the every-minute tick: queue health, team sync and home notices in the background, the scheduler tick awaited", async () => {
+  it("runs the every-minute tick: queue health, team sync and both notice jobs in the background, the scheduler tick awaited", async () => {
     const deps = fakeDeps();
 
     await findScheduledJob(SCHEDULER_TICK_CRON)!.run(deps, 1_000);
@@ -114,6 +116,7 @@ describe("SCHEDULED_JOBS", () => {
       "autofix_queue_health",
       "github_team_sync",
       "auth_home_notices",
+      "session_notices",
     ]);
     expect(checkAutofixQueueHealth).not.toHaveBeenCalled();
     expect(runGitHubTeamSync).not.toHaveBeenCalled();
@@ -124,6 +127,9 @@ describe("SCHEDULED_JOBS", () => {
     expect(runAuthHomeNoticesJob).not.toHaveBeenCalled();
     await deps.submitted[2]!.task();
     expect(runAuthHomeNoticesJob).toHaveBeenCalledWith(deps.env, deps.db, deps.log, 1_000);
+    expect(runSessionNoticesJob).not.toHaveBeenCalled();
+    await deps.submitted[3]!.task();
+    expect(runSessionNoticesJob).toHaveBeenCalledWith(deps.env, deps.db, deps.log, 1_000);
   });
 
   it("runs the image-build scheduler with the run's correlation", async () => {

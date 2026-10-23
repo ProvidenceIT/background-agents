@@ -25,6 +25,7 @@ import {
   type DeliveryOutcome,
 } from "../sessions/completion";
 import type { KeyedQueue } from "../sessions/handler";
+import { isUnreachableRecipient } from "../bot-framework/client";
 import {
   activityCallbackSchema,
   completeCallbackSchema,
@@ -142,6 +143,19 @@ export function createCallbacksRouter(deps: CallbackRouterDeps): Hono {
       ...fields,
     });
     return c.json({ ok: true, outcome });
+  }
+
+  function unreachable(c: Context, timing: RequestTiming, fields: Record<string, unknown>) {
+    logRequest("warn", {
+      trace_id: timing.traceId,
+      http_path: new URL(c.req.url).pathname,
+      http_status: 403,
+      outcome: "rejected",
+      reject_reason: "recipient_unreachable",
+      duration_ms: now() - timing.startedAt,
+      ...fields,
+    });
+    return c.json({ error: "recipient unreachable" }, 403);
   }
 
   function failed(c: Context, timing: RequestTiming, error: unknown): Response {
@@ -264,6 +278,7 @@ export function createCallbacksRouter(deps: CallbackRouterDeps): Hono {
       });
       return finish(c, timing, outcome, fields);
     } catch (error) {
+      if (isUnreachableRecipient(error)) return unreachable(c, timing, fields);
       return failed(c, timing, error);
     }
   });

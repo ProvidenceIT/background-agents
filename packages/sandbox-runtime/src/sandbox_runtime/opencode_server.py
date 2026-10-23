@@ -19,6 +19,7 @@ from .mcp_packages import McpPackageInstaller
 from .memories import memory_path
 from .process_output import iter_process_lines
 from .sandbox_bin import install_bin_scripts
+from .session_tools_contract import SESSION_TOOL_SPECS, enabled_gates_from_env
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -29,6 +30,10 @@ if TYPE_CHECKING:
 _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
 AGENT_TOOLS_GATED_ON_ENV = {"slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED"}
 AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
+# Session tools install only when the control plane enabled their gate.
+AGENT_TOOLS_GATED_ON_SESSION_TOOL = {
+    f"{spec['name']}.js": spec["gate"] for spec in SESSION_TOOL_SPECS
+}
 
 
 def resolve_opencode_global_config_dir() -> Path:
@@ -205,11 +210,15 @@ class OpenCodeServer:
         # Tools listed in AGENT_TOOLS_GATED_ON_ENV are skipped unless their gate
         # env var is "true".
         if tools_dir.exists():
+            session_tool_gates = enabled_gates_from_env()
             for tool_file in tools_dir.iterdir():
                 if not (tool_file.is_file() and tool_file.suffix == ".js"):
                     continue
                 gate_env = AGENT_TOOLS_GATED_ON_ENV.get(tool_file.name)
                 if gate_env and os.environ.get(gate_env, "").lower() != "true":
+                    continue
+                session_gate = AGENT_TOOLS_GATED_ON_SESSION_TOOL.get(tool_file.name)
+                if session_gate and session_gate not in session_tool_gates:
                     continue
                 if tool_file.name in AGENT_TOOLS_REQUIRING_REPOSITORY and not self.has_repository:
                     continue

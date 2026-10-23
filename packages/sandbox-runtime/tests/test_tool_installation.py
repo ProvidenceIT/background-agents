@@ -334,6 +334,39 @@ class TestInstallTools:
         assert (tool_dest / "slack-notify.js").exists()
         assert (tool_dest / "spawn-child.js").exists()
 
+    def test_session_tools_installed_only_for_enabled_gates(self, tmp_path):
+        """A session tool file installs only when AGENT_SESSION_TOOLS names its gate."""
+        tools_dir = tmp_path / "app" / "sandbox" / "tools"
+        tools_dir.mkdir(parents=True)
+        for name in ("notify_user", "motion_get_task", "motion_add_note", "spawn-child"):
+            (tools_dir / f"{name}.js").write_text(f"// {name}")
+
+        def installed(env: dict[str, str]) -> set[str]:
+            sup = _make_opencode_server()
+            workdir = tmp_path / f"workspace-{len(env)}-{sorted(env.values())}"
+            workdir.mkdir()
+            with (
+                patch.dict("os.environ", env),
+                _patch_paths(legacy=tmp_path / "no-legacy", tools=tools_dir),
+            ):
+                sup._install_tools(workdir)
+            return {path.name for path in (workdir / ".opencode" / "tool").iterdir()}
+
+        with patch.dict("os.environ"):
+            import os
+
+            os.environ.pop("AGENT_SESSION_TOOLS", None)
+            assert installed({}) == {"spawn-child.js"}
+        assert installed({"AGENT_SESSION_TOOLS": "notify,unknown"}) == {
+            "spawn-child.js",
+            "notify_user.js",
+        }
+        assert installed({"AGENT_SESSION_TOOLS": "motion_read,motion_write"}) == {
+            "spawn-child.js",
+            "motion_get_task.js",
+            "motion_add_note.js",
+        }
+
 
 class TestInstallBinScripts:
     """Cases for install_bin_scripts(): standalone CLIs both harnesses share."""

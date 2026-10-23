@@ -30,7 +30,7 @@ import { authHomeOwnerUserId, UserAuthHomeStore } from "./store";
  * counts, names and dates: never a token, a volume name or file contents.
  */
 
-const MSTEAMS_DIRECT_MESSAGE_KIND = "msteams.direct_message";
+export const MSTEAMS_DIRECT_MESSAGE_KIND = "msteams.direct_message";
 
 /** The bot's callback route for a direct message (internal URL; the binding routes it). */
 const DIRECT_MESSAGE_URL = "https://internal/callbacks/direct_message";
@@ -41,7 +41,9 @@ const WEEK_MS = 7 * DAY_MS;
 const DIGEST_SEND_OFFSET_MS = 7 * 60 * 60 * 1000;
 /** A claim this old that was neither sent nor released died with its process. */
 const STALE_CLAIM_MS = 15 * 60 * 1000;
-const OID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** An Entra (Microsoft) object id as `user_identities` stores it for provider `microsoft`. */
+export const ENTRA_OBJECT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type NoticeKind = "claude_expiry" | "weekly_digest";
 
@@ -90,7 +92,7 @@ async function recipientOid(db: SqlDatabase, home: AuthHome): Promise<string | n
     .all<{ user_id: string; provider_user_id: string }>();
   for (const id of ids) {
     const oid = rows.results.find((row) => row.user_id === id)?.provider_user_id;
-    if (oid && OID_PATTERN.test(oid)) return oid;
+    if (oid && ENTRA_OBJECT_ID_PATTERN.test(oid)) return oid;
   }
   return null;
 }
@@ -297,12 +299,20 @@ function weeklyDigestText(digest: WeeklyDigest, ownerUserIds: readonly string[])
   return lines.join("\n");
 }
 
-/** Sends through the Teams bot's signed callback route, as the control plane signs callbacks. */
-export function teamsDirectMessageSender(
-  bot: FetchClient,
-  secret: string,
-  log: Logger
-): DirectMessageSender {
+/**
+ * What the Teams bot said to one direct message: accepted, refused with an
+ * HTTP status, or unreachable (`httpStatus` null, with the transport error).
+ */
+export type DirectMessageDelivery =
+  | { ok: true }
+  | { ok: false; httpStatus: number; error?: undefined }
+  | { ok: false; httpStatus: null; error: Error };
+
+/** Posts one direct message through the Teams bot; the caller logs and decides on a retry. */
+export type DirectMessagePoster = (payload: DirectMessagePayload) => Promise<DirectMessageDelivery>;
+
+/** Signs and posts as the control plane signs callbacks. */
+export function teamsDirectMessagePoster(bot: FetchClient, secret: string): DirectMessagePoster {
   return async (payload) => {
     const signature = await computeHmacHex(JSON.stringify(payload), secret);
     try {
@@ -312,20 +322,39 @@ export function teamsDirectMessageSender(
         body: JSON.stringify({ ...payload, signature }),
         signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
       });
-      if (!response.ok) {
-        log.warn("auth_home.notice_rejected", {
-          notification_id: payload.notificationId,
-          http_status: response.status,
-        });
-      }
-      return response.ok;
+      return response.ok ? { ok: true } : { ok: false, httpStatus: response.status };
     } catch (error) {
+      return {
+        ok: false,
+        httpStatus: null,
+        error: error instanceof Error ? error : new Error(String(error)),
+      };
+    }
+  };
+}
+
+/** Sends through the Teams bot's signed callback route, as the control plane signs callbacks. */
+export function teamsDirectMessageSender(
+  bot: FetchClient,
+  secret: string,
+  log: Logger
+): DirectMessageSender {
+  const post = teamsDirectMessagePoster(bot, secret);
+  return async (payload) => {
+    const delivery = await post(payload);
+    if (delivery.ok) return true;
+    if (delivery.httpStatus !== null) {
+      log.warn("auth_home.notice_rejected", {
+        notification_id: payload.notificationId,
+        http_status: delivery.httpStatus,
+      });
+    } else {
       log.warn("auth_home.notice_failed", {
         notification_id: payload.notificationId,
-        error: error instanceof Error ? error : new Error(String(error)),
+        error: delivery.error,
       });
-      return false;
     }
+    return false;
   };
 }
 

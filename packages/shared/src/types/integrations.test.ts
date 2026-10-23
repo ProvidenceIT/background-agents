@@ -34,6 +34,10 @@ import {
   slackGlobalSettingsSchema,
   slackRepoSettingsSchema,
   integrationSettingsSchemas,
+  notificationSettingsSchema,
+  resolveNotificationSettings,
+  resolveSessionToolGates,
+  NOTIFICATION_DEFAULTS,
   slackIntegrationSettingsRoutingResponseSchema,
   validateSandboxChildSessionLimits,
   validateSandboxResourceLimits,
@@ -639,5 +643,81 @@ describe("matchRoutingRules", () => {
 
   it("returns an empty array when no keyword is present", () => {
     expect(matchRoutingRules("just a normal message", rules)).toEqual([]);
+  });
+});
+
+describe("notification settings", () => {
+  it("is off until someone turns it on", () => {
+    expect(NOTIFICATION_DEFAULTS).toEqual({
+      enabled: false,
+      mode: "off",
+      channels: { teams: true },
+      skipMotionSessions: true,
+    });
+    expect(resolveNotificationSettings(undefined)).toEqual(NOTIFICATION_DEFAULTS);
+    expect(resolveNotificationSettings({})).toEqual(NOTIFICATION_DEFAULTS);
+  });
+
+  it("fills unset fields from the defaults", () => {
+    expect(resolveNotificationSettings({ enabled: true, mode: "shadow" })).toEqual({
+      ...NOTIFICATION_DEFAULTS,
+      enabled: true,
+      mode: "shadow",
+    });
+    expect(
+      resolveNotificationSettings({ channels: { teams: false }, skipMotionSessions: false })
+    ).toMatchObject({ channels: { teams: false }, skipMotionSessions: false });
+  });
+
+  it("is a global-only, closed setting", () => {
+    expect(notificationSettingsSchema.safeParse({ mode: "loud" }).success).toBe(false);
+    expect(notificationSettingsSchema.safeParse({ channels: { telegram: true } }).success).toBe(
+      false
+    );
+    expect(
+      integrationSettingsSchemas.notifications.global.safeParse({
+        defaults: { enabled: true, mode: "live" },
+      }).success
+    ).toBe(true);
+    expect(
+      integrationSettingsSchemas.notifications.global.safeParse({ enabledRepos: ["a/b"] }).success
+    ).toBe(false);
+    expect(integrationSettingsSchemas.notifications.repo.safeParse({ enabled: true }).success).toBe(
+      false
+    );
+  });
+});
+
+describe("session tool settings", () => {
+  const settings = integrationSettingsSchemas["session-tools"];
+
+  it("enables nothing until a list names the gates", () => {
+    expect(resolveSessionToolGates({ enabledRepos: null, settings: undefined }, "a/b")).toEqual([]);
+    expect(resolveSessionToolGates({ enabledRepos: null, settings: {} }, null)).toEqual([]);
+  });
+
+  it("honours the repository allowlist and deduplicates the gates", () => {
+    const resolved = {
+      enabledRepos: ["acme/widgets"],
+      settings: { tools: ["notify", "notify", "motion_read"] as const },
+    };
+    expect(
+      resolveSessionToolGates(
+        { ...resolved, settings: { tools: [...resolved.settings.tools] } },
+        "Acme/Widgets"
+      )
+    ).toEqual(["motion_read", "notify"]);
+    expect(
+      resolveSessionToolGates({ ...resolved, settings: { tools: ["notify"] } }, "acme/other")
+    ).toEqual([]);
+    expect(
+      resolveSessionToolGates({ enabledRepos: [], settings: { tools: ["notify"] } }, null)
+    ).toEqual(["notify"]);
+  });
+
+  it("accepts only known gates", () => {
+    expect(settings.global.safeParse({ defaults: { tools: ["notify"] } }).success).toBe(true);
+    expect(settings.repo.safeParse({ tools: ["ask_openclaw"] }).success).toBe(false);
+    expect(settings.repo.safeParse({ tools: ["notify"], recipient: "x" }).success).toBe(false);
   });
 });

@@ -51,11 +51,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(257);
+    expect(routes).toHaveLength(260);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(194);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(257);
+    expect(new Set(paths).size).toBe(197);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(260);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
@@ -845,6 +845,9 @@ describe("route policy table", () => {
     ["GET", "/sessions/session-1/sandbox-skills"],
     ["POST", "/sessions/session-1/provider-auth/openai/access-token"],
     ["POST", "/sessions/session-1/provider-auth/anthropic/runtime-credential"],
+    ["POST", "/sessions/session-1/notify"],
+    ["GET", "/sessions/session-1/motion/task"],
+    ["POST", "/sessions/session-1/motion/notes"],
   ])("requires the bound sandbox for %s %s", (method, path) => {
     const { route, params } = matchRoute(routes, method, path)!;
     expect(route.authentication.kind).toBe("sandbox");

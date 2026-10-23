@@ -15,6 +15,7 @@ function harness() {
     updateSessionStatus: vi.fn(),
   };
   const statusProjection = { project: vi.fn(async () => true) };
+  const notices = { settled: vi.fn() };
   const service = new SessionStatusService(
     createTestBackgroundTasks(),
     createLogger("control-plane"),
@@ -25,9 +26,11 @@ function harness() {
     { broadcast: vi.fn(), sendToSandbox: vi.fn() } as SessionMessenger,
     { finalizeChildAdmission: vi.fn(), updateMetrics: vi.fn() },
     statusProjection,
-    { fetch: vi.fn() } as SessionRuntimeClient
+    { fetch: vi.fn() } as SessionRuntimeClient,
+    () => {},
+    notices
   );
-  return { service, repository, statusProjection };
+  return { service, repository, statusProjection, notices };
 }
 
 describe("SessionStatusService.transition", () => {
@@ -51,5 +54,38 @@ describe("SessionStatusService.beginTransition", () => {
 
     expect(() => h.service.beginTransition("archived")).toThrow("local status write failed");
     expect(h.statusProjection.project).not.toHaveBeenCalled();
+  });
+});
+
+describe("SessionStatusService session notices", () => {
+  it("hands each status change to the notice recorder with its revision and time", async () => {
+    // The mock session is stamped with the clock; a frozen one keeps it equal across calls.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.UTC(2026, 9, 23, 12));
+    try {
+      const h = harness();
+      const session = createMockSession();
+
+      await h.service.transition("completed");
+
+      expect(h.notices.settled).toHaveBeenCalledTimes(1);
+      expect(h.notices.settled).toHaveBeenCalledWith(
+        session,
+        session.session_name || session.id,
+        "completed",
+        session.status_revision + 1,
+        Math.max(Date.now(), session.updated_at + 1)
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("raises no notice when the status did not change", async () => {
+    const h = harness();
+
+    await h.service.transition(createMockSession().status);
+
+    expect(h.notices.settled).not.toHaveBeenCalled();
   });
 });

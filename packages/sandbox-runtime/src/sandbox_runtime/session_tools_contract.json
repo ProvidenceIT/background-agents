@@ -1,0 +1,78 @@
+{
+  "$comment": "Generated from packages/shared/src/session-tools.ts by `npm run generate:session-tools-contract -w @open-inspect/shared`. Do not edit.",
+  "tools": [
+    {
+      "name": "notify_user",
+      "gate": "notify",
+      "description": "Send the session's owner a short direct message. Use it when you are blocked on a decision only they can make, or when a long task reaches a result they are waiting for; never for progress chatter. The server picks the recipient and channel; you cannot address anyone. Never include secrets, credentials, customer names or client data: the message can appear on a phone lock screen. At most 5 messages per session and 1 per minute.",
+      "method": "POST",
+      "path": "/notify",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "What the owner needs to know, in one or two plain sentences. Mentions and links other than this deployment's and GitHub's are removed."
+          },
+          "urgency": {
+            "default": "normal",
+            "description": "Use high only when you are blocked until the owner acts.",
+            "type": "string",
+            "enum": [
+              "normal",
+              "high"
+            ]
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "motion_get_task",
+      "gate": "motion_read",
+      "description": "Read the motion Task this session was delegated from: its title, description, status, priority, due date, project, labels and subtasks. Available only in sessions motion started.",
+      "method": "GET",
+      "path": "/motion/task",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "motion_add_note",
+      "gate": "motion_write",
+      "description": "Attach a note to the motion Task this session was delegated from, for example a summary of findings or a link to the pull request. It cannot change the Task's status; motion settles the Task when the session ends. Never include secrets or credentials.",
+      "method": "POST",
+      "path": "/motion/notes",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "A short title for the note."
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "description": "The note body, plain text or Markdown."
+          }
+        },
+        "required": [
+          "title",
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "enabledGatesEnv": "AGENT_SESSION_TOOLS"
+}

@@ -44,10 +44,17 @@ export interface EnvConfig {
   SERVICE_AUTH_SECRET_MOTION?: string;
   SERVICE_AUTH_SECRET_PROMPT_LIBRARY?: string;
   SERVICE_AUTH_SECRET_HEALTHCHECK?: string;
+  // Signs the outbound doorbell to motion (src/notifications); not a
+  // verification key, and distinct from SERVICE_AUTH_SECRET_MOTION.
+  SERVICE_AUTH_SECRET_MOTION_CALLBACK?: string;
   // Comma-separated owner/name repositories the prompt-library service may import
   // skills from; unset ⇒ DEFAULT_PROMPT_LIBRARY_SKILL_REPOSITORIES.
   PROMPT_LIBRARY_SKILL_REPOSITORIES?: string;
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
+  // motion REST v1 key (`mk_…`, TASKS_READ + NOTES_WRITE only) for the agent's
+  // motion_* session tools. Held here, never in the sandbox or in secrets that
+  // sandboxes receive.
+  MOTION_API_KEY?: string;
 
   // GitHub App secrets (for git operations)
   GITHUB_APP_ID?: string;
@@ -65,6 +72,8 @@ export interface EnvConfig {
   SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
+  MOTION_CALLBACK_URL?: string; // motion's base URL for the session doorbell; unset ⇒ no doorbell
+  MOTION_API_URL?: string; // motion's base URL for the motion_* session tools; unset ⇒ tools off
   ALLOWED_USERS?: string;
   ALLOWED_EMAIL_DOMAINS?: string;
   ALLOWED_EMAILS?: string;

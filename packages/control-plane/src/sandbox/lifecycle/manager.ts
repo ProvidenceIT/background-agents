@@ -488,6 +488,7 @@ export class SandboxLifecycleManager
         model: config.model,
         mcpServerLookup: config.mcpServerLookup,
         slackAgentNotifyLookup: config.slackAgentNotifyLookup,
+        sessionToolsLookup: config.sessionToolsLookup,
         authHomeLookup: config.authHomeLookup,
         executionTimeoutMs: config.executionTimeoutMs,
       },
@@ -842,6 +843,7 @@ export class SandboxLifecycleManager
       const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled =
         await this.launchContext.resolveAgentSlackNotifyEnabled(session);
+      const agentSessionTools = await this.launchContext.resolveAgentSessionTools(session);
       const { sandboxSettings, timeoutSeconds } =
         this.launchContext.resolveSandboxSettings(session);
       const authHome = await this.launchContext.resolveAuthHome(sessionId);
@@ -862,6 +864,7 @@ export class SandboxLifecycleManager
         codeServerEnabled,
         vncEnabled,
         agentSlackNotifyEnabled,
+        agentSessionTools,
         mcpServers,
         sandboxSettings,
         ...repositoryFields,
@@ -1181,6 +1184,7 @@ export class SandboxLifecycleManager
       const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled =
         await this.launchContext.resolveAgentSlackNotifyEnabled(session);
+      const agentSessionTools = await this.launchContext.resolveAgentSessionTools(session);
       const mcpServers = await this.launchContext.loadMcpServers(repositories);
       const { sandboxSettings, timeoutSeconds } =
         this.launchContext.resolveSandboxSettings(session);
@@ -1200,6 +1204,7 @@ export class SandboxLifecycleManager
         codeServerEnabled,
         vncEnabled,
         agentSlackNotifyEnabled,
+        agentSessionTools,
         mcpServers,
         sandboxSettings,
         ...repositoryFields,

@@ -73,7 +73,7 @@ test("converter rejects schema types it does not understand", () => {
         type: "object",
         properties: { tags: { type: "array" } },
       }),
-    /Unsupported memory tool argument type for tags: array/
+    /Unsupported contract tool argument type for tags: array/
   );
 });
 

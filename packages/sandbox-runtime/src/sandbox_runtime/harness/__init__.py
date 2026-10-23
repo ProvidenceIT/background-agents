@@ -11,6 +11,7 @@ from ..codex_stager import CodexHarnessHandoff
 from ..credentials.provider_credential_client import RuntimeCredentialClient
 from ..memories import append_memory, memory_text
 from ..opencode_server import resolve_opencode_global_config_dir
+from ..session_tools_contract import enabled_gates_from_env
 from .base import (
     DEFAULT_HARNESS_ID,
     DETERMINISTIC_FAILURE_EXIT_CODE,
@@ -141,6 +142,7 @@ def _tool_server_config(identity: BridgeIdentity, *, has_repository: bool) -> To
         repo_manifest_path=identity.repo_manifest_path,
         has_repository=has_repository,
         slack_notify_enabled=os.environ.get("AGENT_SLACK_NOTIFY_ENABLED", "").lower() == "true",
+        session_tools=enabled_gates_from_env(),
     )
 
 

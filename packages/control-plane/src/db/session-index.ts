@@ -24,6 +24,7 @@ import {
 } from "@open-inspect/shared/types/provider-accounts";
 import type { Pinned } from "../session/pinned";
 import type { SessionSkillManifestInput } from "../session/skill-resolution";
+import { failPendingNoticesOfSessionStatement } from "../notifications/notice-store";
 import {
   assertProviderAuthSelection,
   type ModelProviderId,
@@ -1025,10 +1026,12 @@ export class SessionIndexStore {
 
   async delete(id: string): Promise<boolean> {
     // Member rows are removed explicitly for clarity; the FK's ON DELETE
-    // CASCADE also covers callers that delete the session row directly.
+    // CASCADE also covers callers that delete the session row directly. A
+    // notice still waiting to go out is settled and loses any agent text.
     const [, result] = await this.db.batch([
       this.db.prepare("DELETE FROM session_repositories WHERE session_id = ?").bind(id),
       this.db.prepare("DELETE FROM sessions WHERE id = ?").bind(id),
+      failPendingNoticesOfSessionStatement(this.db, id, Date.now()),
     ]);
 
     return (result.meta?.changes ?? 0) > 0;

@@ -21,9 +21,13 @@
  * Deployment-time validation is the gate for configuration, not the runtime.
  */
 
+import { openSessionToolGates } from "../session-tools/gates";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
-import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
+import {
+  sandboxPromptBlockReason,
+  type SandboxShutdownState,
+} from "@open-inspect/shared/types/sandbox-shutdown";
 import { generateId, hashToken } from "../auth/crypto";
 import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
@@ -48,7 +52,11 @@ import {
 import type { ImageBuildLookup } from "../sandbox/lifecycle/image-selection";
 // The composition root supplies launch integration ports, not consumer-facing launch mechanics.
 // eslint-disable-next-line no-restricted-imports
-import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecycle/launch-context";
+import type {
+  McpServerLookup,
+  SessionToolsLookup,
+  SlackAgentNotifyLookup,
+} from "../sandbox/lifecycle/launch-context";
 // The composition root shares the internal access collaborator with shutdown and lifecycle only.
 // eslint-disable-next-line no-restricted-imports
 import { SandboxAccess } from "../sandbox/lifecycle/sandbox-access";
@@ -115,6 +123,8 @@ import { SessionMessageQueue } from "./message-queue";
 import { SessionBudgetService } from "./budget-service";
 import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import { MessageFailureService } from "./message-failure-service";
+import { createNoticeChannelRegistry } from "../notifications/channels";
+import { SessionNoticeRecorder, recordSessionNotices } from "../notifications/recorder";
 import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
 import { SandboxShutdownRepository } from "./sandbox-shutdown-repository";
 import { SandboxArtifactEventHandler } from "./sandbox-events/artifact.handler";
@@ -489,7 +499,33 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     // Parent notifications have no request of their own: each is one hop
     // under this child's trace, with its own request id.
     createSessionRuntimeClientForTrace(env, durableObjectId),
-    () => scheduledContinue.clear("session_closed")
+    () => scheduledContinue.clear("session_closed"),
+    new SessionNoticeRecorder({
+      backgroundTasks,
+      log,
+      source: {
+        latestTerminalMessage: () => messageRepository.getLatestTerminalMessage(),
+        artifacts: () => artifactRepository.listArtifacts(),
+        activeDurationMs: () => messageRepository.getActiveDurationMs(),
+        lastTurnDurationMs: () => {
+          const turn = messageRepository.getLatestTerminalMessage();
+          return turn?.started_at != null && turn.completed_at != null
+            ? Math.max(0, turn.completed_at - turn.started_at)
+            : null;
+        },
+        lastTurnLimit: () => sessionCoreRepository.getLastTurnLimit(),
+        // Read only on a transition, after the composition below has run.
+        shutdown: (): SandboxShutdownState | null => shutdown.snapshot(),
+        watchingUserIds: () =>
+          Array.from(wsManager.getAuthenticatedClients(), (client) => client.userId),
+      },
+      record: (facts) =>
+        recordSessionNotices(facts, {
+          db,
+          registry: createNoticeChannelRegistry(env, db, log),
+          nowMs: Date.now(),
+        }),
+    })
   );
 
   const titleService = new SessionTitleService({
@@ -1280,6 +1316,11 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     },
   };
 
+  // The agent's session tools, by gate; none unless the integration lists them.
+  const sessionToolsLookup: SessionToolsLookup = {
+    openGates: (target) => openSessionToolGates(db, env, target),
+  };
+
   // A malformed budget must not take every session down at construction the
   // way a missing provider does; it falls back to the default and says so.
   const bootBudget = resolveBootBudgetTimeoutMs(env.SANDBOX_BOOT_TIMEOUT_MS, {
@@ -1313,6 +1354,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,
     slackAgentNotifyLookup,
+    sessionToolsLookup,
     // Read only when the provider mounts homes (Kubernetes).
     authHomeLookup: createSessionAuthHomeLookup(db),
     // The sandbox lifetime when no scope sets one, so it matches the watchdog's budget.
