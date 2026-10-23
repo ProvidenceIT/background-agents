@@ -169,6 +169,8 @@ class TestHarnessContracts:
         assert parse_harness_id("opencode") is HarnessId.OPENCODE
         assert parse_harness_id("claude") is HarnessId.CLAUDE
         assert parse_harness_id("codex") is HarnessId.CODEX
+        assert parse_harness_id("grok") is HarnessId.GROK
+        assert parse_harness_id("agy") is HarnessId.AGY
         with pytest.raises(ValueError, match="Unsupported harness: 'pi'"):
             parse_harness_id("pi")
 

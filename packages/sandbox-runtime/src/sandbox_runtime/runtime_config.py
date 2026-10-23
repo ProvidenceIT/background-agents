@@ -199,8 +199,10 @@ class RuntimeConfig:
             else ()
         )
         return OpenCodeConfig(
-            provider=str(self.session_config.get("provider") or "anthropic"),
-            model=str(self.session_config.get("model") or "claude-sonnet-4-6"),
+            # No default: a session without a model fails its turn instead of
+            # running on a provider nobody picked.
+            provider=str(self.session_config.get("provider") or ""),
+            model=str(self.session_config.get("model") or ""),
             mcp_servers=mcp_servers,
             has_repository=self.has_repository,
             workspace_path=self.workspace_path,

@@ -133,3 +133,48 @@ def test_redacts_every_codex_pool_login_and_follows_a_re_enrolment(tmp_path: Pat
         _tool_result("codex-2-re-enrolled-refresh-token codex-3-late-access-token")
     )
     assert redacted["output"] == "*** ***"
+
+
+GROK_ACCESS = "xai-placeholder-pushed-access-token"
+AGY_ACCESS = "ya29.placeholder-pushed-access-token"
+
+
+def _pushed_home(tmp_path: Path) -> Path:
+    """A home with SuperGrok and Antigravity tokens pushed into grok/ and agy/."""
+    home = tmp_path / "sf-auth-pushed"
+    for cli, token in (("grok", GROK_ACCESS), ("agy", AGY_ACCESS)):
+        (home / cli).mkdir(parents=True)
+        (home / cli / "access.json").write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "provider": cli,
+                    "access_token": token,
+                    "expires_at": 1_800_000_000,
+                    "pushed_at": 1_799_999_000,
+                    "source": "pc-test-desktop",
+                    "account_tag": "0a1b2c3d",
+                }
+            )
+        )
+    return home
+
+
+def test_redacts_both_pushed_access_tokens_and_follows_a_new_push(tmp_path: Path):
+    home = _pushed_home(tmp_path)
+    redactor = AuthHomeSecretRedactor(home)
+
+    redacted = redactor.redact(_tool_result(f"grok {GROK_ACCESS} agy {AGY_ACCESS}"))
+    assert redacted["output"] == "grok *** agy ***"
+
+    (home / "agy" / "access.json").write_text(
+        json.dumps({"schema": 1, "access_token": "ya29.placeholder-next-push", "expires_at": 1})
+    )
+    redacted = redactor.redact(_tool_result("ya29.placeholder-next-push"))
+    assert redacted["output"] == "***"
+
+
+def test_the_pushed_files_ordinary_fields_are_not_redacted(tmp_path: Path):
+    redactor = AuthHomeSecretRedactor(_pushed_home(tmp_path))
+    text = "antigravity pushed from pc-test-desktop as 0a1b2c3d"
+    assert redactor.redact(_tool_result(text))["output"] == text

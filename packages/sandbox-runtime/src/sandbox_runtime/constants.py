@@ -68,6 +68,9 @@ BRIDGE_FATAL_ERROR_FILE_PATH = "/tmp/oi-bridge-fatal-error.txt"
 # Supervisor → bridge handoff for the Claude harness (workdir, config dir, MCP servers).
 CLAUDE_HARNESS_FILE_PATH = "/tmp/oi-claude-harness.json"
 CODEX_HARNESS_FILE_PATH = "/tmp/oi-codex-harness.json"
+# The same handoff for the child-per-turn CLI harnesses (see cli_stager).
+GROK_HARNESS_FILE_PATH = "/tmp/oi-grok-harness.json"
+AGY_HARNESS_FILE_PATH = "/tmp/oi-agy-harness.json"
 
 # Canonical repository manifest written by the supervisor before any child
 # process starts, rewritten on every boot. Consumed by the bridge (push

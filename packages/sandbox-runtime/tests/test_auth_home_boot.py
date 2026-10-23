@@ -1,6 +1,8 @@
 """The bridge's boot report on a subscription home: presence and expiry, never a value."""
 
+import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -195,3 +197,55 @@ def test_a_home_without_a_codex_pool_reports_no_pool_keys(tmp_path: Path) -> Non
     report = auth_home_boot_report({"SF_AUTH_HOME": str(_home(tmp_path))})
     assert report is not None
     assert not [key for key in report if key.startswith("codex_pool")]
+
+
+def _pushed_home(tmp_path: Path, now: float) -> Path:
+    home = tmp_path / "sf-auth-pushed"
+    (home / "grok").mkdir(parents=True)
+    (home / "grok" / "access.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "provider": "grok",
+                "access_token": "xai-placeholder-pushed-access-token",
+                "expires_at": now + 3600,
+                "pushed_at": now - 120,
+                "source": "pc-test-desktop",
+                "account_tag": "0a1b2c3d",
+            }
+        )
+    )
+    return home
+
+
+def test_pushed_tokens_report_their_ages_and_tag_never_a_value(tmp_path: Path) -> None:
+    now = time.time()
+    home = _pushed_home(tmp_path, now)
+
+    report = auth_home_boot_report(
+        {"SF_AUTH_HOME": str(home), "SF_AUTH_HOME_PROVIDERS": "xai,antigravity"}
+    )
+
+    assert report is not None
+    pushed = report["pushed_credentials"]
+    assert set(pushed) == {"grok", "agy"}
+    assert pushed["grok"]["present"] is True
+    assert 3590 <= pushed["grok"]["expires_in_s"] <= 3600
+    assert 120 <= pushed["grok"]["pushed_age_s"] <= 130
+    assert pushed["grok"]["account_tag"] == "0a1b2c3d"
+    assert pushed["agy"] == {
+        "present": False,
+        "expires_in_s": None,
+        "pushed_age_s": None,
+        "account_tag": None,
+    }
+    assert "xai-placeholder-pushed-access-token" not in repr(report)
+    assert not [key for key in _keys(report) if "token" in key.lower()]
+
+
+def test_a_home_without_pushed_clis_reports_no_pushed_key(tmp_path: Path) -> None:
+    report = auth_home_boot_report(
+        {"SF_AUTH_HOME": str(_home(tmp_path)), "SF_AUTH_HOME_PROVIDERS": "anthropic"}
+    )
+    assert report is not None
+    assert "pushed_credentials" not in report

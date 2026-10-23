@@ -481,7 +481,6 @@ class OpenCodeServer:
 
         # Build OpenCode config from session settings
         opencode_config: dict[str, Any] = {
-            "model": f"{self.provider}/{self.model}",
             "permission": opencode_permission(
                 user_invoked_skill_names(resolve_opencode_global_config_dir() / "skills")
             ),
@@ -503,6 +502,10 @@ class OpenCodeServer:
                 }
             },
         }
+        # A session without a model has no default to write ("/" is not a
+        # model); every prompt then names its own, or the harness refuses it.
+        if self.provider and self.model:
+            opencode_config["model"] = f"{self.provider}/{self.model}"
 
         memory_file = memory_path(resolve_opencode_global_config_dir())
         if memory_file.is_file() and memory_file.stat().st_size:
