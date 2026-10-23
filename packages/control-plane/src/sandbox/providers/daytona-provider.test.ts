@@ -361,6 +361,23 @@ describe("DaytonaSandboxProvider", () => {
       expect(envVars.AGENT_SLACK_NOTIFY_ENABLED).toBeUndefined();
     });
 
+    it("passes the session tool gates as AGENT_SESSION_TOOLS, and nothing by default", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      await provider.createSandbox(baseCreateConfig);
+      await provider.createSandbox({ ...baseCreateConfig, agentSessionTools: [] });
+      await provider.createSandbox({
+        ...baseCreateConfig,
+        agentSessionTools: ["notify", "motion_read"],
+      });
+
+      const calls = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls[0][0].env.AGENT_SESSION_TOOLS).toBeUndefined();
+      expect(calls[1][0].env.AGENT_SESSION_TOOLS).toBeUndefined();
+      expect(calls[2][0].env.AGENT_SESSION_TOOLS).toBe("motion_read,notify");
+    });
+
     it("classifies DaytonaApiError as SandboxProviderError", async () => {
       const client = createMockClient({
         createSandbox: async () => {

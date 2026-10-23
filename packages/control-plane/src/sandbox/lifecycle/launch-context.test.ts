@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_FINAL_SNAPSHOT_BUFFER_MS } from "@open-inspect/shared/types/integrations";
 import { SandboxProviderError } from "../provider";
-import { SandboxLaunchContext } from "./launch-context";
+import { SandboxLaunchContext, type SessionToolsLookup } from "./launch-context";
 import {
   createMockAlarmScheduler,
   createMockBroadcaster,
@@ -209,6 +209,57 @@ describe("sandbox lifetime at launch", () => {
 
     expect(vi.mocked(provider.createSandbox).mock.calls[0]![0].timeoutSeconds).toBe(
       FOUR_HOURS_MS / 1000
+    );
+  });
+});
+
+describe("SandboxLaunchContext.resolveAgentSessionTools", () => {
+  function contextWith(sessionToolsLookup?: SessionToolsLookup) {
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const context = new SandboxLaunchContext({
+      sessionContext: {
+        getSessionRepositories: () => [],
+        getUserEnvVars: async () => undefined,
+      },
+      provider: {
+        name: "kubernetes",
+        capabilities: { supportsSandboxTimeout: true, supportsAuthHomeMounts: false },
+      },
+      config: { model: "anthropic/claude-sonnet-4-5", sessionToolsLookup },
+      getLogger: () => logger,
+    });
+    return { context, logger };
+  }
+
+  it("installs no session tool without a lookup", async () => {
+    expect(await contextWith().context.resolveAgentSessionTools(createMockSession())).toEqual([]);
+  });
+
+  it("asks for the public session id and the primary repository", async () => {
+    const openGates = vi.fn().mockResolvedValue(["notify"]);
+    const session = createMockSession({
+      session_name: "public-1",
+      repo_owner: "acme",
+      repo_name: "web",
+    });
+    expect(await contextWith({ openGates }).context.resolveAgentSessionTools(session)).toEqual([
+      "notify",
+    ]);
+    expect(openGates).toHaveBeenCalledWith({
+      sessionId: "public-1",
+      repoOwner: "acme",
+      repoName: "web",
+    });
+  });
+
+  it("installs none when the lookup fails", async () => {
+    const { context, logger } = contextWith({
+      openGates: vi.fn().mockRejectedValue(new Error("D1 down")),
+    });
+    expect(await context.resolveAgentSessionTools(createMockSession())).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Failed to resolve session tool gates; installing none",
+      expect.objectContaining({ event: "session_tools.gate_resolve_failed" })
     );
   });
 });

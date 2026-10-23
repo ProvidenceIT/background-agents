@@ -1,4 +1,5 @@
 import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
+import type { SessionToolGate } from "@open-inspect/shared/session-tools";
 import { extractProviderAndModel, getValidModelOrDefault } from "@open-inspect/shared/models";
 import {
   DEFAULT_FINAL_SNAPSHOT_BUFFER_MS,
@@ -40,6 +41,15 @@ export interface McpServerLookup {
   ): Promise<McpServerConfig[]>;
 }
 
+export interface SessionToolsLookup {
+  /** The session's open gates; empty or throwing installs no session tool. */
+  openGates(target: {
+    sessionId: string;
+    repoOwner: string | null;
+    repoName: string | null;
+  }): Promise<SessionToolGate[]>;
+}
+
 export interface SlackAgentNotifyLookup {
   /** False or throwing disables the tool, including in the global repo-less scope. */
   isEnabledForRepo(repoOwner: string | null, repoName: string | null): Promise<boolean>;
@@ -57,6 +67,7 @@ export interface SandboxLaunchConfig {
   model: string;
   mcpServerLookup?: McpServerLookup;
   slackAgentNotifyLookup?: SlackAgentNotifyLookup;
+  sessionToolsLookup?: SessionToolsLookup;
   /** The session's bound subscription home; consulted only by providers that mount one. */
   authHomeLookup?: SessionAuthHomeLookup;
   /**
@@ -231,6 +242,23 @@ export class SandboxLaunchContext {
         error: err instanceof Error ? err.message : String(err),
       });
       return false;
+    }
+  }
+
+  async resolveAgentSessionTools(session: SessionRow): Promise<SessionToolGate[]> {
+    if (!this.config.sessionToolsLookup) return [];
+    try {
+      return await this.config.sessionToolsLookup.openGates({
+        sessionId: session.session_name || session.id,
+        repoOwner: sessionHasRepository(session) ? session.repo_owner : null,
+        repoName: sessionHasRepository(session) ? session.repo_name : null,
+      });
+    } catch (err) {
+      this.getLogger().warn("Failed to resolve session tool gates; installing none", {
+        event: "session_tools.gate_resolve_failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
     }
   }
 

@@ -5,6 +5,7 @@
  * enabling unit testing and future provider support.
  */
 
+import type { SessionToolGate } from "@open-inspect/shared/session-tools";
 import type { AuthHomeClaimFence } from "../auth-homes/lease";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
@@ -175,6 +176,12 @@ export interface CreateSandboxConfig {
    * control-plane endpoint.
    */
   agentSlackNotifyEnabled?: boolean;
+  /**
+   * Gates of the agent's session tools to install (`notify_user`, `motion_*`);
+   * none when absent. Fixed for the sandbox's lifetime; each tool's route
+   * checks its gate again on every call.
+   */
+  agentSessionTools?: readonly SessionToolGate[];
   /** MCP servers to inject into the agent session */
   mcpServers?: McpServerConfig[];
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
@@ -286,6 +293,8 @@ export interface RestoreConfig {
   vncEnabled?: boolean;
   /** Resolved fresh on each restore — see CreateSandboxConfig. */
   agentSlackNotifyEnabled?: boolean;
+  /** Resolved fresh on each restore — see CreateSandboxConfig. */
+  agentSessionTools?: readonly SessionToolGate[];
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
   /** Previous logical allocation identity, used by providers supporting ambiguous-create recovery. */

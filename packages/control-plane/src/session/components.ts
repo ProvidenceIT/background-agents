@@ -21,6 +21,7 @@
  * Deployment-time validation is the gate for configuration, not the runtime.
  */
 
+import { openSessionToolGates } from "../session-tools/gates";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import {
@@ -51,7 +52,11 @@ import {
 import type { ImageBuildLookup } from "../sandbox/lifecycle/image-selection";
 // The composition root supplies launch integration ports, not consumer-facing launch mechanics.
 // eslint-disable-next-line no-restricted-imports
-import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecycle/launch-context";
+import type {
+  McpServerLookup,
+  SessionToolsLookup,
+  SlackAgentNotifyLookup,
+} from "../sandbox/lifecycle/launch-context";
 // The composition root shares the internal access collaborator with shutdown and lifecycle only.
 // eslint-disable-next-line no-restricted-imports
 import { SandboxAccess } from "../sandbox/lifecycle/sandbox-access";
@@ -1303,6 +1308,11 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     },
   };
 
+  // The agent's session tools, by gate; none unless the integration lists them.
+  const sessionToolsLookup: SessionToolsLookup = {
+    openGates: (target) => openSessionToolGates(db, env, target),
+  };
+
   // A malformed budget must not take every session down at construction the
   // way a missing provider does; it falls back to the default and says so.
   const bootBudget = resolveBootBudgetTimeoutMs(env.SANDBOX_BOOT_TIMEOUT_MS, {
@@ -1336,6 +1346,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,
     slackAgentNotifyLookup,
+    sessionToolsLookup,
     // Read only when the provider mounts homes (Kubernetes).
     authHomeLookup: createSessionAuthHomeLookup(db),
     // The sandbox lifetime when no scope sets one, so it matches the watchdog's budget.
