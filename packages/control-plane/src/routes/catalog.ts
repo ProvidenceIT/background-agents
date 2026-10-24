@@ -9,6 +9,7 @@ import type { RouteModule } from "../routing/hono-env";
 import { authHomeRoutes } from "../auth-homes/routes";
 import { webhookRoutes } from "../webhooks";
 import { analyticsRoutes } from "./analytics";
+import { approvalRoutes } from "./approvals";
 import { auditEventRoutes } from "./audit-events";
 import { autofixRoutes } from "./autofix";
 import { automationRoutes } from "./automations";
@@ -131,4 +132,7 @@ export const catalog: readonly RouteModule[] = [
 
   // Read-only GitHub bot routing hints
   githubRoutingRoutes,
+
+  // Approval requests for every kind, and the service-actor decide
+  approvalRoutes,
 ];

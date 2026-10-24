@@ -230,6 +230,10 @@
       "import": "./dist/types/analytics.js",
       "types": "./dist/types/analytics.d.ts"
     },
+    "./types/approvals": {
+      "import": "./dist/types/approvals.js",
+      "types": "./dist/types/approvals.d.ts"
+    },
     "./types/audit-events": {
       "import": "./dist/types/audit-events.js",
       "types": "./dist/types/audit-events.d.ts"
