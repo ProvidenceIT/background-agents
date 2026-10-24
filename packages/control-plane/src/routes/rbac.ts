@@ -39,6 +39,25 @@ function rbacErrorResponse(cause: unknown): Response {
   return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
 }
 
+/**
+ * A caller changing their own role or suspending themselves can lock
+ * themselves out in one request, so the request must say it was confirmed.
+ */
+function unconfirmedSelfChange(
+  targetUserId: string,
+  ctx: UserRouteContext,
+  confirm: true | undefined
+): Response | null {
+  if (targetUserId !== ctx.principal.userId || confirm === true) return null;
+  return json(
+    {
+      error: "Changing your own access needs confirmation",
+      code: "self_change_unconfirmed",
+    },
+    409
+  );
+}
+
 async function handleGetCurrentAuthorization(
   _request: Request,
   _env: Env,
@@ -106,6 +125,8 @@ async function handleReplaceMemberRole(
   if (!isCanonicalUserId(targetUserId)) return error("Invalid user ID", 400);
   const body = await parseBody(request, replaceMemberRoleInputSchema, "Invalid request body");
   if (body instanceof Response) return body;
+  const unconfirmed = unconfirmedSelfChange(targetUserId, ctx, body.confirm);
+  if (unconfirmed) return unconfirmed;
   const service = new AuthorizationService(ctx.db);
   try {
     await service.replaceMemberRole({
@@ -130,6 +151,10 @@ async function handleReplaceMemberStatus(
   if (!isCanonicalUserId(targetUserId)) return error("Invalid user ID", 400);
   const body = await parseBody(request, replaceMemberStatusInputSchema, "Invalid request body");
   if (body instanceof Response) return body;
+  if (body.suspended) {
+    const unconfirmed = unconfirmedSelfChange(targetUserId, ctx, body.confirm);
+    if (unconfirmed) return unconfirmed;
+  }
   const service = new AuthorizationService(ctx.db);
   try {
     await service.replaceMemberStatus({
