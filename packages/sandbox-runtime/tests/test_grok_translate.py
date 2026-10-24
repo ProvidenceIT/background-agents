@@ -129,6 +129,38 @@ def test_nonzero_exit_code_is_an_error() -> None:
     assert again.events == []
 
 
+def test_list_dir_output_is_its_raw_listing() -> None:
+    # Recorded from grok 1.0.52: list_dir sends no text content, only rawOutput.
+    state = GrokTurnState(message_id="m")
+    translator = GrokTranslator()
+    translator.translate(
+        state,
+        {
+            "type": "tool_call",
+            "toolCallId": "c1",
+            "toolName": "list_dir",
+            "rawInput": {"target_directory": "."},
+            "status": "pending",
+            "content": [],
+        },
+    )
+    listing = "- /workspace/demo/\n  - a.txt\n  - b.txt"
+    [done] = translator.translate(
+        state,
+        {
+            "type": "tool_call_update",
+            "toolCallId": "c1",
+            "status": "completed",
+            "content": [],
+            "rawOutput": {
+                "type": "ListDir",
+                "Content": {"content": listing, "absolute_root_path": "/workspace/demo/."},
+            },
+        },
+    ).events
+    assert (done["status"], done["output"]) == ("completed", listing)
+
+
 @pytest.mark.parametrize(
     ("tool_name", "raw_input", "expected"),
     [
