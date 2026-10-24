@@ -22,6 +22,11 @@ const GATE_COPY: Record<SessionToolGate, { label: string; description: string }>
     label: "Add a note to the motion Task",
     description: "The agent can add a note to that Task. motion sessions only.",
   },
+  repo_context: {
+    label: "Read repository ownership",
+    description:
+      "The agent can read the repository's owner team, tier, class and CODEOWNERS owners.",
+  },
 };
 
 function toggleGate(tools: SessionToolGate[], gate: SessionToolGate): SessionToolGate[] {

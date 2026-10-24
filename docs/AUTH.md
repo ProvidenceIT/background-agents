@@ -556,8 +556,10 @@ its permission ceiling alone admits it nowhere.
   body only to pick the row it re-reads from the control plane. Motion is not a callback destination
   (`CALLBACK_DESTINATIONS`), and the doorbell key is not a verification key here.
 - **Agent session tools.** The sandbox-only routes `POST /sessions/:id/notify`,
-  `GET /sessions/:id/motion/task` and `POST /sessions/:id/motion/notes` serve the agent's
-  `notify_user`, `motion_get_task` and `motion_add_note` (`src/routes/session-tools.ts`). Sandbox
+  `GET /sessions/:id/motion/task`, `POST /sessions/:id/motion/notes` and
+  `GET /sessions/:id/repo-context` serve the agent's `notify_user`, `motion_get_task`,
+  `motion_add_note` and `repo_context` (`src/routes/session-tools.ts`,
+  `src/routes/repo-ownership.ts`); `repo_context` only reads the session's own repository. Sandbox
   admission grants nothing specific: each route checks its own gate from the `session-tools`
   integration (none enabled by default) on every call. `notify` only ever DMs the session's owner;
   the agent cannot name a recipient. The motion routes refuse sessions whose external ref is not a

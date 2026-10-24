@@ -9,7 +9,9 @@ import type { Env } from "../types";
  * Which session tools a session may use. A gate is open when the
  * `session-tools` integration lists it for the session's repository and this
  * deployment can serve it: `notify` needs the Teams bot (the owner's DM),
- * `motion_*` need motion's REST API configured and a session motion started.
+ * `motion_*` need motion's REST API configured and a session motion started,
+ * and `repo_context` needs nothing more (it reads only the control plane's
+ * own repository ownership records).
  * The launch path resolves the set once to decide which tools to install;
  * each route asks again on every call, since sandbox admission grants
  * nothing specific and settings can change while the sandbox runs.
@@ -72,10 +74,12 @@ export async function openSessionToolGates(
   const configured = await configuredSessionToolGates(db, target);
   if (configured.length === 0) return [];
   const motion =
-    configured.some((gate) => gate !== "notify") &&
+    configured.some((gate) => gate === "motion_read" || gate === "motion_write") &&
     motionApiAvailable(env) &&
     (await startedByMotion(db, target.sessionId));
-  return configured.filter((gate) =>
-    gate === "notify" ? teamsDirectMessagesAvailable(env) : motion
-  );
+  return configured.filter((gate) => {
+    if (gate === "notify") return teamsDirectMessagesAvailable(env);
+    if (gate === "repo_context") return true;
+    return motion;
+  });
 }

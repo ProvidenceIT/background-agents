@@ -25,6 +25,7 @@ exports[`route admission matrix > admits a session-bound sandbox token on every 
   "POST /sessions/:id/notify sandbox=404 wrong-token=401",
   "GET /sessions/:id/motion/task sandbox=404 wrong-token=401",
   "POST /sessions/:id/motion/notes sandbox=404 wrong-token=401",
+  "GET /sessions/:id/repo-context sandbox=404 wrong-token=401",
   "POST /sessions/:id/provider-auth/:provider/access-token sandbox=404 wrong-token=401",
   "POST /sessions/:id/provider-auth/:provider/runtime-credential sandbox=409 wrong-token=401",
   "GET /sessions/:id/commit-signing sandbox=200 wrong-token=401",
@@ -40,6 +41,8 @@ exports[`route admission matrix > admits only the named bot on every exact-servi
   "POST /internal/github-event github-bot=400 slack-bot=403 web=403",
   "POST /internal/slack-event slack-bot=400 github-bot=403 web=403",
   "GET /github/route github-bot=400 slack-bot=403 web=403",
+  "POST /approvals github-bot=400 motion=403 web=403",
+  "POST /internal/approvals/:id/decide teams-bot=400 slack-bot=403 web=403",
 ]
 `;
 
@@ -132,8 +135,9 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "PUT /repos/:owner/:name/metadata owner=200",
   "GET /repos/:owner/:name/metadata owner=200",
   "GET /repos/:owner/:name/branches owner=500",
-  "GET /repos/:owner/:name/path-policy owner=200",
-  "PUT /repos/:owner/:name/path-policy owner=400",
+  "GET /repo-ownership owner=200",
+  "GET /repos/:owner/:name/ownership owner=200",
+  "PUT /repos/:owner/:name/ownership owner=400",
   "PUT /repos/:owner/:name/secrets owner=500",
   "GET /repos/:owner/:name/secrets owner=500",
   "DELETE /repos/:owner/:name/secrets/:key owner=500",
@@ -278,6 +282,9 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "GET /teams/:id/secrets owner=200",
   "PUT /teams/:id/secrets owner=400",
   "DELETE /teams/:id/secrets/:key owner=404",
+  "GET /approvals owner=200",
+  "GET /approvals/:id owner=404",
+  "POST /approvals/:id/decide owner=400",
 ]
 `;
 
@@ -387,8 +394,10 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "PUT /repos/:owner/:name/metadata anonymous=401",
   "GET /repos/:owner/:name/metadata anonymous=401",
   "GET /repos/:owner/:name/branches anonymous=401",
-  "GET /repos/:owner/:name/path-policy anonymous=401",
-  "PUT /repos/:owner/:name/path-policy anonymous=401",
+  "GET /repo-ownership anonymous=401",
+  "GET /repos/:owner/:name/ownership anonymous=401",
+  "PUT /repos/:owner/:name/ownership anonymous=401",
+  "GET /sessions/:id/repo-context anonymous=401",
   "PUT /repos/:owner/:name/secrets anonymous=401",
   "GET /repos/:owner/:name/secrets anonymous=401",
   "DELETE /repos/:owner/:name/secrets/:key anonymous=401",
@@ -545,6 +554,11 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "POST /internal/github-event anonymous=401",
   "POST /internal/slack-event anonymous=401",
   "GET /github/route anonymous=401",
+  "POST /approvals anonymous=401",
+  "GET /approvals anonymous=401",
+  "GET /approvals/:id anonymous=401",
+  "POST /approvals/:id/decide anonymous=401",
+  "POST /internal/approvals/:id/decide anonymous=401",
 ]
 `;
 
