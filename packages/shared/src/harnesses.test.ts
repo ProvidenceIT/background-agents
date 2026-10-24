@@ -3,6 +3,7 @@ import {
   DEFAULT_HARNESS,
   HARNESS_CATALOG,
   HARNESS_IDS,
+  assessRunnability,
   checkHarnessCompatibility,
   filterModelsForHarness,
   getValidHarnessOrDefault,
@@ -354,5 +355,99 @@ describe("checkHarnessCompatibility", () => {
     expect(
       checkHarnessCompatibility("codex", "openai/gpt-6-sol", { openai: "provider_account" })
     ).toEqual(expected);
+  });
+});
+
+describe("assessRunnability", () => {
+  it("refuses OpenCode + a Claude model on a Claude subscription home as a payer mismatch", () => {
+    expect(
+      assessRunnability("opencode", "anthropic/claude-haiku-4-5", { anthropic: "auth_home" })
+    ).toEqual({
+      runnable: false,
+      payer: "none",
+      reasons: [
+        {
+          code: "payer_mismatch",
+          message:
+            "The OpenCode harness cannot run anthropic on a subscription home; use the Claude Agent harness.",
+        },
+        {
+          code: "model_unsupported",
+          message:
+            'Model "anthropic/claude-haiku-4-5" cannot run on the OpenCode harness. It runs only on Claude Agent; fork this session onto Claude Agent.',
+        },
+      ],
+    });
+  });
+
+  it("treats a bare Claude id on OpenCode the same way", () => {
+    expect(
+      assessRunnability("opencode", "claude-haiku-4-5", { anthropic: "auth_home" }).reasons[0]?.code
+    ).toBe("payer_mismatch");
+  });
+
+  it("runs a Claude model on Claude Agent paid by the subscription home", () => {
+    expect(
+      assessRunnability("claude", "anthropic/claude-haiku-4-5", { anthropic: "auth_home" })
+    ).toEqual({ runnable: true, payer: "subscription", reasons: [] });
+  });
+
+  it("names the payer for each selectable mode", () => {
+    expect(
+      assessRunnability("claude", "anthropic/claude-haiku-4-5", { anthropic: "provider_account" })
+        .payer
+    ).toBe("provider_account");
+    expect(
+      assessRunnability("claude", "anthropic/claude-haiku-4-5", { anthropic: "api_key" }).payer
+    ).toBe("api_key");
+    expect(
+      assessRunnability("opencode", "openai/gpt-6.1-sol", { openai: "legacy_scoped_oauth" }).payer
+    ).toBe("api_key");
+  });
+
+  it("refuses Codex on an OpenAI API key", () => {
+    expect(assessRunnability("codex", "openai/gpt-6.1-sol", { openai: "api_key" })).toEqual({
+      runnable: false,
+      payer: "none",
+      reasons: [
+        {
+          code: "payer_mismatch",
+          message:
+            "The Codex harness runs openai only on a subscription home; enrol one under Settings > Subscription homes.",
+        },
+      ],
+    });
+  });
+
+  it("leaves an unbound provider to the run, except where only a home can pay", () => {
+    expect(assessRunnability("claude", "anthropic/claude-haiku-4-5")).toEqual({
+      runnable: true,
+      payer: "none",
+      reasons: [],
+    });
+    expect(assessRunnability("codex", "openai/gpt-6.1-sol")).toEqual({
+      runnable: true,
+      payer: "subscription",
+      reasons: [],
+    });
+  });
+
+  it("does not judge a provider the harness pays outside the selectable modes", () => {
+    expect(
+      assessRunnability("opencode", "zai-coding-plan/glm-5.3", { "zai-coding-plan": "api_key" })
+    ).toEqual({ runnable: true, payer: "api_key", reasons: [] });
+  });
+
+  it("reports a model the harness cannot run without a binding", () => {
+    expect(assessRunnability("grok", "xai/grok-build-0.1")).toEqual({
+      runnable: false,
+      payer: "none",
+      reasons: [
+        {
+          code: "model_unsupported",
+          message: 'Model "xai/grok-build-0.1" cannot run on the SuperGrok harness.',
+        },
+      ],
+    });
   });
 });

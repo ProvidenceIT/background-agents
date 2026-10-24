@@ -70,6 +70,10 @@
       "import": "./dist/session-list-query.js",
       "types": "./dist/session-list-query.d.ts"
     },
+    "./types/runnability": {
+      "import": "./dist/types/runnability.js",
+      "types": "./dist/types/runnability.d.ts"
+    },
     "./types/commit-signing": {
       "import": "./dist/types/commit-signing.js",
       "types": "./dist/types/commit-signing.d.ts"
