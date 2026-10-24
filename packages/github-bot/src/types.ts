@@ -1,18 +1,31 @@
 /**
- * Environment bindings for the GitHub Bot Cloudflare Worker.
+ * Environment bindings for the GitHub bot: Cloudflare bindings on the
+ * Worker, Node adapters of the same shapes on the Node entry (src/node/).
  */
+import type { CacheStore } from "@open-inspect/shared/cache-store";
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
 
+/** Where Autofix envelopes go; resolves once the envelope is durable. */
+export interface AutofixQueue {
+  send(envelope: GitHubAutofixEnvelope): Promise<void>;
+}
+
 export interface Env {
-  /** KV namespace for deduplicating webhook deliveries. */
-  GITHUB_KV: KVNamespace;
+  /** Webhook delivery dedupe: a KV namespace on the Worker, a SQLite cache file on Node. */
+  GITHUB_KV: CacheStore;
 
-  /** Durable handoff for pull request feedback that may trigger Autofix. */
-  AUTOFIX_QUEUE: Queue<GitHubAutofixEnvelope>;
+  /**
+   * Durable handoff for pull request feedback that may trigger Autofix: a
+   * Cloudflare Queue on the Worker, the control plane's job ingress on Node.
+   */
+  AUTOFIX_QUEUE: AutofixQueue;
 
-  /** Service binding to the control plane worker. */
+  /** The control plane: a service binding on the Worker, a URL-bound fetcher on Node. */
   CONTROL_PLANE: ControlPlaneFetcher;
+
+  /** Repositories to act on (see repo-allowlist.ts); unset acts on every repository. */
+  SF_GITHUB_REPO_ALLOWLIST?: string;
 
   /** Deployment name for logging/identification. */
   DEPLOYMENT_NAME: string;

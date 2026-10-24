@@ -28,5 +28,14 @@
     "package.json",
     "package-lock.json",
     ".nvmrc"
+  ],
+  "github-bot": [
+    "packages/github-bot/**",
+    "packages/shared/**",
+    "packages/github-bot/Dockerfile",
+    ".dockerignore",
+    "package.json",
+    "package-lock.json",
+    ".nvmrc"
   ]
 }

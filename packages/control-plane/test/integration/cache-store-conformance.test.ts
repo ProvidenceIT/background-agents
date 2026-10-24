@@ -13,8 +13,11 @@
 
 import { env } from "cloudflare:test";
 import { afterAll, beforeAll, describe } from "vitest";
-import { createKvCacheStore } from "@open-inspect/shared/cache-store";
-import { CACHE_ENTRIES_SCHEMA_SQL, SqlCacheStore } from "../../src/db/sql-cache-store";
+import {
+  CACHE_ENTRIES_SCHEMA_SQL,
+  createKvCacheStore,
+  SqlCacheStore,
+} from "@open-inspect/shared/cache-store";
 import {
   registerCacheStoreConformanceSuite,
   type CacheStoreFactory,

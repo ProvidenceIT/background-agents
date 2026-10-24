@@ -1,0 +1,13 @@
+{
+  // The Node entry's program: src/node/** is the only code that imports Node
+  // built-ins (node:sqlite, node:fs), so it is excluded from the
+  // workerd-typed tsconfig.json and checked here with Node types only. From
+  // src/node/runtime.ts the program reaches the whole Hono app, so a
+  // Cloudflare-only type leaking into it fails here.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["src/node/**/*.ts", "types/node-web.d.ts"],
+  "exclude": ["node_modules", "src/**/*.test.ts"]
+}

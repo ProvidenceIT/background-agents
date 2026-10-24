@@ -21,6 +21,7 @@ import { githubRoutingRoutes } from "./github-route";
 import { healthRoutes } from "./health";
 import { imageBuildRoutes } from "./image-builds";
 import { integrationSettingsRoutes } from "./integration-settings";
+import { internalAutofixJobRoutes } from "./internal-autofix-jobs";
 import { keyboardShortcutRoutes } from "./keyboard-shortcuts";
 import { mcpServerRoutes } from "./mcp-servers";
 import { memoryRoutes } from "./memories";
@@ -110,6 +111,7 @@ export const catalog: readonly RouteModule[] = [
 
   // Pull request feedback Autofix activity
   autofixRoutes,
+  internalAutofixJobRoutes,
 
   // Installation-wide managed skills and personal profiles
   skillRoutes,

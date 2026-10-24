@@ -80,6 +80,26 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 | `SERVICE_AUTH_SECRET`        | Secret                | Per-service sig1 signing secret for control-plane requests                          |
 | `LOG_LEVEL`                  | Plain text (optional) | Log level override (`debug`, `info`, `warn`, `error`)                               |
 
+### Running on Node (container)
+
+`src/node/main.ts` serves the same Hono app with `@hono/node-server`; the image is
+`packages/github-bot/Dockerfile` (Node 24, non-root, state on `/state`). The Worker build is
+unchanged. The bindings become Node adapters:
+
+| Binding         | Node adapter                                                                          |
+| --------------- | ------------------------------------------------------------------------------------- |
+| `GITHUB_KV`     | `SqlCacheStore` (shared) over `node:sqlite` in `$GITHUB_BOT_STATE_DIR/cache.db`       |
+| `CONTROL_PLANE` | A fetcher bound to `CONTROL_PLANE_URL` (an origin; sig1 signs the path)               |
+| `AUTOFIX_QUEUE` | A signed `POST /internal/jobs/github.autofix` to the control plane, which enqueues it |
+| `waitUntil`     | A tracked promise set, drained on `SIGTERM` before the process exits                  |
+
+Environment: the variables in the table above, except that the signing secret is
+`SERVICE_AUTH_SECRET_GITHUB_BOT`, plus `CONTROL_PLANE_URL`, `GITHUB_BOT_PORT` (default 3200),
+`GITHUB_BOT_STATE_DIR` (default `/state`) and `SF_GITHUB_REPO_ALLOWLIST`: comma-separated
+`owner/name` repositories the bot acts on. On Node it always applies and defaults to empty, so every
+delivery is acknowledged and ignored until a repository is named. On the Worker it applies only when
+set.
+
 ### GitHub App Configuration
 
 The GitHub bot uses the same repository permissions configured for the main GitHub App setup. In

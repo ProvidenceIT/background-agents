@@ -11,7 +11,7 @@ import {
   checkSenderPermission,
 } from "./github-auth";
 import { resolveSessionTarget } from "./session-target";
-import { createSession, sendPrompt } from "./session-client";
+import { createSession, sendPrompt, type ControlPlaneRequestFailure } from "./session-client";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 import { resolveModelSelection } from "./model-selection";
 import type { ParseInlinePromptFlagsResult } from "@open-inspect/shared/inline-prompt-flags";
@@ -137,6 +137,63 @@ async function resolveCallerGating(
   return { allowed: true, ghToken };
 }
 
+/** Refusals the control plane can answer a session start with, and the PR comment for each. */
+type AdmissionRefusalCode =
+  | "not_member"
+  | "target_team_missing_grant"
+  | "team_archived"
+  | "service_actor_not_enrolled"
+  | "no_eligible_home";
+
+/**
+ * The comment that explains `failure` on the pull request, or null when it
+ * is not a refusal the sender can act on. The comment names only the
+ * triggering repository: a PR comment must not disclose secondary
+ * repositories from the environment.
+ */
+function admissionRefusal(
+  failure: Pick<ControlPlaneRequestFailure, "status" | "code" | "message">,
+  triggerRepo: string,
+  appName: string
+): { code: AdmissionRefusalCode; comment: string } | null {
+  const { status, code } = failure;
+  if (status === 403 && code === "not_member") {
+    return {
+      code,
+      comment:
+        "I couldn't start a session because you are not a member of the target team. Ask a team lead to add you, then try again.",
+    };
+  }
+  if (status === 409 && code === "target_team_missing_grant") {
+    return {
+      code,
+      comment: `I couldn't start a session because the target team is missing a required repository grant to work on \`${triggerRepo}\`. Ask a team lead or workspace administrator to review the team's repository and environment grants, then try again.`,
+    };
+  }
+  if (status === 409 && code === "team_archived") {
+    return {
+      code,
+      comment:
+        "I couldn't start a session because the target team is archived. Ask a workspace administrator to restore the team, then try again.",
+    };
+  }
+  if (status === 403 && code === "service_actor_not_enrolled") {
+    return {
+      code,
+      comment: `I couldn't start a session because your GitHub account is not linked to ${appName}. Sign in to ${appName} with GitHub once, then try again.`,
+    };
+  }
+  if (status === 403 && code === "no_eligible_home") {
+    // The control plane's message names the provider and what to do; it never names a key.
+    const reason = failure.message ?? "no subscription home can run this session for you";
+    return {
+      code,
+      comment: `I couldn't start a session: ${reason}.`,
+    };
+  }
+  return null;
+}
+
 export async function startSession(
   env: Env,
   log: Logger,
@@ -209,6 +266,30 @@ export async function startSession(
   }
   const { selection } = modelSelection;
 
+  /**
+   * Explain a control-plane refusal on the pull request. Returns the skip
+   * when the failure was a refusal the bot explains; null for any other
+   * failure, which the caller raises so the delivery can be retried.
+   */
+  const postAdmissionRefusal = async (
+    failure: ControlPlaneRequestFailure
+  ): Promise<HandlerResult | null> => {
+    const refusal = admissionRefusal(failure, `${owner}/${repoName}`, userAgent);
+    if (!refusal) return null;
+    const posted = await postIssueComment(
+      ghToken,
+      `https://api.github.com/repos/${repositoryPath}/issues/${pullNumber}/comments`,
+      refusal.comment,
+      userAgent
+    );
+    if (!posted) {
+      log.warn("session.refusal_comment_failed", { ...meta, code: refusal.code });
+      throw new Error(`Session refusal comment failed: ${refusal.code}`);
+    }
+    log.info("session.admission_refused", { ...meta, code: refusal.code });
+    return { outcome: "skipped", skip_reason: refusal.code };
+  };
+
   return withReaction(
     log,
     ghToken,
@@ -255,36 +336,9 @@ export async function startSession(
           : {}),
       });
       if (!creation.ok) {
-        const { status, code, body } = creation;
-        if (
-          (status === 403 && code === "not_member") ||
-          (status === 409 && (code === "target_team_missing_grant" || code === "team_archived"))
-        ) {
-          // A PR comment must not disclose secondary repositories from the environment.
-          const triggerRepo = `${owner}/${repoName}`;
-          const comment = {
-            not_member:
-              "I couldn't start a session because you are not a member of the target team. Ask a team lead to add you, then try again.",
-            target_team_missing_grant: `I couldn't start a session because the target team is missing a required repository grant to work on \`${triggerRepo}\`. Ask a team lead or workspace administrator to review the team's repository and environment grants, then try again.`,
-            team_archived:
-              "I couldn't start a session because the target team is archived. Ask a workspace administrator to restore the team, then try again.",
-          }[code];
-          const posted = await postIssueComment(
-            ghToken,
-            `https://api.github.com/repos/${repositoryPath}/issues/${pullNumber}/comments`,
-            comment,
-            userAgent
-          );
-          if (!posted) {
-            log.warn("session.refusal_comment_failed", {
-              trace_id: traceId,
-              repo: triggerRepo,
-              code,
-            });
-            throw new Error(`Session refusal comment failed: ${code}`);
-          }
-          return { outcome: "skipped", skip_reason: code };
-        }
+        const refused = await postAdmissionRefusal(creation);
+        if (refused) return refused;
+        const { status, body } = creation;
         throw new Error(`Session creation failed: ${status} ${body}`);
       }
       const { sessionId } = creation;
@@ -298,10 +352,16 @@ export async function startSession(
       });
 
       const prompt = params.buildPrompt(config);
-      const messageId = await sendPrompt(env, traceId, sessionId, {
+      const delivery = await sendPrompt(env, traceId, sessionId, {
         content: prompt,
         authorId: `github:${sender.id}`,
       });
+      if (!delivery.ok) {
+        const refused = await postAdmissionRefusal(delivery);
+        if (refused) return refused;
+        throw new Error(`Prompt delivery failed: ${delivery.status} ${delivery.body}`);
+      }
+      const { messageId } = delivery;
       log.info("prompt.sent", {
         ...meta,
         session_id: sessionId,
