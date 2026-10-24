@@ -23,6 +23,7 @@ import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-buil
 import type { CorrelationContext, Logger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import { runSessionNoticesJob } from "./notifications/drainer";
+import { runCodeownersSync } from "./repos/codeowners-sync";
 import { Scheduler } from "./scheduler/scheduler";
 import {
   ABANDONED_DRAFT_SWEEP_CRON,
@@ -37,7 +38,8 @@ import type { Env } from "./types";
  * Every minute: the automation scheduler's tick, the autofix queue health
  * check, the GitHub team sync, which gates itself on its own interval, the
  * subscription-home notices and the session notice outbox, which claim each
- * notice once, and the approval expiry sweep.
+ * notice once, the approval expiry sweep, and the CODEOWNERS sync, which
+ * reads each onboarded repository about once a day.
  */
 export const SCHEDULER_TICK_CRON = "* * * * *";
 
@@ -79,6 +81,9 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       });
       backgroundTasks.submit(() => runApprovalExpiryJob(db, log, nowMs), {
         name: "approval_expiry",
+      });
+      backgroundTasks.submit(() => runCodeownersSync(env, db, log, nowMs), {
+        name: "codeowners_sync",
       });
       // The tick runs both the recovery sweep (orphaned/timed-out runs) and
       // processes overdue automations.

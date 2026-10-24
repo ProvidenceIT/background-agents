@@ -30,6 +30,7 @@ import { modelProviderAccountRoutes } from "./model-provider-accounts";
 import { providerRuntimeCredentialRoutes } from "./provider-runtime-credentials";
 import { rbacRoutes } from "./rbac";
 import { reposRoutes } from "./repos";
+import { repoOwnershipRoutes } from "./repo-ownership";
 import { scmSettingsRoutes } from "./scm-settings";
 import { secretsRoutes } from "./secrets";
 import { sessionRoutes } from "./sessions";
@@ -64,6 +65,7 @@ export const catalog: readonly RouteModule[] = [
 
   // Repository management
   reposRoutes,
+  repoOwnershipRoutes,
 
   // Secrets
   secretsRoutes,

@@ -2,8 +2,9 @@
  * Agent-facing session tool contract.
  *
  * The single definition of the session tools every harness exposes: telling the
- * session's owner something (`notify_user`) and reading or annotating the motion
- * Task a session was delegated from (`motion_*`). Each tool is one control-plane
+ * session's owner something (`notify_user`), reading or annotating the motion
+ * Task a session was delegated from (`motion_*`), and reading who owns the
+ * session's repository (`repo_context`). Each tool is one control-plane
  * route below `/sessions/:id`, so no address, key or token ever enters the
  * sandbox. The pattern is `memory-tools.ts`'s: the sandbox runtime cannot import
  * TypeScript, so `npm run generate:session-tools-contract -w @open-inspect/shared`
@@ -19,11 +20,21 @@
 import { z } from "zod";
 
 /** What a deployment enables per repository; one gate can cover several tools. */
-export const SESSION_TOOL_GATES = ["notify", "motion_read", "motion_write"] as const;
+export const SESSION_TOOL_GATES = [
+  "notify",
+  "motion_read",
+  "motion_write",
+  "repo_context",
+] as const;
 export const sessionToolGateSchema = z.enum(SESSION_TOOL_GATES);
 export type SessionToolGate = z.infer<typeof sessionToolGateSchema>;
 
-export const SESSION_TOOL_NAMES = ["notify_user", "motion_get_task", "motion_add_note"] as const;
+export const SESSION_TOOL_NAMES = [
+  "notify_user",
+  "motion_get_task",
+  "motion_add_note",
+  "repo_context",
+] as const;
 export type SessionToolName = (typeof SESSION_TOOL_NAMES)[number];
 
 /** A notice lands on a lock screen: short, and never a place for content. */
@@ -61,6 +72,8 @@ export const motionAddNoteInputSchema = z.strictObject({
 });
 export type MotionAddNoteInput = z.output<typeof motionAddNoteInputSchema>;
 
+export const repoContextInputSchema = z.strictObject({});
+
 interface SessionToolDefinition {
   gate: SessionToolGate;
   description: string;
@@ -94,6 +107,14 @@ export const SESSION_TOOLS = {
     input: motionAddNoteInputSchema,
     method: "POST",
     path: "/motion/notes",
+  },
+  repo_context: {
+    gate: "repo_context",
+    description:
+      "Read who owns this session's repository and how careful to be with it: the owner team, the tier (T1 is the most critical, T3 the least), the class (playground, internal or client; an unclassified repository counts as client), its domain and dependencies, and the owners its CODEOWNERS file names. Use it before deciding whom a change affects or how much review it needs.",
+    input: repoContextInputSchema,
+    method: "GET",
+    path: "/repo-context",
   },
 } as const satisfies Record<SessionToolName, SessionToolDefinition>;
 

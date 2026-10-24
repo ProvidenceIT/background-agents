@@ -20,6 +20,7 @@ import {
   SessionDraftExpiryClient,
 } from "./session/abandoned-draft-sweep";
 import type { SessionRuntimeClient } from "./session/runtime-client";
+import { runCodeownersSync } from "./repos/codeowners-sync";
 import { runGitHubTeamSync } from "./teams/github-team-sync";
 import {
   SCHEDULED_JOBS,
@@ -40,6 +41,7 @@ vi.mock("./image-builds/scheduler", async (importOriginal) => ({
   runImageBuildScheduler: vi.fn(async () => ({})),
 }));
 vi.mock("./teams/github-team-sync", () => ({ runGitHubTeamSync: vi.fn(async () => []) }));
+vi.mock("./repos/codeowners-sync", () => ({ runCodeownersSync: vi.fn(async () => ({})) }));
 vi.mock("./scheduler/scheduler", () => ({
   Scheduler: vi.fn(function () {
     return { tick: schedulerTick };
@@ -107,7 +109,7 @@ describe("SCHEDULED_JOBS", () => {
     expect(findScheduledJob("0 0 * * *")).toBeUndefined();
   });
 
-  it("runs the every-minute tick: queue health, team sync, both notice jobs and approval expiry in the background, the scheduler tick awaited", async () => {
+  it("runs the every-minute tick: queue health, team sync, both notice jobs, approval expiry and the CODEOWNERS sync in the background, the scheduler tick awaited", async () => {
     const deps = fakeDeps();
 
     await findScheduledJob(SCHEDULER_TICK_CRON)!.run(deps, 1_000);
@@ -120,6 +122,7 @@ describe("SCHEDULED_JOBS", () => {
       "auth_home_notices",
       "session_notices",
       "approval_expiry",
+      "codeowners_sync",
     ]);
     expect(checkAutofixQueueHealth).not.toHaveBeenCalled();
     expect(runGitHubTeamSync).not.toHaveBeenCalled();
@@ -136,6 +139,9 @@ describe("SCHEDULED_JOBS", () => {
     expect(runApprovalExpiryJob).not.toHaveBeenCalled();
     await deps.submitted[4]!.task();
     expect(runApprovalExpiryJob).toHaveBeenCalledWith(deps.db, deps.log, 1_000);
+    expect(runCodeownersSync).not.toHaveBeenCalled();
+    await deps.submitted[5]!.task();
+    expect(runCodeownersSync).toHaveBeenCalledWith(deps.env, deps.db, deps.log, 1_000);
   });
 
   it("runs the image-build scheduler with the run's correlation", async () => {

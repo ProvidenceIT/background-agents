@@ -143,6 +143,7 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
   "models.preferences.manage",
   "provider_accounts.manage",
   "repositories.images.manage",
+  "repositories.ownership.manage",
   "repositories.secrets.manage",
   "repositories.settings.manage",
   "scm_settings.manage",
