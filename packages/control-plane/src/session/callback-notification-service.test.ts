@@ -1751,7 +1751,66 @@ describe("CallbackNotificationService", () => {
         success: true,
         error: undefined,
         automationName: "Daily sync",
+        outcome: null,
+        resetsAtMs: null,
+        overloadRetries: 0,
       });
+    });
+
+    it("classifies a usage-limited turn and carries its reset time", async () => {
+      const completeAutomationRun = vi.fn(async () => undefined);
+      const h = createTestHarness({ completeAutomationRun });
+      vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({
+          source: "automation",
+          automationId: "auto-1",
+          runId: "run-1",
+          automationName: "Daily sync",
+        }),
+        source: "automation",
+      });
+
+      await h.service.notifyComplete("msg-1", false, "You've hit your limit", {
+        kind: "subscription_limit",
+        window: "five_hour",
+        resetsAtMs: 1_790_000_000_000,
+        subscriptionSlot: "claude-1",
+        harness: "claude",
+      });
+
+      expect(completeAutomationRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          outcome: "usage_limited",
+          resetsAtMs: 1_790_000_000_000,
+          overloadRetries: 0,
+        })
+      );
+    });
+
+    it("classifies an overloaded provider and carries the retries already spent", async () => {
+      const completeAutomationRun = vi.fn(async () => undefined);
+      const h = createTestHarness({ completeAutomationRun });
+      vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({
+          source: "automation",
+          automationId: "auto-1",
+          runId: "run-1",
+          automationName: "Daily sync",
+          overloadRetries: 2,
+        }),
+        source: "automation",
+      });
+
+      await h.service.notifyComplete(
+        "msg-1",
+        false,
+        'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+      );
+
+      expect(completeAutomationRun).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "overloaded", resetsAtMs: null, overloadRetries: 2 })
+      );
     });
 
     it("sends failure details for failed automation runs", async () => {

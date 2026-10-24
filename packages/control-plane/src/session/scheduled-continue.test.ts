@@ -557,4 +557,86 @@ describe("SessionScheduledContinue", () => {
 
     expect(armed).toEqual([RESET + 60_000]);
   });
+
+  describe("automation continues", () => {
+    const callbackContext = {
+      source: "automation" as const,
+      automationId: "auto-1",
+      runId: "run-1",
+      automationName: "Nightly triage",
+    };
+    const automationRequest = {
+      atMs: RESET + 60_000,
+      requestedByUserId: "user-1",
+      authorId: "participant-user-1",
+      callbackContext,
+    };
+
+    it("stores the run's continue at the time the scheduler chose and arms the alarm", async () => {
+      const { scheduled, state, armed } = setup();
+
+      await expect(scheduled.scheduleForAutomation(automationRequest)).resolves.toBe(true);
+
+      expect(state.stored).toEqual({
+        atMs: RESET + 60_000,
+        requestedByUserId: "user-1",
+        authorId: "participant-user-1",
+        createdAtMs: NOW,
+        automationCallback: callbackContext,
+      });
+      expect(armed).toEqual([RESET + 60_000]);
+    });
+
+    it.each([
+      ["a spent budget", { budgetExhausted: true }],
+      ["a closed session", { status: "archived" }],
+    ])("refuses %s", async (_label, overrides) => {
+      const { scheduled, state, armed } = setup(overrides);
+
+      await expect(scheduled.scheduleForAutomation(automationRequest)).resolves.toBe(false);
+
+      expect(state.stored).toBeNull();
+      expect(armed).toEqual([]);
+    });
+
+    it("enqueues as the automation's next unattended turn, reporting back to the run", async () => {
+      const { scheduled, state, enqueued } = setup();
+      await scheduled.scheduleForAutomation(automationRequest);
+      state.now = RESET + 60_000;
+
+      await scheduled.fireIfDue();
+
+      expect(enqueued).toEqual([
+        {
+          turn: {
+            triggerKind: "schedule",
+            channel: "prompt",
+            requestId: `continue-at-reset:${NOW}`,
+          },
+          content: "Continue where you stopped.",
+          authorId: "participant-user-1",
+          canonicalUserId: "user-1",
+          source: "automation",
+          callbackContext,
+        },
+      ]);
+      expect(state.stored).toBeNull();
+    });
+
+    it("fires an overloaded retry even though the turn left no limit", async () => {
+      const { scheduled, state, enqueued } = setup({ limit: null });
+      await scheduled.scheduleForAutomation({
+        ...automationRequest,
+        atMs: NOW + 60_000,
+        callbackContext: { ...callbackContext, overloadRetries: 1 },
+      });
+      state.now = NOW + 60_000;
+
+      await scheduled.fireIfDue();
+
+      expect(enqueued.map((request) => request.callbackContext)).toEqual([
+        { ...callbackContext, overloadRetries: 1 },
+      ]);
+    });
+  });
 });
