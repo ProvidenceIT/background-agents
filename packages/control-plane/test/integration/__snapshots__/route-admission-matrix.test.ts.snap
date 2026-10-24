@@ -32,38 +32,6 @@ exports[`route admission matrix > admits a session-bound sandbox token on every 
 ]
 `;
 
-exports[`route admission matrix > admits a session-bound sandbox token on every sandbox-accepting route 2`] = `
-[
-  "POST /sessions/:id/pr sandbox=400 wrong-token=401",
-  "POST /sessions/:id/openai-token-refresh sandbox=404 wrong-token=401",
-  "POST /sessions/:id/xai-token-refresh sandbox=404 wrong-token=401",
-  "POST /sessions/:id/scm-credentials sandbox=500 wrong-token=401",
-  "GET /sessions/:id/tunnel-urls sandbox=200 wrong-token=401",
-  "POST /sessions/:id/media sandbox=400 wrong-token=401",
-  "GET /sessions/:id/attachments/:attachmentId sandbox=404 wrong-token=401",
-  "PUT /sessions/:id/diff sandbox=400 wrong-token=401",
-  "POST /sessions/:id/diff/failure sandbox=400 wrong-token=401",
-  "GET /sessions/:id/sandbox-skills sandbox=200 wrong-token=401",
-  "GET /sessions/:id/sandbox-memory sandbox=200 wrong-token=401",
-  "GET /sessions/:id/sandbox-memory/:memoryId sandbox=404 wrong-token=401",
-  "POST /sessions/:id/sandbox-memory sandbox=400 wrong-token=401",
-  "POST /sessions/:id/sandbox-memory/search sandbox=400 wrong-token=401",
-  "POST /sessions/:id/children sandbox=400 wrong-token=401",
-  "GET /sessions/:id/children sandbox=200 wrong-token=401",
-  "GET /sessions/:id/children/:childId sandbox=404 wrong-token=401",
-  "POST /sessions/:id/children/:childId/cancel sandbox=404 wrong-token=401",
-  "POST /sessions/:id/children/:childId/prompt sandbox=400 wrong-token=401",
-  "POST /sessions/:id/slack-notify sandbox=400 wrong-token=401",
-  "POST /sessions/:id/notify sandbox=404 wrong-token=401",
-  "GET /sessions/:id/motion/task sandbox=404 wrong-token=401",
-  "POST /sessions/:id/motion/notes sandbox=404 wrong-token=401",
-  "POST /sessions/:id/provider-auth/:provider/access-token sandbox=404 wrong-token=401",
-  "POST /sessions/:id/provider-auth/:provider/runtime-credential sandbox=409 wrong-token=401",
-  "GET /sessions/:id/commit-signing sandbox=200 wrong-token=401",
-  "POST /sessions/:id/commit-signing sandbox=400 wrong-token=401",
-]
-`;
-
 exports[`route admission matrix > admits only the named bot on every exact-service route 1`] = `
 [
   "GET /channel-bindings/slack/:externalId slack-bot=200 github-bot=403 web=403",
