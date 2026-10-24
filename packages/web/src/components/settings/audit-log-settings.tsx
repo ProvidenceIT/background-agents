@@ -57,6 +57,8 @@ const UNRECOGNIZED: BadgeTreatment = {
 
 const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "auth.sign_in_denied": "Sign-in denied by admission",
+  "approval.requested": "Approval requested",
+  "approval.decided": "Approval decided",
   "memory.created": "Memory created",
   "memory.revised": "Memory revised",
   "memory.archived": "Memory archived",
