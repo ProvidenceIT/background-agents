@@ -147,8 +147,12 @@ class GrokHarness:
 
     @property
     def subscription_slot(self) -> str | None:
-        """``grok:<account tag>`` of the pushed token the last turn ran on."""
-        return f"grok:{self._account_tag}" if self._account_tag else None
+        """``grok-<account tag>`` of the pushed token the last turn ran on.
+
+        The wire allows only ``[A-Za-z0-9._-]`` in a slot (``subscriptionSlotSchema``),
+        and the control plane drops an ``execution_complete`` whose slot breaks it.
+        """
+        return f"grok-{self._account_tag}" if self._account_tag else None
 
     # --- lifecycle -----------------------------------------------------------
 
