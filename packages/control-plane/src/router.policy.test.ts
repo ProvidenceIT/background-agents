@@ -42,6 +42,21 @@ describe("route policy table", () => {
     expect(routeFor("POST", "/github/route")).toBeUndefined();
   });
 
+  it("reads repository ownership with repositories.read and changes it only with repositories.ownership.manage", () => {
+    for (const path of ["/repo-ownership", "/repos/acme/widgets/ownership"]) {
+      expect(routeFor("GET", path)?.authorization).toMatchObject({
+        kind: "active-user",
+        allOf: [{ kind: "permission", permission: "repositories.read" }],
+        auditAllowed: false,
+      });
+    }
+    expect(routeFor("PUT", "/repos/acme/widgets/ownership")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "permission", permission: "repositories.ownership.manage" }],
+      auditAllowed: true,
+    });
+  });
+
   it("does not expose a member-facing team activity route", () => {
     expect(routeFor("GET", "/teams/team-1/activity")).toBeUndefined();
     expect(routeFor("GET", "/audit-events")?.authorization).toMatchObject({
@@ -51,15 +66,30 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(260);
+    expect(routes).toHaveLength(272);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(197);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(260);
+    expect(new Set(paths).size).toBe(206);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(272);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
       cacheControl: "private, no-store",
+    });
+  });
+
+  it("lets repository readers see the path policy and only path-policy managers change it", () => {
+    expect(routeFor("GET", "/repos/acme/web/path-policy")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { allOf: [{ kind: "permission", permission: "repositories.read" }] },
+      cacheControl: "private, no-store",
+    });
+    expect(routeFor("PUT", "/repos/acme/web/path-policy")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        allOf: [{ kind: "permission", permission: "repositories.path_policy.manage" }],
+        auditAllowed: true,
+      },
     });
   });
 
@@ -746,6 +776,10 @@ describe("route policy table", () => {
     expect(routeFor("POST", "/internal/slack-event")?.authentication).toEqual({
       kind: "service",
     });
+    expect(routeFor("POST", "/internal/jobs/github.autofix")).toMatchObject({
+      authentication: { kind: "service" },
+      authorization: { kind: "service", services: ["github-bot"] },
+    });
   });
 
   it("refuses a malformed percent-encoded role ID before authentication or D1", async () => {
@@ -848,6 +882,7 @@ describe("route policy table", () => {
     ["POST", "/sessions/session-1/notify"],
     ["GET", "/sessions/session-1/motion/task"],
     ["POST", "/sessions/session-1/motion/notes"],
+    ["GET", "/sessions/session-1/repo-context"],
   ])("requires the bound sandbox for %s %s", (method, path) => {
     const { route, params } = matchRoute(routes, method, path)!;
     expect(route.authentication.kind).toBe("sandbox");

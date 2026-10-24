@@ -72,6 +72,18 @@ export const SESSION_TOOLS_CONTRACT = {
         ],
         "additionalProperties": false
       }
+    },
+    {
+      "name": "repo_context",
+      "gate": "repo_context",
+      "description": "Read who owns this session's repository and how careful to be with it: the owner team, the tier (T1 is the most critical, T3 the least), the class (playground, internal or client; an unclassified repository counts as client), its domain and dependencies, and the owners its CODEOWNERS file names. Use it before deciding whom a change affects or how much review it needs.",
+      "method": "GET",
+      "path": "/repo-context",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
     }
   ],
   "enabledGatesEnv": "AGENT_SESSION_TOOLS"

@@ -338,7 +338,13 @@ class TestInstallTools:
         """A session tool file installs only when AGENT_SESSION_TOOLS names its gate."""
         tools_dir = tmp_path / "app" / "sandbox" / "tools"
         tools_dir.mkdir(parents=True)
-        for name in ("notify_user", "motion_get_task", "motion_add_note", "spawn-child"):
+        for name in (
+            "notify_user",
+            "motion_get_task",
+            "motion_add_note",
+            "repo_context",
+            "spawn-child",
+        ):
             (tools_dir / f"{name}.js").write_text(f"// {name}")
 
         def installed(env: dict[str, str]) -> set[str]:
@@ -365,6 +371,10 @@ class TestInstallTools:
             "spawn-child.js",
             "motion_get_task.js",
             "motion_add_note.js",
+        }
+        assert installed({"AGENT_SESSION_TOOLS": "repo_context"}) == {
+            "spawn-child.js",
+            "repo_context.js",
         }
 
 

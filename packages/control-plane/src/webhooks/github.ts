@@ -6,8 +6,11 @@
  * background and is additive: its failure never affects automation matching.
  */
 
+import { resolveAppName } from "@open-inspect/shared/app-name";
 import type { GitHubAutomationEvent } from "@open-inspect/shared/triggers";
 import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
+import { getGitHubAppConfig } from "../auth/github-app";
+import { RepoPathPolicyStore } from "../db/repo-path-policies";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { createLogger, parseLogLevel } from "../logger";
@@ -24,7 +27,9 @@ import {
   logAutomationEventRejection,
   validateAutomationEventEnvelope,
 } from "./automation-event";
+import { createProtectedPathGitHub } from "./protected-path-github";
 import {
+  processProtectedPathHold,
   processPullRequestLifecycleEvent,
   type PullRequestLifecycleDeps,
   type SessionArtifactSummary,
@@ -100,6 +105,54 @@ async function trackPullRequestLifecycle(
   } catch (err) {
     log.error("pull_request_lifecycle.failed", {
       error: err instanceof Error ? err : String(err),
+    });
+  }
+
+  await checkProtectedPaths(env, event, ctx);
+}
+
+/**
+ * Protected-path hold for session PRs, after lifecycle tracking has brought
+ * the record's head SHA current. A failure leaves the head unchecked, which
+ * the merge gate treats as held.
+ */
+async function checkProtectedPaths(
+  env: Env,
+  event: GitHubAutomationEvent,
+  ctx: RequestContext
+): Promise<void> {
+  const log = createLogger(
+    "webhook:protected-paths",
+    { trace_id: ctx.trace_id, request_id: ctx.request_id },
+    parseLogLevel(env.LOG_LEVEL)
+  );
+  const appConfig = getGitHubAppConfig(env);
+  if (!appConfig) return;
+  try {
+    const outcome = await processProtectedPathHold(
+      {
+        store: new SessionPullRequestStore(ctx.db),
+        policies: new RepoPathPolicyStore(ctx.db),
+        github: createProtectedPathGitHub(appConfig, {
+          cacheStore: env.REPOS_CACHE,
+          userAgent: resolveAppName(env),
+        }),
+      },
+      event
+    );
+    log.info("protected_path_hold.processed", {
+      outcome,
+      event_type: event.eventType,
+      repo_owner: event.repoOwner,
+      repo_name: event.repoName,
+      pr_number: event.pullRequest?.number,
+    });
+  } catch (err) {
+    log.error("protected_path_hold.failed", {
+      error: err instanceof Error ? err : String(err),
+      repo_owner: event.repoOwner,
+      repo_name: event.repoName,
+      pr_number: event.pullRequest?.number,
     });
   }
 }

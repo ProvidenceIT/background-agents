@@ -11,6 +11,7 @@
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import {
   automationCallbackContextSchema,
+  type AutomationCallbackContext,
   linearCompletionCallbackPayloadSchema,
   linearToolCallCallbackPayloadSchema,
   SLACK_ACTIVITY_REFRESH_KIND,
@@ -23,7 +24,9 @@ import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
 import type { MessageRepository } from "./message-repository";
 import type { FetchClient } from "../platform-ports";
+import type { TurnLimit } from "@open-inspect/shared/types/sandbox-events";
 import type { AutomationRunCompletion } from "../scheduler/scheduler";
+import { classifyRunFailure } from "../scheduler/invocation-outcome";
 
 /**
  * Narrow repository interface — only the methods CallbackNotificationService needs.
@@ -401,7 +404,12 @@ export class CallbackNotificationService {
    * Best-effort notification of the originating client with retry.
    * Routes to the correct service binding based on the message source.
    */
-  async notifyComplete(messageId: string, success: boolean, error?: string): Promise<void> {
+  async notifyComplete(
+    messageId: string,
+    success: boolean,
+    error?: string,
+    limit?: TurnLimit | null
+  ): Promise<void> {
     const startedAt = Date.now();
     let sessionId: string | null = null;
     let source: string | null = null;
@@ -438,7 +446,8 @@ export class CallbackNotificationService {
           automationContext.data,
           success,
           error,
-          messageId
+          messageId,
+          limit ?? null
         );
         return;
       }
@@ -571,17 +580,18 @@ export class CallbackNotificationService {
    * Notify the automation scheduler of run completion.
    */
   private async notifyAutomationComplete(
-    context: { automationId: string; runId: string; automationName: string },
+    context: AutomationCallbackContext,
     success: boolean,
     error: string | undefined,
-    messageId: string
+    messageId: string,
+    limit: TurnLimit | null
   ): Promise<CallbackDeliveryResult> {
     const completeAutomationRun = this.completeAutomationRun;
     if (!completeAutomationRun) {
       return { delivered: false, attempts: 0, rejectReason: "no_binding" };
     }
 
-    const payload = {
+    const payload: AutomationRunCompletion = {
       automationId: context.automationId,
       runId: context.runId,
       sessionId: this.getSessionId(),
@@ -590,6 +600,9 @@ export class CallbackNotificationService {
       success,
       error,
       automationName: context.automationName,
+      outcome: success ? null : classifyRunFailure({ error, limit }),
+      resetsAtMs: limit?.resetsAtMs ?? null,
+      overloadRetries: context.overloadRetries ?? 0,
     };
 
     const delivery = await retryDelivery<void, never>(

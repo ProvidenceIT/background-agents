@@ -1,6 +1,7 @@
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { turnLimitSchema, type TurnLimit } from "@open-inspect/shared/types/sandbox-events";
+import { automationCallbackContextSchema } from "@open-inspect/shared/types/session-api";
 import {
   scheduledContinueFailureSchema,
   type ScheduledContinueFailure,
@@ -34,6 +35,12 @@ export const scheduledContinueSchema = z.object({
   createdAtMs: z.number().int().nonnegative(),
   /** Retries so far after a passing failure when it was due; absent before the first. */
   retries: z.number().int().nonnegative().optional(),
+  /**
+   * Set when an automation run scheduled it (the run waits for a limit reset or
+   * an overloaded retry): the continue is the run's next turn and reports back
+   * to the run through this callback context.
+   */
+  automationCallback: automationCallbackContextSchema.optional(),
 });
 export type ScheduledContinue = z.infer<typeof scheduledContinueSchema>;
 

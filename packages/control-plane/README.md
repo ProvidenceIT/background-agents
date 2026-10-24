@@ -130,6 +130,9 @@ for that provider.
 | `/repos`                           | GET    | List repositories    |
 | `/repos/:owner/:name/metadata`     | GET    | Get repo metadata    |
 | `/repos/:owner/:name/metadata`     | PUT    | Update repo metadata |
+| `/repos/:owner/:name/ownership`    | GET    | Get repo ownership   |
+| `/repos/:owner/:name/ownership`    | PUT    | Set repo ownership   |
+| `/repo-ownership`                  | GET    | List onboarded repos |
 | `/repos/:owner/:name/secrets`      | GET    | List secret keys     |
 | `/repos/:owner/:name/secrets`      | PUT    | Upsert secrets       |
 | `/repos/:owner/:name/secrets/:key` | DELETE | Delete a secret      |
@@ -357,6 +360,10 @@ See `src/session/schema.ts` for full schema.
 Shared state lives in the D1 database (migrations in `terraform/d1/migrations/`). Beyond the
 sessions index, repo metadata, and encrypted secrets:
 
+- `repo_metadata` ownership columns (0104): owner team, tier (`T1`-`T3`), class (`playground`,
+  `internal`, `client`; NULL is treated as `client` everywhere), domain, dependencies and the
+  CODEOWNERS rules the scheduler tick mirrors about once a day (`src/repos/codeowners-sync.ts`).
+  Changing them takes `repositories.ownership.manage`; the `repo_context` session tool reads them.
 - `session_repositories`: a session's ordered repository list (position 0 = primary; single-repo
   sessions also mirror the primary onto the session row's scalar columns).
 - `environments`: named repository sets (name, description, prebuild flag, Slack channel

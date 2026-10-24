@@ -121,6 +121,12 @@ describe("session tool routes", () => {
       expect(await openSessionToolGates(db, FULL_ENV, repoless)).toEqual([]);
     });
 
+    it("opens repo_context on any deployment once configured, without asking motion", async () => {
+      await enable(["repo_context", "notify"]);
+      const plain = { sessionId: SESSION, repoOwner: "acme", repoName: "widgets" };
+      expect(await openSessionToolGates(db, {} as Env, plain)).toEqual(["repo_context"]);
+    });
+
     it("honours the repository allowlist", async () => {
       await enable(["notify"], ["acme/other"]);
       expect(

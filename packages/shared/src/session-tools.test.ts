@@ -29,6 +29,7 @@ describe("session tool specs", () => {
       ["notify_user", "notify"],
       ["motion_get_task", "motion_read"],
       ["motion_add_note", "motion_write"],
+      ["repo_context", "repo_context"],
     ]);
     for (const tool of tools) {
       expect(SESSION_TOOL_GATES).toContain(tool.gate);

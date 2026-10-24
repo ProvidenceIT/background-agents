@@ -23,9 +23,10 @@ import type {
   AutomationInvocationSource,
   AutomationRun,
 } from "@open-inspect/shared/types/automations";
-import type {
-  AutomationCallbackContext,
-  SlackCallbackContext,
+import {
+  CONTINUE_AT_RESET_BUFFER_MS,
+  type AutomationCallbackContext,
+  type SlackCallbackContext,
 } from "@open-inspect/shared/types/session-api";
 import type { Team } from "@open-inspect/shared/types/teams";
 import { computeHmacHex } from "@open-inspect/shared/auth";
@@ -101,6 +102,8 @@ import {
 import { admitGitHubEvent } from "../automation/github-event-admission";
 import {
   firingInvocationId,
+  overloadedRetryDelayMs,
+  type AutomationRunOutcome,
   type AutomationTriggerBlockedReason,
   type StartInvocationResult,
 } from "./invocation-outcome";
@@ -230,6 +233,26 @@ export interface AutomationRunCompletion {
   messageId: string;
   success: boolean;
   error?: string;
+  /** Why a failed turn stopped, when it was not the automation's own failure. */
+  outcome?: AutomationRunOutcome | null;
+  /** When a usage-limited turn's limit resets (epoch ms); null when the provider did not say. */
+  resetsAtMs?: number | null;
+  automationName?: string;
+  /** Overloaded retries the run has spent so far (from its callback context). */
+  overloadRetries?: number;
+}
+
+/** The run's session, asked to continue on its own when a run waits out a limit. */
+export interface AutomationRunResumePort {
+  /**
+   * Continue the session that ran `messageId` at `atMs`, reporting the next
+   * completion with `callbackContext`. False when the session cannot.
+   */
+  scheduleContinue(request: {
+    messageId: string;
+    atMs: number;
+    callbackContext: AutomationCallbackContext;
+  }): Promise<boolean>;
 }
 
 export interface SchedulerTickResult {
@@ -437,7 +460,9 @@ export class Scheduler {
     const aggregate = await store.getInvocationRunAggregate(invocationId);
     if (aggregate.total === 0) return; // childless skip — never counts
 
-    if (aggregate.failed > 0) {
+    // Failures with an outcome in NON_STRIKE_OUTCOMES (a usage limit, an
+    // overloaded provider) are not the automation's fault and never strike.
+    if (aggregate.strikeFailed > 0) {
       const won = await store.tryMarkInvocationFailureCounted(invocationId);
       if (!won) return;
       await this.trackAutomationFailure(store, automationId);
@@ -547,6 +572,8 @@ export class Scheduler {
       // Stamped by the claim, once the run has a session whose budget to spend.
       // Until then the orphan sweep owns it.
       execution_deadline_at: null,
+      resume_at: null,
+      outcome: null,
       completed_at: null,
       created_at: now,
       repo_owner: null,
@@ -1001,7 +1028,7 @@ export class Scheduler {
 
   private async recoverySweep(store: AutomationStore): Promise<void> {
     const now = Date.now();
-    const [orphanedResult, timedOutResult] = await Promise.allSettled([
+    const [orphanedResult, timedOutResult, waitingResult] = await Promise.allSettled([
       store.getOrphanedStartingRuns(ORPHAN_THRESHOLD_MS, RECOVERY_SWEEP_LIMIT),
       // A run claimed by a worker that predates the deadline column carries
       // none; it is held to the deployment-default deadline instead.
@@ -1010,10 +1037,14 @@ export class Scheduler {
         this.executionDeadlineMs(DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS),
         RECOVERY_SWEEP_LIMIT
       ),
+      // A waiting run whose resumed turn never reported back (the continue was
+      // dropped, or its turn was lost) is held to the same deadline rule.
+      store.getWaitingRunsPastDeadline(now, RECOVERY_SWEEP_LIMIT),
     ]);
 
     const orphaned = orphanedResult.status === "fulfilled" ? orphanedResult.value : [];
     const timedOut = timedOutResult.status === "fulfilled" ? timedOutResult.value : [];
+    const lostWaiting = waitingResult.status === "fulfilled" ? waitingResult.value : [];
 
     if (orphanedResult.status === "rejected") {
       this.log.error("Recovery sweep failed to query orphaned runs", {
@@ -1037,7 +1068,18 @@ export class Scheduler {
       });
     }
 
-    if (orphaned.length === 0 && timedOut.length === 0) {
+    if (waitingResult.status === "rejected") {
+      this.log.error("Recovery sweep failed to query waiting runs", {
+        event: "scheduler.recovery.query_error",
+        category: "waiting_for_reset",
+        error:
+          waitingResult.reason instanceof Error
+            ? waitingResult.reason.message
+            : String(waitingResult.reason),
+      });
+    }
+
+    if (orphaned.length === 0 && timedOut.length === 0 && lostWaiting.length === 0) {
       await this.finalizationSweep(store);
       return;
     }
@@ -1092,6 +1134,34 @@ export class Scheduler {
           event: "scheduler.recovery.bulk_fail_error",
           category: "timed_out",
           count: timedOut.length,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    if (lostWaiting.length > 0) {
+      for (const run of lostWaiting) {
+        this.log.warn("Recovering waiting run whose resumed turn never reported back", {
+          event: "scheduler.recovery.waiting_timed_out",
+          run_id: run.id,
+          automation_id: run.automation_id,
+          session_id: run.session_id,
+          resume_at: run.resume_at,
+          execution_deadline_at: run.execution_deadline_at,
+        });
+      }
+      try {
+        await store.bulkFailWaitingRuns(
+          lostWaiting.map((r) => r.id),
+          EXECUTION_TIMEOUT_FAILURE_REASON,
+          now
+        );
+        recoveredRuns.push(...lostWaiting);
+      } catch (e) {
+        this.log.error("Recovery sweep failed to mark waiting runs as failed", {
+          event: "scheduler.recovery.bulk_fail_error",
+          category: "waiting_for_reset",
+          count: lostWaiting.length,
           error: e instanceof Error ? e.message : String(e),
         });
       }
@@ -1518,7 +1588,10 @@ export class Scheduler {
 
   // ─── Run complete callback ───────────────────────────────────────────────
 
-  async runComplete(body: AutomationRunCompletion): Promise<void> {
+  async runComplete(
+    body: AutomationRunCompletion,
+    resume?: AutomationRunResumePort
+  ): Promise<void> {
     const store = new AutomationStore(this.db);
 
     const run = await store.getRunById(body.automationId, body.runId);
@@ -1537,15 +1610,27 @@ export class Scheduler {
     // there first) the callback is acknowledged as ignored — a terminal child
     // must never transition again.
     const now = Date.now();
+    const outcome = body.success ? null : (body.outcome ?? null);
+    const resumeAtMs =
+      outcome && resume ? await this.scheduleResume(run, body, outcome, now, resume) : null;
     const transitioned = await store.updateRun(
       body.runId,
       body.success
         ? { status: "completed", completed_at: now }
-        : {
-            status: "failed",
-            failure_reason: body.error || "Unknown error",
-            completed_at: now,
-          }
+        : resumeAtMs !== null
+          ? {
+              status: "waiting_for_reset",
+              outcome,
+              resume_at: resumeAtMs,
+              failure_reason: null,
+              execution_deadline_at: resumeAtMs + this.resumedTurnBudgetMs(run),
+            }
+          : {
+              status: "failed",
+              failure_reason: body.error || "Unknown error",
+              outcome,
+              completed_at: now,
+            }
     );
 
     // One exception: the sweep's execution timeout is inferred from silence,
@@ -1585,6 +1670,20 @@ export class Scheduler {
       await this.applyInvocationAccounting(store, body.automationId, run.invocation_id);
     }
 
+    if (resumeAtMs !== null) {
+      // Not terminal: the resumed turn reports back through this callback again,
+      // and only then does a slack-triggered run post its result.
+      this.log.info("Run waiting for limit reset", {
+        event: "scheduler.run_waiting_for_reset",
+        automation_id: body.automationId,
+        run_id: body.runId,
+        session_id: body.sessionId,
+        outcome,
+        resume_at: resumeAtMs,
+      });
+      return;
+    }
+
     if (body.success) {
       this.log.info("Run completed successfully", {
         event: "scheduler.run_complete",
@@ -1608,6 +1707,62 @@ export class Scheduler {
     // coordinates live on the invocation. Only the terminal CAS winner owns
     // publication retries; retrying runComplete itself would be ignored.
     await this.notifySlackCompletion(store, run, body);
+  }
+
+  /**
+   * Ask the run's session to continue on its own: at the limit's reset for a
+   * usage-limited turn, after a capped exponential backoff for an overloaded
+   * one. Returns when it continues, or null when the run fails instead (no
+   * known future reset, retries spent, or the session cannot schedule it).
+   */
+  private async scheduleResume(
+    run: AutomationRunRow,
+    body: AutomationRunCompletion,
+    outcome: AutomationRunOutcome,
+    now: number,
+    resume: AutomationRunResumePort
+  ): Promise<number | null> {
+    if (run.status !== "running" && run.status !== "waiting_for_reset") return null;
+    let overloadRetries = body.overloadRetries ?? 0;
+    let atMs: number | null;
+    if (outcome === "usage_limited") {
+      const resetsAtMs = body.resetsAtMs ?? null;
+      atMs =
+        resetsAtMs !== null && resetsAtMs > now ? resetsAtMs + CONTINUE_AT_RESET_BUFFER_MS : null;
+    } else {
+      const delayMs = overloadedRetryDelayMs(overloadRetries);
+      atMs = delayMs === null ? null : now + delayMs;
+      overloadRetries += 1;
+    }
+    if (atMs === null) return null;
+    const scheduled = await resume.scheduleContinue({
+      messageId: body.messageId,
+      atMs,
+      callbackContext: {
+        source: "automation",
+        automationId: body.automationId,
+        runId: body.runId,
+        automationName: body.automationName ?? "",
+        ...(overloadRetries > 0 ? { overloadRetries } : {}),
+      },
+    });
+    return scheduled ? atMs : null;
+  }
+
+  /**
+   * The execution budget a resumed turn gets: the one the run was launched (or
+   * last resumed) with, else the deployment default.
+   */
+  private resumedTurnBudgetMs(run: AutomationRunRow): number {
+    const anchor = run.resume_at ?? run.started_at;
+    if (
+      run.execution_deadline_at !== null &&
+      anchor !== null &&
+      run.execution_deadline_at > anchor
+    ) {
+      return run.execution_deadline_at - anchor;
+    }
+    return this.executionDeadlineMs(DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS);
   }
 
   /**

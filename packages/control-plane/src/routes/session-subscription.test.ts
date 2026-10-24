@@ -202,8 +202,8 @@ describe("handleSessionSubscription", () => {
         settledAt,
       });
     await turn("msg-1", "claude", "claude-4", 100);
-    await turn("msg-2", "grok", "grok:acct-1", 200);
-    await turn("msg-3", "agy", "agy:acct-2", 300);
+    await turn("msg-2", "grok", "grok-acct-1", 200);
+    await turn("msg-3", "agy", "agy-acct-2", 300);
 
     const subscriptions = await subscriptionsFor(HOUSEHOLD.colleague);
     expect(subscriptions.anthropic.slots.map((entry) => entry.slot)).toEqual(["claude-4"]);

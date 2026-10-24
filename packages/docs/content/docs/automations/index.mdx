@@ -192,6 +192,8 @@ Scheduled execution authorization denial is separate from the failure threshold:
 
 An automation that fails three consecutive times is paused automatically. Scheduled and manual runs both count. Runs that outlive their execution budget count as failures too. Skipped firings count neither way.
 
+Subscription limits and overloaded providers never count. When a run's session stops at a usage limit with a known reset time, the run shows **Waiting for reset** with the time it resumes, and the session continues on its own a minute after the reset. When the provider reports it is overloaded, the session retries after 1, 2 and 4 minutes, then the run fails. A limit with no reset time also fails the run. Neither failure adds a strike.
+
 Click **Resume** to re-enable the automation. Resuming resets the failure counter and, for schedules, computes the next run from the current moment. A successful **Trigger Now** while paused also resets the counter without resuming.
 
 ## Execution timeout

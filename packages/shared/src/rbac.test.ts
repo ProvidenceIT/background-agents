@@ -63,7 +63,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(51);
+    expect(PERMISSION_IDS).toHaveLength(54);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
@@ -165,6 +165,12 @@ describe("RBAC registry", () => {
     expect(permissionsForBuiltInRole("member")).toEqual(
       expect.arrayContaining(permissionsForBuiltInRole("viewer"))
     );
+  });
+
+  it("lets Member and above answer approval requests", () => {
+    expect(permissionsForBuiltInRole("member")).toContain("approvals.decide");
+    expect(permissionsForBuiltInRole("administrator")).toContain("approvals.decide");
+    expect(permissionsForBuiltInRole("viewer")).not.toContain("approvals.decide");
   });
 
   it("reserves personal profile management for Member and above", () => {

@@ -5,14 +5,17 @@
   "type": "module",
   "scripts": {
     "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --platform=browser --target=es2022 --external:cloudflare:* --external:node:*",
+    "build:node": "esbuild src/node/main.ts --bundle --format=esm --outfile=dist/node/main.js --platform=node --target=node24 --external:node:* --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\"",
+    "start:node": "node dist/node/main.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix"
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20241230.0",
+    "@hono/node-server": "^2.1.1",
     "@open-inspect/shared": "file:../shared",
     "hono": "^4.13.12",
     "zod": "^4.4.3"
