@@ -210,9 +210,18 @@ describe("automation create route", () => {
         body: { ...validBody, harness: "opencode", model: "anthropic/claude-sonnet-4-6" },
       });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(422);
       expect(await res.json()).toEqual({
-        error: expect.stringContaining("It runs only on Claude Agent"),
+        error:
+          'Model "anthropic/claude-sonnet-4-6" cannot run on the OpenCode harness. It runs only on Claude Agent; fork this session onto Claude Agent.',
+        code: "not_runnable",
+        reasons: [
+          {
+            code: "model_unsupported",
+            message:
+              'Model "anthropic/claude-sonnet-4-6" cannot run on the OpenCode harness. It runs only on Claude Agent; fork this session onto Claude Agent.',
+          },
+        ],
       });
       expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
     });
@@ -361,9 +370,18 @@ describe("automation create route", () => {
         },
       });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(422);
       await expect(res.json()).resolves.toEqual({
-        error: expect.stringContaining("only on a subscription home"),
+        error:
+          "The Codex harness runs openai only on a subscription home; enrol one under Settings > Subscription homes.",
+        code: "not_runnable",
+        reasons: [
+          {
+            code: "payer_mismatch",
+            message:
+              "The Codex harness runs openai only on a subscription home; enrol one under Settings > Subscription homes.",
+          },
+        ],
       });
       expect(mockBatch).not.toHaveBeenCalled();
     });

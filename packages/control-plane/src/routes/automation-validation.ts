@@ -9,6 +9,9 @@ import {
   validateAutomationTargetCounts,
 } from "@open-inspect/shared/types/automations";
 import { isValidReasoningEffort } from "@open-inspect/shared/models";
+import { assessRunnability, type HarnessId } from "@open-inspect/shared/harnesses";
+import { NOT_RUNNABLE } from "@open-inspect/shared/types/runnability";
+import type { SessionProviderAuthMode } from "@open-inspect/shared/types/provider-accounts";
 import { type AutomationRepositoryInsert } from "../db/automation-store";
 import { EnvironmentStore } from "../db/environments";
 import { TeamMembershipStore } from "../db/team-memberships";
@@ -100,6 +103,29 @@ export function getTriggerEventTypeError(
     return `Unsupported eventType for ${triggerType}: ${eventType}`;
   }
   return null;
+}
+
+/**
+ * Refuse to save a setup that cannot run: every run would fail unattended.
+ * `authModes` are the automation's explicit provider selections; a provider
+ * without one resolves when a run starts. Returns the 422 listing every
+ * reason, or null when the setup can run.
+ */
+export function validateAutomationRunnability(
+  harness: HarnessId,
+  model: string,
+  authModes?: Readonly<Partial<Record<string, SessionProviderAuthMode>>>
+): Response | null {
+  const runnability = assessRunnability(harness, model, authModes);
+  if (runnability.runnable) return null;
+  return json(
+    {
+      error: runnability.reasons.map((reason) => reason.message).join(" "),
+      code: NOT_RUNNABLE,
+      reasons: runnability.reasons,
+    },
+    422
+  );
 }
 
 /** Warn if next run is more than 31 days away. */

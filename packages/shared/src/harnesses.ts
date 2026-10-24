@@ -19,6 +19,11 @@ import type {
   ProviderAuthMode,
   SessionProviderAuthMode,
 } from "./types/provider-accounts";
+import {
+  payerForAuthMode,
+  type RunnabilityReason,
+  type SetupRunnability,
+} from "./types/runnability";
 
 export const HARNESS_IDS = ["opencode", "claude", "codex", "grok", "agy"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
@@ -281,6 +286,59 @@ export function checkHarnessCompatibility(
     return { code: "provider_auth", message: providerAuthMessage(harness, provider, mode) };
   }
   return null;
+}
+
+/**
+ * Whether `harness` can run `model` on the credential bound for the model's
+ * provider, and who pays. `authBinding` holds the auth mode per provider: the
+ * session's resolved auth, or an automation's explicit selections (a provider
+ * left out resolves when a run starts, so it is not judged here).
+ *
+ * A bound mode is a mismatch when the harness declares the auth it can use
+ * for the provider and the mode is not among it, or when the harness cannot
+ * run the model at all (OpenCode on a Claude subscription home: the turn
+ * would otherwise fail with "Anthropic API key is missing"). A provider the
+ * harness runs on credentials outside the selectable modes (Z.AI secrets on
+ * OpenCode) is not a mismatch.
+ */
+export function assessRunnability(
+  harness: HarnessId,
+  model: string,
+  authBinding: Readonly<Partial<Record<string, SessionProviderAuthMode>>> = {}
+): SetupRunnability {
+  const { provider } = extractProviderAndModel(model);
+  const mode = authBinding[provider];
+  const modelRuns = harnessSupportsModel(harness, model);
+  const reasons: RunnabilityReason[] = [];
+  if (
+    mode &&
+    !harnessSupportsProviderAuth(harness, provider, mode) &&
+    (getHarnessCapabilities(harness).providerAuth[provider] !== undefined || !modelRuns)
+  ) {
+    const pinned = MODEL_PROVIDER_HARNESS[provider];
+    reasons.push({
+      code: "payer_mismatch",
+      // A provider pinned elsewhere is paid on no credential here, so name the
+      // harness that can pay instead of another mode that would fail too.
+      message:
+        mode !== "auth_home" && pinned && pinned !== harness
+          ? `The ${getHarnessLabel(harness)} harness cannot use ${provider} credentials; use the ${getHarnessLabel(pinned)} harness.`
+          : providerAuthMessage(harness, provider, mode),
+    });
+  }
+  if (!modelRuns) {
+    const incompatibility = checkHarnessCompatibility(harness, model);
+    reasons.push({ code: "model_unsupported", message: incompatibility!.message });
+  }
+  if (reasons.length > 0) return { runnable: false, payer: "none", reasons };
+  if (mode) return { runnable: true, payer: payerForAuthMode(mode), reasons };
+  // Nothing bound: a harness that runs the provider only on a home is paid by
+  // one; any other resolves its payer when a run starts.
+  return {
+    runnable: true,
+    payer: runsOnlyOnAuthHome(harness, provider) ? "subscription" : "none",
+    reasons,
+  };
 }
 
 function providerAuthMessage(

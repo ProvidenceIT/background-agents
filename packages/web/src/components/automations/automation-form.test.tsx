@@ -10,6 +10,7 @@ import type { ComboboxGroup } from "@/components/ui/combobox";
 import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { DEFAULT_HARNESS } from "@open-inspect/shared/harnesses";
+import { formatModelNameLower } from "@/lib/format";
 import { AutomationForm, type AutomationFormValues } from "./automation-form";
 import { CronPicker } from "./cron-picker";
 
@@ -1542,12 +1543,45 @@ describe("agent harness", () => {
     expect(onSubmit.mock.calls[0][0]).toMatchObject({ harness: "claude", model: DEFAULT_MODEL });
   });
 
+  it("warns that a saved OpenCode + Claude preset cannot run, and why", () => {
+    const { onSubmit, submit } = renderForm({ harness: "opencode", model: DEFAULT_MODEL }, "edit");
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      `This setup cannot run as saved (OpenCode, ${formatModelNameLower(DEFAULT_MODEL)}): ` +
+        `Model "${DEFAULT_MODEL}" cannot run on the OpenCode harness. It runs only on Claude Agent; ` +
+        "fork this session onto Claude Agent. The form now uses Claude Agent; check it before saving."
+    );
+    submit();
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ harness: "claude", model: DEFAULT_MODEL });
+  });
+
+  it("warns about a preset pinned to a Claude account on OpenCode as a payer mismatch", () => {
+    renderForm(
+      {
+        harness: "opencode",
+        model: DEFAULT_MODEL,
+        providerSelections: { anthropic: { mode: "provider_account", accountId: "c".repeat(32) } },
+      },
+      "edit"
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The OpenCode harness cannot use anthropic credentials; use the Claude Agent harness."
+    );
+  });
+
+  it("shows no preset warning for a setup that can run", () => {
+    renderForm({ harness: "claude", model: DEFAULT_MODEL }, "edit");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("blocks submission and says so when the harness can run none of the enabled models", () => {
     enabledModelsValue = ["openai/gpt-5.4"];
     const { onSubmit, submit } = renderForm({ harness: "claude" }, "edit");
 
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "No enabled models can run on Claude Agent."
+    expect(screen.getByText("No enabled models can run on Claude Agent.")).toHaveAttribute(
+      "role",
+      "alert"
     );
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
     submit();

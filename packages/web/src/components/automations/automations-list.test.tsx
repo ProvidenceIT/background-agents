@@ -74,6 +74,22 @@ describe("AutomationsList repository labels", () => {
       />
     );
 
+  it("badges a saved setup that cannot run instead of calling it enabled", () => {
+    renderList([makeAutomation({ harness: "opencode", model: "anthropic/claude-haiku-4-5" })]);
+    const badge = screen.getByText("Cannot run");
+    expect(badge).toHaveAttribute(
+      "title",
+      'Model "anthropic/claude-haiku-4-5" cannot run on the OpenCode harness. It runs only on Claude Agent; fork this session onto Claude Agent.'
+    );
+    expect(screen.queryByText("Enabled")).not.toBeInTheDocument();
+  });
+
+  it("keeps the enabled badge for a setup that can run", () => {
+    renderList([makeAutomation()]);
+    expect(screen.getByText("Enabled")).toBeInTheDocument();
+    expect(screen.queryByText("Cannot run")).not.toBeInTheDocument();
+  });
+
   it("shows the repository name for a single-repository automation", () => {
     renderList([makeAutomation()]);
     expect(screen.getByText("acme/web-app")).toBeInTheDocument();

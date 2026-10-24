@@ -316,6 +316,46 @@ describe("admitNewSession", () => {
     expect(newSessionRefusalResponse(admission.refusal).status).toBe(400);
   });
 
+  it("refuses OpenCode + a Claude model on the owner's Claude home as payer_mismatch, answering 400", async () => {
+    const admission = await admitSession({
+      harness: "opencode",
+      model: "anthropic/claude-haiku-4-5",
+    });
+    if (admission.kind !== "refused") throw new Error("expected refusal");
+    expect(admission.refusal).toEqual({
+      kind: "harness",
+      message:
+        "The OpenCode harness cannot run anthropic on a subscription home; use the Claude Agent harness.",
+      reasons: [
+        {
+          code: "payer_mismatch",
+          message:
+            "The OpenCode harness cannot run anthropic on a subscription home; use the Claude Agent harness.",
+        },
+        {
+          code: "model_unsupported",
+          message:
+            'Model "anthropic/claude-haiku-4-5" cannot run on the OpenCode harness. It runs only on Claude Agent; fork this session onto Claude Agent.',
+        },
+      ],
+    });
+    const response = newSessionRefusalResponse(admission.refusal);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "payer_mismatch" });
+    // Nothing was bound or served: the sandbox never starts.
+    expect(await fixture.auditRows("credential.auth_home_mounted")).toEqual([]);
+  });
+
+  it("serves a Claude model from the owner's Claude home on Claude Agent", async () => {
+    const admission = await admitSession({ model: "anthropic/claude-haiku-4-5" });
+    if (admission.kind !== "admitted") throw new Error("expected admission");
+    expect(admission.providerAuth[0]).toEqual({
+      provider: "anthropic",
+      authMode: "auth_home",
+      selectionSource: "auth_home_own",
+    });
+  });
+
   it("serves xAI from a home only on SuperGrok: OpenCode has no credential for the pushed token", async () => {
     await new UserAuthHomeStore(fixture.db).register({
       id: "H3",

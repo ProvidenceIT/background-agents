@@ -23,6 +23,11 @@ beforeEach(async () => {
   );
   db = createNodeSqlDatabase(sqlite);
   await seedHousehold(db);
+  // The household session runs its Claude model on Claude Agent.
+  await db
+    .prepare("UPDATE sessions SET harness = 'claude' WHERE id = ?")
+    .bind(HOUSEHOLD.sessionId)
+    .run();
   await db
     .prepare("DELETE FROM session_model_provider_auth WHERE session_id = ?")
     .bind(HOUSEHOLD.sessionId)
@@ -76,6 +81,7 @@ describe("handleSessionSubscription", () => {
       shared: true,
       holderUserId: HOUSEHOLD.owner,
       holderDisplayName: HOUSEHOLD.owner,
+      payer: "subscription",
       accountDisplayName: null,
       slots: [],
     });
@@ -92,9 +98,22 @@ describe("handleSessionSubscription", () => {
       shared: false,
       holderUserId: HOUSEHOLD.owner,
       holderDisplayName: HOUSEHOLD.owner,
+      payer: "subscription",
       accountDisplayName: null,
       slots: [],
     });
+  });
+
+  it("reports that nothing pays when the session's harness cannot use the bound Claude home", async () => {
+    // BUG-01: OpenCode + a Claude model on a Claude home must not read as "Your Claude subscription".
+    await db
+      .prepare("UPDATE sessions SET harness = 'opencode' WHERE id = ?")
+      .bind(HOUSEHOLD.sessionId)
+      .run();
+    const subscriptions = await subscriptionsFor(HOUSEHOLD.owner);
+    expect(subscriptions.anthropic).toMatchObject({ authMode: "auth_home", payer: "none" });
+    expect(subscriptions.openai).toMatchObject({ payer: "provider_account" });
+    expect(subscriptions.xai).toMatchObject({ payer: "api_key" });
   });
 
   it("lists the Claude home slots the session's turns spent, to every viewer", async () => {

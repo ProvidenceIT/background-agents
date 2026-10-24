@@ -515,9 +515,18 @@ describe("automation read, update, and delete routes", () => {
         },
       });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(422);
       await expect(res.json()).resolves.toEqual({
-        error: expect.stringContaining("only on a subscription home"),
+        error:
+          "The Codex harness runs openai only on a subscription home; enrol one under Settings > Subscription homes.",
+        code: "not_runnable",
+        reasons: [
+          {
+            code: "payer_mismatch",
+            message:
+              "The Codex harness runs openai only on a subscription home; enrol one under Settings > Subscription homes.",
+          },
+        ],
       });
       expect(mockBatch).not.toHaveBeenCalled();
     });
@@ -537,7 +546,11 @@ describe("automation read, update, and delete routes", () => {
         body: { harness: "opencode" },
       });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(422);
+      await expect(res.json()).resolves.toMatchObject({
+        code: "not_runnable",
+        reasons: [{ code: "payer_mismatch" }, { code: "model_unsupported" }],
+      });
       expect(mockProviderAuthStore.list).toHaveBeenCalledWith("auto-1");
       expect(mockBatch).not.toHaveBeenCalled();
     });

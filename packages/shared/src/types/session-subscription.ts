@@ -4,6 +4,7 @@ import {
   authHomeProviderIdSchema,
   type AuthHomeProviderId,
 } from "./auth-homes";
+import { RUNNABILITY_PAYERS } from "./runnability";
 import { subscriptionSlotSchema } from "./sandbox-events";
 
 /** The product a person subscribes to, per provider a session can spend. */
@@ -49,6 +50,12 @@ export const sessionSubscriptionSchema = z.strictObject({
    */
   holderUserId: z.string().nullable(),
   holderDisplayName: z.string().nullable(),
+  /**
+   * Who actually pays on the session's harness and model (`assessRunnability`):
+   * `none` when the harness cannot use this credential, so it pays for nothing
+   * (OpenCode on a Claude home) even though it is bound to the session.
+   */
+  payer: z.enum(RUNNABILITY_PAYERS),
   /** The provider account's label; null for homes, API keys and undisclosed holders. */
   accountDisplayName: z.string().nullable(),
   /**
