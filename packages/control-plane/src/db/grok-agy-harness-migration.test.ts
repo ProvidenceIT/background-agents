@@ -34,13 +34,13 @@ const insertAutomation = (id: string, model: string, harness: string) =>
   `INSERT INTO automations (id, name, instructions, model, harness, created_by, created_at, updated_at)
      VALUES ('${id}', '${id}', 'run', '${model}', '${harness}', 'u1', 1, 1);`;
 
-describe("migration 0101 (grok and agy harnesses, Anthropic on Claude Agent)", () => {
+describe("migration 0102 (grok and agy harnesses, Anthropic on Claude Agent)", () => {
   let db: DatabaseSync;
 
   beforeEach(() => {
     db = new DatabaseSync(":memory:");
     db.exec("PRAGMA foreign_keys = ON");
-    applyThrough(db, "0100");
+    applyThrough(db, "0101");
     db.exec(
       `INSERT INTO users (id, display_name, created_at, updated_at) VALUES ('u1', 'u1', 1, 1);
        INSERT INTO sessions (id, user_id, harness, model, created_at, updated_at)
@@ -66,7 +66,7 @@ describe("migration 0101 (grok and agy harnesses, Anthropic on Claude Agent)", (
     const sessionObjects = schemaObjects(db, "sessions");
     const automationObjects = schemaObjects(db, "automations");
 
-    db.exec(migration("0101"));
+    db.exec(migration("0102"));
 
     expect(db.prepare("SELECT id, harness FROM sessions ORDER BY created_at").all()).toEqual([
       { id: "s-opencode", harness: "opencode" },
@@ -78,7 +78,7 @@ describe("migration 0101 (grok and agy harnesses, Anthropic on Claude Agent)", (
   });
 
   it("moves OpenCode automations on Anthropic models to Claude Agent and leaves the rest", () => {
-    db.exec(migration("0101"));
+    db.exec(migration("0102"));
 
     expect(db.prepare("SELECT id, harness FROM automations ORDER BY id").all()).toEqual([
       { id: "a-anthropic", harness: "claude" },
@@ -93,7 +93,7 @@ describe("migration 0101 (grok and agy harnesses, Anthropic on Claude Agent)", (
   });
 
   it("moves an OpenCode + Anthropic integration default to Claude Agent", () => {
-    db.exec(migration("0101"));
+    db.exec(migration("0102"));
 
     expect(
       db.prepare("SELECT integration_id, settings FROM integration_settings ORDER BY 1").all()
@@ -113,7 +113,7 @@ describe("migration 0101 (grok and agy harnesses, Anthropic on Claude Agent)", (
   });
 
   it("admits grok and agy, defaults to opencode and still refuses an unknown harness", () => {
-    db.exec(migration("0101"));
+    db.exec(migration("0102"));
 
     db.exec(
       `INSERT INTO sessions (id, harness, created_at, updated_at)
