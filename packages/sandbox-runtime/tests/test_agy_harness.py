@@ -531,6 +531,18 @@ class TestHarness:
         assert not alive(runs[0]["pid"])
         assert not alive(grandchild)
 
+    async def test_a_command_agy_detached_is_stopped_after_agy_exits(self, rig: Rig):
+        # agy exits at once after its result; the detached command has gone to init.
+        rig.script(init_line(), "#spawn 30", "#sleep 1", result_line())
+        outcome = await rig.harness.run_prompt(prompt(), rig.emit)
+        assert outcome.success
+        grandchild = next(run["grandchild"] for run in rig.runs() if "grandchild" in run)
+        for _ in range(40):
+            if not alive(grandchild):
+                break
+            await asyncio.sleep(0.05)
+        assert not alive(grandchild)
+
     async def test_cancelling_the_turn_kills_agy(self, rig: Rig):
         rig.script(init_line(), "#sleep 30", result_line())
         task = asyncio.create_task(rig.harness.run_prompt(prompt(), rig.emit))

@@ -74,6 +74,9 @@ CLI_LABEL: Final = "agy"
 PROVIDER_PREFIX: Final = "antigravity"
 # Below Linux's 128 KiB cap on one argv string, with room for the rest.
 PROMPT_ARGV_LIMIT_BYTES: Final = 100 * 1024
+# How often a running agy's process tree is listed. A command agy detaches goes
+# to init once agy exits, out of reach of ``descendants``.
+DESCENDANT_SCAN_SECONDS: Final = 0.5
 # A turn ends this long before the pushed token does: agy holds it in memory.
 TOKEN_EXPIRY_MARGIN_SECONDS: Final = 120.0
 TOKEN_REWRITE_SECONDS: Final = 60.0
@@ -149,6 +152,8 @@ class AgyHarness:
         # agy started a fresh conversation in place of the one asked for; the
         # memory notes it never saw go ahead of the next prompt.
         self._memory_pending = False
+        # Every process seen below the running agy, as pid -> start time.
+        self._seen_descendants: dict[int, str] = {}
 
     @property
     def subscription_slot(self) -> str | None:
@@ -327,6 +332,7 @@ class AgyHarness:
         )
         if stdin_text is not None:
             tasks.append(asyncio.create_task(self._write_stdin(process, stdin_text)))
+        tasks.append(asyncio.create_task(self._track_descendants(process)))
         outcome: TurnOutcome | None = None
         try:
             assert process.stdout is not None
@@ -343,6 +349,7 @@ class AgyHarness:
                 if translation.outcome is not None:
                     outcome = translation.outcome
                     break
+            self._note_descendants(process)
             returncode = await self._reap(process)
             await asyncio.wait({stderr_task}, timeout=STDERR_SETTLE_SECONDS)
         finally:
@@ -440,9 +447,30 @@ class AgyHarness:
         with contextlib.suppress(TimeoutError):
             async with asyncio.timeout(timeout_seconds):
                 await process.wait()
-        if process.returncode is None or cli_process.group_alive(process.pid):
+        if (
+            process.returncode is None
+            or cli_process.group_alive(process.pid)
+            or self._live_seen_descendants()
+        ):
             await self._terminate(timeout_seconds)
+        self._seen_descendants.clear()
         return process.returncode
+
+    async def _track_descendants(self, process: asyncio.subprocess.Process) -> None:
+        while process.returncode is None:
+            self._note_descendants(process)
+            await asyncio.sleep(DESCENDANT_SCAN_SECONDS)
+
+    def _note_descendants(self, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is None:
+            self._seen_descendants.update(descendants(process.pid))
+
+    def _live_seen_descendants(self) -> list[tuple[int, str]]:
+        return [
+            (pid, start)
+            for pid, start in self._seen_descendants.items()
+            if _start_time(pid) == start
+        ]
 
     async def _terminate(self, timeout_seconds: float) -> bool:
         """Stop agy's process group and every process it started outside it.
@@ -453,7 +481,8 @@ class AgyHarness:
         process = self._process
         if process is None:
             return True
-        strays = descendants(process.pid) if process.returncode is None else []
+        self._note_descendants(process)
+        strays = self._live_seen_descendants()
         signal_processes(strays, signal.SIGTERM)
         done = await cli_process.terminate_group(
             process, timeout_seconds, log=self.log, log_prefix="agy"
@@ -467,6 +496,7 @@ class AgyHarness:
         if alive:
             signal_processes(alive, signal.SIGKILL)
             self.log.warn("agy.terminate_strays", count=len(alive))
+        self._seen_descendants.clear()
         return done
 
 

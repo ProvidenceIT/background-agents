@@ -210,7 +210,7 @@ class GrokHarness:
         )
         if reasoning_effort:
             argv.append(f"--reasoning-effort={reasoning_effort}")
-        if self.config.memory_text:
+        if self._rules_fit_argv():
             argv.append(f"--rules={self.config.memory_text}")
         assert self.session_id is not None
         if session_dir(self.config.cli_home, self.session_id) is not None:
@@ -242,6 +242,10 @@ class GrokHarness:
         deadline = asyncio.get_running_loop().time() + max_duration
         images = self._write_attachments(prompt)
         text = _with_attachments(prompt.text, images)
+        memory = self.config.memory_text
+        if memory and not self._rules_fit_argv():
+            # Too long for one argv string: the notes ride ahead of the prompt instead.
+            text = f"{memory}\n\n---\n\n{text}"
         prompt_file = self._write_prompt_file(prompt.message_id, text)
         self._aborted = False
         self.log.info(
@@ -373,6 +377,10 @@ class GrokHarness:
         if kind is not FailureKind.RESTORE:
             await emit({"type": "error", "error": failed.error, "messageId": state.message_id})
         return failed, kind
+
+    def _rules_fit_argv(self) -> bool:
+        memory = self.config.memory_text
+        return bool(memory) and len(memory.encode("utf-8")) <= PROMPT_ARGV_LIMIT_BYTES
 
     def _write_prompt_file(self, message_id: str, text: str) -> Path | None:
         """A 0600 file for a prompt too long for argv; ``None`` when it fits."""

@@ -78,6 +78,7 @@ if prompt_file:
     file_info = {{
         "mode": stat.S_IMODE(os.stat(prompt_file).st_mode),
         "bytes": os.path.getsize(prompt_file),
+        "head": open(prompt_file, encoding="utf-8").read(64),
     }}
 with open(os.environ["FAKE_GROK_RECORD"], "a") as handle:
     handle.write(json.dumps({{
@@ -304,8 +305,23 @@ async def test_large_prompt_goes_through_a_private_file_that_is_removed(tmp_path
     [run] = rig.runs()
     assert flag_value(run["argv"], "--single") is None
     path = Path(flag_value(run["argv"], "--prompt-file") or "")
-    assert run["prompt_file"] == {"mode": 0o600, "bytes": len(text)}
+    assert run["prompt_file"]["mode"] == 0o600
+    assert run["prompt_file"]["bytes"] == len(text)
     assert not path.exists()
+
+
+async def test_memory_too_long_for_argv_rides_ahead_of_the_prompt(tmp_path: Path) -> None:
+    rig = Rig(tmp_path)
+    memory = "- prefer tabs " + "m" * PROMPT_ARGV_LIMIT_BYTES
+    harness = rig.build(memory_text=memory)
+    await harness.open()
+    await harness.create_session()
+    assert (await harness.run_prompt(prompt("fix it"), rig.emit)).success
+    [run] = rig.runs()
+    assert flag_value(run["argv"], "--rules") is None
+    assert flag_value(run["argv"], "--single") is None
+    assert run["prompt_file"]["head"].startswith("- prefer tabs m")
+    assert run["prompt_file"]["bytes"] == len(f"{memory}\n\n---\n\nfix it")
 
 
 async def test_tool_turn(tmp_path: Path) -> None:
