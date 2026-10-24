@@ -10,6 +10,7 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import { IntegrationSettingsSkeleton } from "./integrations/integration-settings-skeleton";
+import { RepoOwnershipSection } from "./repo-ownership-section";
 import { SettingsCardSection } from "./settings-card-section";
 import {
   getScmRepoSettingsPath,
@@ -164,6 +165,11 @@ export function ScmSettingsPage() {
           />
         </fieldset>
       </SettingsCardSection>
+
+      <RepoOwnershipSection
+        canManage={hasPermission("repositories.ownership.manage")}
+        availableRepos={availableRepos}
+      />
     </div>
   );
 }

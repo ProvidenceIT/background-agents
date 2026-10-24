@@ -146,6 +146,10 @@
       "import": "./dist/types/repository-catalog.js",
       "types": "./dist/types/repository-catalog.d.ts"
     },
+    "./types/repo-ownership": {
+      "import": "./dist/types/repo-ownership.js",
+      "types": "./dist/types/repo-ownership.d.ts"
+    },
     "./types/automations": {
       "import": "./dist/types/automations.js",
       "types": "./dist/types/automations.d.ts"

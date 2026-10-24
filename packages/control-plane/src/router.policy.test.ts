@@ -42,6 +42,21 @@ describe("route policy table", () => {
     expect(routeFor("POST", "/github/route")).toBeUndefined();
   });
 
+  it("reads repository ownership with repositories.read and changes it only with repositories.ownership.manage", () => {
+    for (const path of ["/repo-ownership", "/repos/acme/widgets/ownership"]) {
+      expect(routeFor("GET", path)?.authorization).toMatchObject({
+        kind: "active-user",
+        allOf: [{ kind: "permission", permission: "repositories.read" }],
+        auditAllowed: false,
+      });
+    }
+    expect(routeFor("PUT", "/repos/acme/widgets/ownership")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "permission", permission: "repositories.ownership.manage" }],
+      auditAllowed: true,
+    });
+  });
+
   it("does not expose a member-facing team activity route", () => {
     expect(routeFor("GET", "/teams/team-1/activity")).toBeUndefined();
     expect(routeFor("GET", "/audit-events")?.authorization).toMatchObject({
@@ -51,11 +66,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(260);
+    expect(routes).toHaveLength(264);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(197);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(260);
+    expect(new Set(paths).size).toBe(200);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(264);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
@@ -848,6 +863,7 @@ describe("route policy table", () => {
     ["POST", "/sessions/session-1/notify"],
     ["GET", "/sessions/session-1/motion/task"],
     ["POST", "/sessions/session-1/motion/notes"],
+    ["GET", "/sessions/session-1/repo-context"],
   ])("requires the bound sandbox for %s %s", (method, path) => {
     const { route, params } = matchRoute(routes, method, path)!;
     expect(route.authentication.kind).toBe("sandbox");

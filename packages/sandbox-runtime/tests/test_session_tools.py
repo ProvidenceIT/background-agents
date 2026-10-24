@@ -47,8 +47,9 @@ def test_the_contract_names_a_known_gate_for_every_tool() -> None:
         "notify_user",
         "motion_get_task",
         "motion_add_note",
+        "repo_context",
     ]
-    assert {"notify", "motion_read", "motion_write"} == SESSION_TOOL_GATES
+    assert {"notify", "motion_read", "motion_write", "repo_context"} == SESSION_TOOL_GATES
     assert SESSION_TOOLS_ENV_VAR == "AGENT_SESSION_TOOLS"
 
 
