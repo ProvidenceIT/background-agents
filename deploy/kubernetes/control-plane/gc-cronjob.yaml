@@ -44,18 +44,22 @@ data:
     hour_ms=3600000
     retention_ms=$(( RETENTION_HOURS * hour_ms ))
     destroy_grace_ms=$(( DESTROY_GRACE_HOURS * hour_ms ))
-    pods=$(kubectl -n "$ns" get pods -l app.kubernetes.io/managed-by=open-inspect -o json)
-    claims=$(kubectl -n "$ns" get pvc -l app.kubernetes.io/managed-by=open-inspect,openinspect.dev/role=sandbox -o json)
+    # Lists go through files, not jq arguments: one argument is capped at
+    # 128 KiB, which about 60 claims exceed ("Argument list too long").
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    kubectl -n "$ns" get pods -l app.kubernetes.io/managed-by=open-inspect -o json >"$work/pods.json"
+    kubectl -n "$ns" get pvc -l app.kubernetes.io/managed-by=open-inspect,openinspect.dev/role=sandbox -o json >"$work/claims.json"
 
     # 1 and 2: ended pods, and pods whose claim is gone or going. A pod ended
     # when its last container terminated, or else when it stopped being Ready.
-    echo "$pods" | jq -r --argjson now "$now_ms" --argjson claims "$claims" '
+    jq -r --argjson now "$now_ms" --slurpfile claims "$work/claims.json" '
       def ended_at:
         ([(.status.initContainerStatuses // []) + (.status.containerStatuses // [])
            | .[] | .state.terminated.finishedAt // empty] | max)
         // ((.status.conditions // []) | map(select(.type == "Ready")) | .[0].lastTransitionTime)
         // .status.startTime // .metadata.creationTimestamp;
-      ($claims.items | map(select(.metadata.deletionTimestamp == null) | .metadata.name)) as $live
+      ($claims[0].items | map(select(.metadata.deletionTimestamp == null) | .metadata.name)) as $live
       # A mounted subscription home is not the workspace of the pod: only
       # the workspace claim decides whether the pod is orphaned.
       | .items[]
@@ -66,7 +70,7 @@ data:
           or ((.spec.volumes // []) | map(.persistentVolumeClaim.claimName // empty
                   | select(startswith("sf-home-") | not))
                 | any(. as $c | $live | index($c) | not)))
-      | .metadata.name' |
+      | .metadata.name' "$work/pods.json" |
     while read -r pod; do
       [ -n "$pod" ] || continue
       echo "gc: deleting pod $pod"
@@ -74,9 +78,9 @@ data:
     done
 
     # 3: idle claims.
-    echo "$claims" | jq -r --argjson now "$now_ms" --argjson pods "$pods" \
+    jq -r --argjson now "$now_ms" --slurpfile pods "$work/pods.json" \
         --argjson retention "$retention_ms" --argjson grace "$destroy_grace_ms" '
-      ($pods.items | map(select(.status.phase != "Failed" and .status.phase != "Succeeded")
+      ($pods[0].items | map(select(.status.phase != "Failed" and .status.phase != "Succeeded")
         | .metadata.labels["openinspect.dev/sandbox"])) as $busy
       | .items[]
       | select(.metadata.deletionTimestamp == null)
@@ -92,7 +96,7 @@ data:
           or ($a["openinspect.dev/create-complete-at-ms"] == null
             and $a["openinspect.dev/stopped-at-ms"] == null and ($now - $created) > 3600000)
           or ($now - (($a["openinspect.dev/last-active-at-ms"] // ($created | tostring)) | tonumber)) > $retention)
-      | "\(.metadata.name) \(.metadata.resourceVersion) \(.metadata.labels["openinspect.dev/sandbox"])"' |
+      | "\(.metadata.name) \(.metadata.resourceVersion) \(.metadata.labels["openinspect.dev/sandbox"])"' "$work/claims.json" |
     while read -r claim version hash; do
       [ -n "$claim" ] || continue
       if ! kubectl -n "$ns" annotate pvc "$claim" --resource-version="$version" \
