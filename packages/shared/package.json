@@ -122,6 +122,10 @@
       "import": "./dist/cron.js",
       "types": "./dist/cron.d.ts"
     },
+    "./policy/protected-paths": {
+      "import": "./dist/policy/protected-paths.js",
+      "types": "./dist/policy/protected-paths.d.ts"
+    },
     "./triggers": {
       "import": "./dist/triggers/index.js",
       "types": "./dist/triggers/index.d.ts"

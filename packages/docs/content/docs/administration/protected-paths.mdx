@@ -1,0 +1,110 @@
+---
+title: Protected paths
+description: How agent pull requests that touch CI, rules, deploy config, migrations, auth, billing or secrets are held for human review, and the CODEOWNERS and ruleset templates that back the hold on GitHub.
+audience: admin
+owner: security
+status: published
+lastReviewed: "2026-10-24"
+relatedCode:
+  - packages/shared/src/policy/protected-paths.ts
+  - packages/control-plane/src/webhooks/pull-request-lifecycle.ts
+  - packages/control-plane/src/routes/repo-path-policies.ts
+  - terraform/d1/migrations/0105_protected_path_holds.sql
+---
+
+An agent must not change its own CI, rules, deploy config, migrations or auth code without a person reviewing it. The control plane checks every agent pull request against a list of protected paths and holds the ones that match. Code makes this decision, not the model.
+
+## What happens on an agent pull request
+
+When a pull request that a session opened is opened, reopened or gets a new push, the control plane lists its changed files with the GitHub App and matches them against the protected globs.
+
+- **A protected file changed:** the pull request gets the `sf:hold-protected-path` label and one comment that lists the matched files and their categories. The hold is stored against the head commit.
+- **No protected file changed:** the check is stored as clear for that head commit. If an earlier push was held, the label is removed.
+- **The check could not run** (GitHub error, 3,000 or more changed files): nothing is stored for that head commit, and it counts as held.
+
+Pull requests that no session opened are ignored. A renamed file counts under both its old and new path.
+
+## Categories and default globs
+
+Every glob carries one category. The defaults apply to every repository.
+
+| Category       | Default globs                                                                                                                                                                                 |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `governance`   | `AGENTS.md`, `CLAUDE.md`, `.github/workflows/**`, `CODEOWNERS`, `.github/CODEOWNERS`, `deploy/**`, `.openinspect/**`, `.claude/**`, `.codex/**`, `.opencode/**`, `opencode.json`, `.mcp.json` |
+| `db_migration` | `**/migrations/**`, `terraform/d1/migrations/**`, `**/*.sql`                                                                                                                                  |
+| `auth`         | `**/auth/**`, `**/authorization/**`, `**/identity/**`                                                                                                                                         |
+| `billing`      | `**/billing/**`                                                                                                                                                                               |
+| `secrets`      | `**/secrets/**`, `*.pem`, `.env*`                                                                                                                                                             |
+
+`*` matches within one path segment and `**` matches any number of segments. A glob without a `/` matches the file name at any depth, so `*.pem` matches `certs/dev.pem`.
+
+## Adding globs for one repository
+
+Owners and Administrators (permission `repositories.path_policy.manage`) can add globs for a repository. Repository globs are added to the defaults; they never remove one.
+
+```http
+PUT /repos/{owner}/{name}/path-policy
+Content-Type: application/json
+
+{ "globs": [{ "glob": "infra/**", "category": "governance" }] }
+```
+
+`GET /repos/{owner}/{name}/path-policy` returns the defaults, the repository globs, and who changed them last. A repository can have up to 100 globs.
+
+## Back the hold with GitHub
+
+The label is only a signal. To make sure nobody merges a held change without the right reviewer, add a CODEOWNERS file and a ruleset to each repository agents work in.
+
+### CODEOWNERS template
+
+Save as `.github/CODEOWNERS` and replace the team with the people who review governance changes:
+
+```text
+# Governance paths: changes need a review from the platform owners.
+/AGENTS.md              @your-org/platform-owners
+/CLAUDE.md              @your-org/platform-owners
+/.github/workflows/     @your-org/platform-owners
+/.github/CODEOWNERS     @your-org/platform-owners
+/CODEOWNERS             @your-org/platform-owners
+/deploy/                @your-org/platform-owners
+/.openinspect/          @your-org/platform-owners
+/.claude/               @your-org/platform-owners
+/.codex/                @your-org/platform-owners
+/.opencode/             @your-org/platform-owners
+/opencode.json          @your-org/platform-owners
+/.mcp.json              @your-org/platform-owners
+```
+
+### Ruleset template
+
+Import under **Settings > Rules > Rulesets > New ruleset > Import a ruleset**. It requires a code-owner approval on the default branch, given after the last push:
+
+```json
+{
+  "name": "protected-paths-review",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] }
+  },
+  "bypass_actors": [],
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": true,
+        "require_last_push_approval": true,
+        "required_review_thread_resolution": false
+      }
+    }
+  ]
+}
+```
+
+Leave `bypass_actors` empty, or list only people. A GitHub App or workflow token on the bypass list skips every rule in the ruleset.
+
+Also remove the `Workflows: write` permission from any token an agent can use, so a push cannot change `.github/workflows` at all.

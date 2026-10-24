@@ -69,6 +69,7 @@ export const PERMISSION_IDS = [
   "provider_accounts.manage",
   "provider_accounts.read",
   "repositories.images.manage",
+  "repositories.path_policy.manage",
   "repositories.read",
   "repositories.secrets.manage",
   "repositories.settings.manage",

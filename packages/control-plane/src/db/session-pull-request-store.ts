@@ -1,5 +1,7 @@
 import type { PullRequestSummary } from "@open-inspect/shared/types/sessions";
 import type { PullRequestLifecycleState } from "@open-inspect/shared/types/artifacts";
+import type { ProtectedPathMatch } from "@open-inspect/shared/policy/protected-paths";
+import { PROTECTED_PATH_CATEGORIES } from "@open-inspect/shared/policy/protected-paths";
 import { z } from "zod";
 import type { SqlDatabase } from "./sql-database";
 
@@ -42,6 +44,41 @@ export interface UpsertResult {
    * provider_updated_at is newer than the incoming one).
    */
   applied: boolean;
+}
+
+/** The protected-path check last recorded for a PR (migration 0105 columns). */
+export interface PullRequestPathCheck {
+  /** Head SHA the check evaluated. */
+  checkedSha: string;
+  /** Matched protected files at that SHA; null when nothing matched. */
+  matches: ProtectedPathMatch[] | null;
+}
+
+/**
+ * The merge gate's view of a PR at one head SHA. `unchecked` (no check yet,
+ * or the last check was for another head) must be treated as held.
+ */
+export type PullRequestHold =
+  | { state: "held"; headSha: string; matches: ProtectedPathMatch[] }
+  | { state: "clear"; headSha: string }
+  | { state: "unchecked" };
+
+const holdReasonSchema = z.array(
+  z.object({
+    path: z.string(),
+    category: z.enum(PROTECTED_PATH_CATEGORIES),
+    glob: z.string(),
+  })
+);
+
+/** A hold_reason that does not decode still holds: it reads as an empty match list. */
+function decodeHoldReason(value: string): ProtectedPathMatch[] {
+  try {
+    const parsed = holdReasonSchema.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : [];
+  } catch {
+    return [];
+  }
 }
 
 const sessionPullRequestRowSchema = z.object({
@@ -221,6 +258,50 @@ export class SessionPullRequestStore {
       .first();
 
     return legacyRow ? decodeSessionPullRequest(legacyRow) : null;
+  }
+
+  /**
+   * Record the protected-path check for the PR's head SHA. Guarded on the
+   * record's own head: a check for a SHA the record has moved past is
+   * dropped (returns false) so a late event cannot overwrite a newer check.
+   */
+  async recordPathCheck(
+    artifactId: string,
+    headSha: string,
+    matches: ProtectedPathMatch[] | null
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE session_pull_requests SET hold_reason = ?, held_at_sha = ?
+         WHERE artifact_id = ? AND (head_sha = ? OR head_sha IS NULL)`
+      )
+      .bind(matches ? JSON.stringify(matches) : null, headSha, artifactId, headSha)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  async getPathCheck(artifactId: string): Promise<PullRequestPathCheck | null> {
+    const row = await this.db
+      .prepare("SELECT hold_reason, held_at_sha FROM session_pull_requests WHERE artifact_id = ?")
+      .bind(artifactId)
+      .first<{ hold_reason: string | null; held_at_sha: string | null }>();
+    if (!row?.held_at_sha) return null;
+    return {
+      checkedSha: row.held_at_sha,
+      matches: row.hold_reason === null ? null : decodeHoldReason(row.hold_reason),
+    };
+  }
+
+  /** The protected-path hold for a PR at `headSha`, for the merge gate. */
+  async getHold(
+    pr: Pick<SessionPullRequestRecord, "artifactId">,
+    headSha: string
+  ): Promise<PullRequestHold> {
+    const check = await this.getPathCheck(pr.artifactId);
+    if (!check || check.checkedSha !== headSha) return { state: "unchecked" };
+    return check.matches
+      ? { state: "held", headSha, matches: check.matches }
+      : { state: "clear", headSha };
   }
 
   /**
