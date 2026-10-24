@@ -144,6 +144,7 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
   "provider_accounts.manage",
   "repositories.images.manage",
   "repositories.ownership.manage",
+  "repositories.path_policy.manage",
   "repositories.secrets.manage",
   "repositories.settings.manage",
   "scm_settings.manage",

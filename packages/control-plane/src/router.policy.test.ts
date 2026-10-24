@@ -66,15 +66,30 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(269);
+    expect(routes).toHaveLength(271);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(204);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(269);
+    expect(new Set(paths).size).toBe(205);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(271);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
       cacheControl: "private, no-store",
+    });
+  });
+
+  it("lets repository readers see the path policy and only path-policy managers change it", () => {
+    expect(routeFor("GET", "/repos/acme/web/path-policy")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { allOf: [{ kind: "permission", permission: "repositories.read" }] },
+      cacheControl: "private, no-store",
+    });
+    expect(routeFor("PUT", "/repos/acme/web/path-policy")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        allOf: [{ kind: "permission", permission: "repositories.path_policy.manage" }],
+        auditAllowed: true,
+      },
     });
   });
 
