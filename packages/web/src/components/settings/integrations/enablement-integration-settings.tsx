@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
@@ -37,15 +37,16 @@ interface EnablementSettings {
   enabled?: boolean;
 }
 
-type EnablementGlobalConfig = IntegrationEntry<EnablementSettings>["global"];
+type ScopedGlobalConfig<T extends object> = IntegrationEntry<T>["global"];
 
-interface EnablementIntegrationCopy {
-  id: Extract<IntegrationId, "code-server" | "vnc">;
+/** Integrations whose settings are a global default, a repository scope and per-repo overrides. */
+type ScopedIntegrationId = Extract<IntegrationId, "code-server" | "vnc" | "session-tools">;
+
+export interface ScopedIntegrationCopy {
+  id: ScopedIntegrationId;
   title: string;
   intro: string;
   overrideDescription: string;
-  enableLabel: string;
-  enableDescription: string;
   scopeDescription: string;
   allRepositoriesDescription: string;
   selectedRepositoriesDescription: string;
@@ -54,35 +55,101 @@ interface EnablementIntegrationCopy {
   resetDescription: string;
 }
 
-interface GlobalResponse {
-  settings: EnablementGlobalConfig | null;
+interface EnablementIntegrationCopy extends ScopedIntegrationCopy {
+  id: Extract<IntegrationId, "code-server" | "vnc">;
+  enableLabel: string;
+  enableDescription: string;
 }
 
-interface RepoSettingsEntry {
+/**
+ * The value a scoped integration edits, at both the global and the
+ * repository level. `read` turns a stored entry (or nothing stored) into the
+ * value the form shows.
+ */
+export interface ScopedSettingsField<T extends object> {
+  read(settings: T | undefined): T;
+  /** What a newly added repository override starts with. */
+  newOverride: T;
+  renderGlobal(value: T, onChange: (value: T) => void): ReactNode;
+  renderOverride(value: T, onChange: (value: T) => void, repo: string): ReactNode;
+}
+
+interface GlobalResponse<T extends object> {
+  settings: ScopedGlobalConfig<T> | null;
+}
+
+interface RepoSettingsEntry<T> {
   repo: string;
-  settings: EnablementSettings;
+  settings: T;
 }
 
-interface RepoListResponse {
-  repos: RepoSettingsEntry[];
+interface RepoListResponse<T> {
+  repos: RepoSettingsEntry<T>[];
 }
 
 interface ReposResponse {
   repos: EnrichedRepository[];
 }
 
+function enablementField(copy: EnablementIntegrationCopy): ScopedSettingsField<EnablementSettings> {
+  return {
+    read: (settings) => ({ enabled: settings?.enabled ?? false }),
+    newOverride: { enabled: true },
+    renderGlobal: (value, onChange) => (
+      <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
+        <div>
+          <span className="font-medium text-foreground">{copy.enableLabel}</span>
+          <p className="text-xs text-muted-foreground mt-0.5">{copy.enableDescription}</p>
+        </div>
+        <input
+          type="checkbox"
+          checked={value.enabled ?? false}
+          onChange={() => onChange({ enabled: !value.enabled })}
+          className="rounded border-border"
+        />
+      </label>
+    ),
+    renderOverride: (value, onChange) => (
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          checked={value.enabled ?? false}
+          onChange={() => onChange({ enabled: !value.enabled })}
+          className="rounded border-border"
+        />
+        <span className="text-muted-foreground">Enabled</span>
+      </label>
+    ),
+  };
+}
+
 /**
  * Renders global and repository enablement settings with each scope editable only by authorized users.
  */
 export function EnablementIntegrationSettings({ copy }: { copy: EnablementIntegrationCopy }) {
+  return <ScopedIntegrationSettings copy={copy} field={enablementField(copy)} />;
+}
+
+/**
+ * Renders a global default with a repository scope, and per-repo overrides,
+ * each scope editable only by authorized users.
+ */
+export function ScopedIntegrationSettings<T extends object>({
+  copy,
+  field,
+}: {
+  copy: ScopedIntegrationCopy;
+  field: ScopedSettingsField<T>;
+}) {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManageGlobal = hasPermission("integrations.manage");
   const canManageRepos = hasPermission("repositories.settings.manage");
   const globalSettingsKey = `/api/integration-settings/${copy.id}` as const;
   const repoSettingsKey = `/api/integration-settings/${copy.id}/repos` as const;
-  const { data: globalData, isLoading: globalLoading } = useSWR<GlobalResponse>(globalSettingsKey);
+  const { data: globalData, isLoading: globalLoading } =
+    useSWR<GlobalResponse<T>>(globalSettingsKey);
   const { data: repoSettingsData, isLoading: repoSettingsLoading } =
-    useSWR<RepoListResponse>(repoSettingsKey);
+    useSWR<RepoListResponse<T>>(repoSettingsKey);
   const { data: reposData } = useSWR<ReposResponse>("/api/repos");
 
   if (globalLoading || repoSettingsLoading) {
@@ -104,6 +171,7 @@ export function EnablementIntegrationSettings({ copy }: { copy: EnablementIntegr
           availableRepos={availableRepos}
           settingsKey={globalSettingsKey}
           copy={copy}
+          field={field}
         />
       </fieldset>
 
@@ -114,6 +182,7 @@ export function EnablementIntegrationSettings({ copy }: { copy: EnablementIntegr
             availableRepos={availableRepos}
             settingsKey={repoSettingsKey}
             copy={copy}
+            field={field}
           />
         </fieldset>
       </SettingsCardSection>
@@ -121,18 +190,20 @@ export function EnablementIntegrationSettings({ copy }: { copy: EnablementIntegr
   );
 }
 
-function GlobalSettingsSection({
+function GlobalSettingsSection<T extends object>({
   settings,
   availableRepos,
   settingsKey,
   copy,
+  field,
 }: {
-  settings: EnablementGlobalConfig | null | undefined;
+  settings: ScopedGlobalConfig<T> | null | undefined;
   availableRepos: EnrichedRepository[];
   settingsKey: `/api/integration-settings/${string}`;
-  copy: EnablementIntegrationCopy;
+  copy: ScopedIntegrationCopy;
+  field: ScopedSettingsField<T>;
 }) {
-  const [enabled, setEnabled] = useState(settings?.defaults?.enabled ?? false);
+  const [value, setValue] = useState<T>(() => field.read(settings?.defaults));
   const [enabledRepos, setEnabledRepos] = useState<string[]>(settings?.enabledRepos ?? []);
   const [repoScopeMode, setRepoScopeMode] = useState<"all" | "selected">(
     settings?.enabledRepos == null ? "all" : "selected"
@@ -145,13 +216,13 @@ function GlobalSettingsSection({
   useEffect(() => {
     if (settings !== undefined && !initialized) {
       if (settings) {
-        setEnabled(settings.defaults?.enabled ?? false);
+        setValue(field.read(settings.defaults));
         setEnabledRepos(settings.enabledRepos ?? []);
         setRepoScopeMode(settings.enabledRepos == null ? "all" : "selected");
       }
       setInitialized(true);
     }
-  }, [settings, initialized]);
+  }, [settings, initialized, field]);
 
   const isConfigured = settings !== null && settings !== undefined;
 
@@ -163,7 +234,7 @@ function GlobalSettingsSection({
 
       if (res.ok) {
         mutate(settingsKey);
-        setEnabled(false);
+        setValue(field.read(undefined));
         setEnabledRepos([]);
         setRepoScopeMode("all");
         setDirty(false);
@@ -182,8 +253,7 @@ function GlobalSettingsSection({
   const handleSave = async () => {
     setSaving(true);
 
-    const defaults: EnablementSettings = { enabled };
-    const body: EnablementGlobalConfig = { defaults };
+    const body: ScopedGlobalConfig<T> = { defaults: value };
     if (repoScopeMode === "selected") {
       body.enabledRepos = enabledRepos;
     }
@@ -221,21 +291,10 @@ function GlobalSettingsSection({
   return (
     <SettingsCardSection title="Defaults & Scope" description={copy.scopeDescription}>
       <div className="mb-4">
-        <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
-          <div>
-            <span className="font-medium text-foreground">{copy.enableLabel}</span>
-            <p className="text-xs text-muted-foreground mt-0.5">{copy.enableDescription}</p>
-          </div>
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={() => {
-              setEnabled(!enabled);
-              setDirty(true);
-            }}
-            className="rounded border-border"
-          />
-        </label>
+        {field.renderGlobal(value, (next) => {
+          setValue(next);
+          setDirty(true);
+        })}
       </div>
 
       <div className="mb-4">
@@ -328,16 +387,18 @@ function GlobalSettingsSection({
   );
 }
 
-function RepoOverridesSection({
+function RepoOverridesSection<T extends object>({
   overrides,
   availableRepos,
   settingsKey,
   copy,
+  field,
 }: {
-  overrides: RepoSettingsEntry[];
+  overrides: RepoSettingsEntry<T>[];
   availableRepos: EnrichedRepository[];
   settingsKey: `/api/integration-settings/${string}/repos`;
-  copy: EnablementIntegrationCopy;
+  copy: ScopedIntegrationCopy;
+  field: ScopedSettingsField<T>;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
 
@@ -357,7 +418,7 @@ function RepoOverridesSection({
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ settings: { enabled: true } }),
+          body: JSON.stringify({ settings: field.newOverride }),
         }
       );
 
@@ -379,7 +440,12 @@ function RepoOverridesSection({
       {overrides.length > 0 ? (
         <div className="space-y-2 mb-4">
           {overrides.map((entry) => (
-            <RepoOverrideRow key={entry.repo} entry={entry} settingsKey={settingsKey} />
+            <RepoOverrideRow
+              key={entry.repo}
+              entry={entry}
+              settingsKey={settingsKey}
+              field={field}
+            />
           ))}
         </div>
       ) : (
@@ -407,14 +473,16 @@ function RepoOverridesSection({
   );
 }
 
-function RepoOverrideRow({
+function RepoOverrideRow<T extends object>({
   entry,
   settingsKey,
+  field,
 }: {
-  entry: RepoSettingsEntry;
+  entry: RepoSettingsEntry<T>;
   settingsKey: `/api/integration-settings/${string}/repos`;
+  field: ScopedSettingsField<T>;
 }) {
-  const [enabled, setEnabled] = useState(entry.settings.enabled ?? false);
+  const [value, setValue] = useState<T>(() => field.read(entry.settings));
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
@@ -422,7 +490,7 @@ function RepoOverrideRow({
     const repository = parseRepositoryFullName(entry.repo);
     if (!repository) return;
     setSaving(true);
-    const settings: EnablementSettings = { enabled };
+    const settings: T = value;
 
     try {
       const res = await browserApiFetch(
@@ -481,18 +549,14 @@ function RepoOverrideRow({
     >
       <div className="flex items-center gap-3 flex-1 min-w-0">
         <span className="text-sm font-medium text-foreground truncate">{entry.repo}</span>
-        <label className="flex items-center gap-2 text-sm cursor-pointer">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={() => {
-              setEnabled(!enabled);
-              setDirty(true);
-            }}
-            className="rounded border-border"
-          />
-          <span className="text-muted-foreground">Enabled</span>
-        </label>
+        {field.renderOverride(
+          value,
+          (next) => {
+            setValue(next);
+            setDirty(true);
+          },
+          entry.repo
+        )}
       </div>
 
       <div className="flex items-center gap-2">
