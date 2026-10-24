@@ -14,12 +14,18 @@
  */
 
 import { extractSessionIdFromBranch } from "@open-inspect/shared/git";
+import {
+  DEFAULT_PROTECTED_PATHS,
+  matchProtectedPaths,
+  type ProtectedPathMatch,
+} from "@open-inspect/shared/policy/protected-paths";
 import { prArtifactBelongsToRepo } from "@open-inspect/shared/types/repositories";
 import type {
   GitHubAutomationEvent,
   GitHubPullRequestEventFacts,
 } from "@open-inspect/shared/triggers";
 import type { PullRequestStatus, SessionArtifact } from "@open-inspect/shared/types/artifacts";
+import type { RepoPathPolicyStore } from "../db/repo-path-policies";
 import type {
   SessionPullRequestRecord,
   SessionPullRequestStore,
@@ -256,4 +262,117 @@ async function insertViaBranchFallback(
     { artifactId: artifact.id, sessionId, createdAt: now, updatedAt: now },
     "inserted"
   );
+}
+
+// ─── Protected-path hold ──────────────────────────────────────────────────────
+
+export const PROTECTED_PATH_HOLD_LABEL = "sf:hold-protected-path";
+
+/** Events that can change a PR's diff; each is checked at its head SHA. */
+const PATH_CHECK_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "pull_request.opened",
+  "pull_request.synchronize",
+  "pull_request.reopened",
+]);
+
+/** The PR a GitHub write targets; repositoryId scopes the installation token. */
+export interface HoldPullRequestRef {
+  repositoryId: number;
+  repoOwner: string;
+  repoName: string;
+  number: number;
+}
+
+/** App-authenticated GitHub operations the hold step needs. */
+export interface ProtectedPathHoldGitHub {
+  listChangedFiles(pr: HoldPullRequestRef): Promise<string[]>;
+  addLabel(pr: HoldPullRequestRef, label: string): Promise<void>;
+  removeLabel(pr: HoldPullRequestRef, label: string): Promise<void>;
+  comment(pr: HoldPullRequestRef, body: string): Promise<void>;
+}
+
+export interface ProtectedPathHoldDeps {
+  store: Pick<SessionPullRequestStore, "getByIdentity" | "getPathCheck" | "recordPathCheck">;
+  policies: Pick<RepoPathPolicyStore, "get">;
+  github: ProtectedPathHoldGitHub;
+}
+
+export type ProtectedPathHoldOutcome =
+  "not_checked_event" | "no_head_sha" | "not_session_pr" | "stale" | "held" | "clear";
+
+function formatHoldComment(headSha: string, matches: ProtectedPathMatch[]): string {
+  const categories = [...new Set(matches.map((match) => match.category))];
+  const lines = matches.map((match) => `- \`${match.path}\` (${match.category})`);
+  return [
+    `**Held for human review:** this pull request changes protected paths (${categories.join(", ")}) at ${headSha.slice(0, 12)}.`,
+    "",
+    ...lines,
+    "",
+    `The \`${PROTECTED_PATH_HOLD_LABEL}\` label stays until a push removes these changes; it is never merged automatically.`,
+  ].join("\n");
+}
+
+/**
+ * Check a session PR's changed files against the protected globs and record
+ * the result at the event's head SHA. Runs after lifecycle tracking, so the
+ * record's head is already current. D1 is written first (it is what the merge
+ * gate reads); the label and comment are the human-visible mirror. Non-session
+ * PRs have no record and are ignored.
+ *
+ * The files list is the PR's current diff, which can be newer than the event's
+ * SHA under a fast push; the check for that newer head then overwrites it.
+ */
+export async function processProtectedPathHold(
+  deps: ProtectedPathHoldDeps,
+  event: GitHubAutomationEvent
+): Promise<ProtectedPathHoldOutcome> {
+  const facts = event.pullRequest;
+  if (!facts || facts.isCrossRepository === true || !PATH_CHECK_EVENT_TYPES.has(event.eventType)) {
+    return "not_checked_event";
+  }
+  const headSha = facts.headSha;
+  if (!headSha) return "no_head_sha";
+
+  const record = await deps.store.getByIdentity({
+    repositoryExternalId: facts.repositoryExternalId,
+    repoOwner: event.repoOwner,
+    repoName: event.repoName,
+    prNumber: facts.number,
+  });
+  if (!record) return "not_session_pr";
+
+  const pr: HoldPullRequestRef = {
+    repositoryId: event.repositoryId,
+    repoOwner: event.repoOwner,
+    repoName: event.repoName,
+    number: facts.number,
+  };
+  const [previous, files, policy] = await Promise.all([
+    deps.store.getPathCheck(record.artifactId),
+    deps.github.listChangedFiles(pr),
+    deps.policies.get(event.repoOwner, event.repoName),
+  ]);
+  const matches = matchProtectedPaths(files, [
+    ...DEFAULT_PROTECTED_PATHS,
+    ...(policy?.globs ?? []),
+  ]);
+  const held = matches.length > 0;
+
+  const recorded = await deps.store.recordPathCheck(
+    record.artifactId,
+    headSha,
+    held ? matches : null
+  );
+  if (!recorded) return "stale";
+
+  if (held) {
+    await deps.github.addLabel(pr, PROTECTED_PATH_HOLD_LABEL);
+    // One comment per distinct match set, not per push.
+    if (JSON.stringify(previous?.matches ?? null) !== JSON.stringify(matches)) {
+      await deps.github.comment(pr, formatHoldComment(headSha, matches));
+    }
+    return "held";
+  }
+  if (previous?.matches) await deps.github.removeLabel(pr, PROTECTED_PATH_HOLD_LABEL);
+  return "clear";
 }

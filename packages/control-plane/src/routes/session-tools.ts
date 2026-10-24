@@ -38,14 +38,14 @@ import {
 
 const logger = createLogger("session-tools");
 
-function refuse(status: number, reason: string, message: string, retryAfterMs?: number) {
+export function refuse(status: number, reason: string, message: string, retryAfterMs?: number) {
   const body: Record<string, unknown> = { error: message, reason };
   if (retryAfterMs !== undefined) body.retryAfter = Math.ceil(retryAfterMs / 1000);
   return json(body, status);
 }
 
 /** The session, when the gate is open for it; otherwise the route's refusal. */
-async function admitTool(
+export async function admitTool(
   env: Env,
   ctx: SandboxRouteContext,
   sessionId: string,

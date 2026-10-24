@@ -970,6 +970,8 @@ describe("Scheduler (integration)", () => {
           scheduled_at: now,
           started_at: child.status === "starting" ? null : now,
           execution_deadline_at: child.status === "running" ? now + 60_000 : null,
+          resume_at: null,
+          outcome: null,
           completed_at: child.status === "failed" || child.status === "completed" ? now : null,
           created_at: now + index,
           repo_owner: null,

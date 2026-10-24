@@ -6,6 +6,17 @@ import {
 
 /** "Your Claude subscription", "Ada's shared Claude subscription", "Workspace API key", ... */
 export function describeSessionSubscription(subscription: SessionSubscription): string {
+  // Bound but unusable on this session's agent: nothing pays, so turns cannot run (BUG-01).
+  const holder = describeHolder(subscription);
+  if (subscription.payer !== "none") return holder;
+  // Lower-case the leading word mid-sentence, but never a colleague's name.
+  const inline = /^(Your|A|Workspace)\b/.test(holder)
+    ? holder[0].toLowerCase() + holder.slice(1)
+    : holder;
+  return `None: this agent cannot use ${inline}`;
+}
+
+function describeHolder(subscription: SessionSubscription): string {
   const product = SESSION_SUBSCRIPTION_PRODUCT_NAMES[subscription.provider];
   if (subscription.holder === "workspace") {
     return subscription.authMode === "api_key"

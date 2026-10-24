@@ -28,6 +28,8 @@ interface AutomationAgentFieldsProps {
   enabledModelOptions: ModelCategory[];
   /** Why no listed model can be submitted, shown under the picker. */
   modelError?: string;
+  /** Why the preset this form opened with cannot run, shown under the Agent field. */
+  presetWarning?: string | null;
   onChange: (value: AutomationAgentDraft) => void;
 }
 
@@ -36,6 +38,7 @@ export function AutomationAgentFields({
   resolvedModel,
   enabledModelOptions,
   modelError = "",
+  presetWarning = null,
   onChange,
 }: AutomationAgentFieldsProps) {
   const reasoningConfig = getReasoningConfig(resolvedModel);
@@ -92,6 +95,14 @@ export function AutomationAgentFields({
           Agent harness that runs each session this automation creates. It decides which models are
           available below; picking a model that runs only on another harness switches to it.
         </FieldDescription>
+        {presetWarning && (
+          <p
+            role="alert"
+            className="mt-1.5 border border-warning/40 bg-warning-muted px-2 py-1.5 text-xs text-foreground"
+          >
+            {presetWarning}
+          </p>
+        )}
       </div>
 
       <div>

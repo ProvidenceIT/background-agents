@@ -158,10 +158,23 @@ it("preserves public trigger type shapes", () => {
 it("requires numeric GitHub event identity and adds terminal grant-denial statuses", () => {
   expectTypeOf<GitHubAutomationEvent>().toExtend<{ repositoryId: number }>();
   expectTypeOf<AutomationRunStatus>().toEqualTypeOf<
-    "starting" | "running" | "completed" | "failed" | "skipped" | "unauthorized"
+    | "starting"
+    | "running"
+    | "waiting_for_reset"
+    | "completed"
+    | "failed"
+    | "skipped"
+    | "unauthorized"
   >();
   expectTypeOf<AutomationRun["status"]>().toEqualTypeOf<AutomationRunStatus>();
   expectTypeOf<AutomationInvocationStatus>().toEqualTypeOf<
-    "starting" | "running" | "completed" | "failed" | "partial_failed" | "skipped" | "unauthorized"
+    | "starting"
+    | "running"
+    | "waiting_for_reset"
+    | "completed"
+    | "failed"
+    | "partial_failed"
+    | "skipped"
+    | "unauthorized"
   >();
 });

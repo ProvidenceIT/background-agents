@@ -31,6 +31,7 @@ import {
 } from "./handlers";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { toAutofixEnvelope } from "./autofix-ingress";
+import { isRepoAllowed, parseRepoAllowlist } from "./repo-allowlist";
 
 const app = new Hono<{ Bindings: Env }>();
 const DELIVERY_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -63,6 +64,26 @@ app.post("/webhooks/github", async (c) => {
     return c.json({ error: "invalid signature" }, 401);
   }
 
+  const payload: unknown = JSON.parse(rawBody);
+  const summaryResult = webhookSummaryPayloadSchema.safeParse(payload);
+  const summary = summaryResult.success ? summaryResult.data : null;
+  const actionResult = webhookActionPayloadSchema.safeParse(payload);
+  const action = summary?.action ?? (actionResult.success ? actionResult.data.action : undefined);
+  const repo = summary?.repository
+    ? `${summary.repository.owner.login}/${summary.repository.name}`
+    : null;
+
+  // Before any state is written: a repository outside the allowlist leaves
+  // no dedupe entry, no autofix job and no control-plane call behind.
+  if (!isRepoAllowed(parseRepoAllowlist(c.env.SF_GITHUB_REPO_ALLOWLIST), repo)) {
+    log.info("webhook.repo_not_allowlisted", {
+      delivery_id: deliveryId,
+      event_type: event,
+      repo: repo ?? undefined,
+    });
+    return c.json({ ok: true, ignored: "repo_not_allowlisted" });
+  }
+
   let dedupeKey: string | null = null;
   if (deliveryId) {
     dedupeKey = getDeliveryDedupeKey(deliveryId);
@@ -83,20 +104,12 @@ app.post("/webhooks/github", async (c) => {
     log.warn("webhook.delivery_id_missing", { event_type: event });
   }
 
-  const payload: unknown = JSON.parse(rawBody);
-  const summaryResult = webhookSummaryPayloadSchema.safeParse(payload);
-  const summary = summaryResult.success ? summaryResult.data : null;
-  const actionResult = webhookActionPayloadSchema.safeParse(payload);
-  const action = summary?.action ?? (actionResult.success ? actionResult.data.action : undefined);
   const traceId = crypto.randomUUID();
-
   log.info("webhook.received", {
     event_type: event,
     delivery_id: deliveryId,
     trace_id: traceId,
-    repo: summary?.repository
-      ? `${summary.repository.owner.login}/${summary.repository.name}`
-      : undefined,
+    repo: repo ?? undefined,
     action,
   });
 
@@ -167,6 +180,8 @@ const COMMENTED_SKIP_REASONS: ReadonlySet<string> = new Set([
   "team_archived",
   "invalid_inline_flags",
   "model_preferences_unavailable",
+  "service_actor_not_enrolled",
+  "no_eligible_home",
 ]);
 
 async function handleWebhook(

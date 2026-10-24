@@ -1,4 +1,4 @@
-# The control-plane and teams-bot images build from the repository root; only
+# The control-plane, teams-bot and github-bot images build from the repository root; only
 # what they need enters the build context.
 *
 !package.json
@@ -6,6 +6,7 @@
 !packages/shared/
 !packages/control-plane/
 !packages/teams-bot/
+!packages/github-bot/
 !packages/sandbox-runtime/src/sandbox_runtime/*.json
 !terraform/d1/migrations/
 packages/**/node_modules/

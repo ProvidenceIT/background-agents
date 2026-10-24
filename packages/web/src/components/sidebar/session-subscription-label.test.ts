@@ -13,6 +13,7 @@ const base: SessionSubscription = {
   holderUserId: "user-1",
   holderDisplayName: "Ada",
   accountDisplayName: null,
+  payer: "subscription",
   slots: [],
 };
 
@@ -36,6 +37,11 @@ describe("describeSessionSubscription", () => {
     [
       { holder: "workspace", authMode: "legacy_scoped_oauth", holderUserId: null },
       "Workspace Claude credentials",
+    ],
+    [{ payer: "none" }, "None: this agent cannot use your Claude subscription"],
+    [
+      { payer: "none", holder: "colleague", shared: true },
+      "None: this agent cannot use Ada's shared Claude subscription",
     ],
   ])("describes %o as %s", (overrides, label) => {
     expect(describeSessionSubscription({ ...base, ...overrides })).toBe(label);

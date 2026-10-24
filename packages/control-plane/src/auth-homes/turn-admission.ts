@@ -17,13 +17,14 @@
  * creation, that first turn) once the session is created.
  */
 
-import { checkHarnessCompatibility, type HarnessId } from "@open-inspect/shared/harnesses";
+import { assessRunnability, type HarnessId } from "@open-inspect/shared/harnesses";
 import type {
   AuthHomeRefusalReason,
   AuthHomeSelection,
   TriggerKind,
 } from "@open-inspect/shared/types/auth-homes";
 import { authHomeRefusalMessage } from "@open-inspect/shared/types/auth-homes";
+import type { RunnabilityReason } from "@open-inspect/shared/types/runnability";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import { SessionIndexStore, type SessionEntry } from "../db/session-index";
 import type { SqlDatabase } from "../db/sql-database";
@@ -335,13 +336,17 @@ export interface NewSessionRequest {
 /** Why a new session may not start; nothing was created. */
 export type NewSessionRefusal =
   | { kind: "auth_home"; reason: AuthHomeRefusalReason; provider: string; message: string }
-  | { kind: "harness"; message: string };
+  /** The setup cannot run on the auth it resolved to; `message` is the first reason's. */
+  | { kind: "harness"; message: string; reasons: RunnabilityReason[] };
 
 /** The HTTP response for a refused new session. */
 export function newSessionRefusalResponse(refusal: NewSessionRefusal): Response {
   return refusal.kind === "auth_home"
     ? authHomeRefusalResponse(refusal.reason, refusal.provider)
-    : Response.json({ error: refusal.message }, { status: 400 });
+    : Response.json(
+        { error: refusal.message, code: refusal.reasons[0].code, reasons: refusal.reasons },
+        { status: 400 }
+      );
 }
 
 export interface AdmittedNewSession {
@@ -414,14 +419,22 @@ export async function admitNewSession(
     : [...request.providerAuth];
   // Checked against the auth the session will actually run on: a home
   // replaces the installation's mode for the providers it carries, and Codex
-  // runs OpenAI on nothing else.
-  const incompatibility = checkHarnessCompatibility(
+  // runs OpenAI on nothing else. A home the harness cannot use (OpenCode on a
+  // Claude home) is refused here as `payer_mismatch`, before any sandbox.
+  const runnability = assessRunnability(
     request.harness,
     request.model,
     Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
   );
-  if (incompatibility) {
-    return { kind: "refused", refusal: { kind: "harness", message: incompatibility.message } };
+  if (!runnability.runnable) {
+    return {
+      kind: "refused",
+      refusal: {
+        kind: "harness",
+        message: runnability.reasons[0].message,
+        reasons: runnability.reasons,
+      },
+    };
   }
   const keepsPrivate = served ? await homeKeepsSessionsPrivate(request.db, served.home) : false;
 

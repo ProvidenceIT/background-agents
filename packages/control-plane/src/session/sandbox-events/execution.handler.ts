@@ -115,7 +115,13 @@ export class SandboxExecutionEventHandler {
       });
       this.broadcastPromptQueue();
       this.backgroundTasks.submit(
-        () => this.callbackService.notifyComplete(event.messageId, event.success, event.error),
+        () =>
+          this.callbackService.notifyComplete(
+            event.messageId,
+            event.success,
+            event.error,
+            event.limit ?? null
+          ),
         {
           name: "callback.notify_complete",
           context: { message_id: event.messageId },

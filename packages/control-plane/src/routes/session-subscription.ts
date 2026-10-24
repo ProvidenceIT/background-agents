@@ -7,7 +7,9 @@ import type {
   SessionSubscription,
   SessionSubscriptionResponse,
 } from "@open-inspect/shared/types/session-subscription";
-import type { HarnessId } from "@open-inspect/shared/harnesses";
+import { assessRunnability, DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
+import { extractProviderAndModel } from "@open-inspect/shared/models";
+import { payerForAuthMode } from "@open-inspect/shared/types/runnability";
 import { UserAuthHomeStore } from "../auth-homes/store";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import { SessionIndexStore } from "../db/session-index";
@@ -129,6 +131,14 @@ export async function handleSessionSubscription(
     ).map((user) => [user.id, user.displayName])
   );
 
+  // The model's provider pays only when the session's harness can use what is
+  // bound for it (OpenCode cannot use a Claude home); the others as bound.
+  const modelProvider = extractProviderAndModel(row.model).provider;
+  const payerFor = (provider: string, authMode: SessionSubscription["authMode"]) =>
+    provider === modelProvider
+      ? assessRunnability(row.harness ?? DEFAULT_HARNESS, row.model, { [provider]: authMode }).payer
+      : payerForAuthMode(authMode);
+
   const subscriptions = spent.map(({ provider, authMode, shared, holder }): SessionSubscription => {
     const ownedByViewer = viewerId !== null && holder?.userIds.includes(viewerId) === true;
     const personal = authMode === "auth_home" || authMode === "provider_account";
@@ -140,6 +150,7 @@ export async function handleSessionSubscription(
       shared,
       holderUserId,
       holderDisplayName: holderUserId ? (names.get(holderUserId) ?? null) : null,
+      payer: payerFor(provider, authMode),
       accountDisplayName: disclosed(holder) ? holder.accountDisplayName : null,
       // A slot name says which of the holder's pooled accounts ran, not whose it is.
       slots:

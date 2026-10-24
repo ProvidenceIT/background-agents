@@ -378,6 +378,17 @@ describe.each([
     { status: 403, code: "not_member", message: /not a member/i },
     { status: 409, code: "target_team_missing_grant", message: /acme\/widgets/ },
     { status: 409, code: "team_archived", message: /team is archived/i },
+    {
+      status: 403,
+      code: "service_actor_not_enrolled",
+      message:
+        "I couldn't start a session because your GitHub account is not linked to Open-Inspect. Sign in to Open-Inspect with GitHub once, then try again.",
+    },
+    {
+      status: 403,
+      code: "no_eligible_home",
+      message: "I couldn't start a session: no subscription home can run this session for you.",
+    },
   ])(
     "comments on the PR and skips $code without delivering a prompt",
     async ({ status, code, message }) => {
@@ -466,6 +477,54 @@ describe.each([
       getControlPlaneFetch(env).mock.calls.some(([url]) => String(url).endsWith("/prompt"))
     ).toBe(false);
     expect(githubFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("admission refusals on the first prompt", () => {
+  it.each([
+    {
+      code: "no_eligible_home",
+      body: {
+        code: "no_eligible_home",
+        message:
+          "no eligible subscription home for anthropic: enrol one under Settings > Subscription homes, or ask an enrolled colleague to share theirs",
+      },
+      comment:
+        "I couldn't start a session: no eligible subscription home for anthropic: enrol one under Settings > Subscription homes, or ask an enrolled colleague to share theirs.",
+    },
+    {
+      code: "service_actor_not_enrolled",
+      body: { error: "Forbidden", code: "service_actor_not_enrolled" },
+      comment:
+        "I couldn't start a session because your GitHub account is not linked to Open-Inspect. Sign in to Open-Inspect with GitHub once, then try again.",
+    },
+  ])("comments on the PR and skips a refused prompt: $code", async ({ code, body, comment }) => {
+    const env = createMockEnv();
+    mockControlPlaneResponse(env, /\/prompt$/, () => Response.json(body, { status: 403 }));
+    const githubFetch = vi.fn().mockResolvedValue(new Response("", { status: 201 }));
+    vi.stubGlobal("fetch", githubFetch);
+
+    expect(
+      await handleReviewRequested(env, createMockLogger(), reviewRequestedPayload, "trace-home")
+    ).toEqual({ outcome: "skipped", skip_reason: code });
+
+    expect(githubFetch).toHaveBeenCalledOnce();
+    expect(githubFetch.mock.calls[0][0]).toBe(
+      "https://api.github.com/repos/acme/widgets/issues/42/comments"
+    );
+    expect(JSON.parse(githubFetch.mock.calls[0][1].body)).toEqual({ body: comment });
+  });
+
+  it("still throws for a prompt failure that is not a refusal", async () => {
+    const env = createMockEnv();
+    mockControlPlaneResponse(env, /\/prompt$/, () => new Response("boom", { status: 500 }));
+    const githubFetch = vi.fn();
+    vi.stubGlobal("fetch", githubFetch);
+
+    await expect(
+      handleReviewRequested(env, createMockLogger(), reviewRequestedPayload, "trace-home")
+    ).rejects.toThrow("Prompt delivery failed: 500 boom");
+    expect(githubFetch).not.toHaveBeenCalled();
   });
 });
 

@@ -156,6 +156,14 @@ describe("automation invocations (D1 integration)", () => {
           ],
           expected: "partial_failed",
         },
+        {
+          children: [{ status: "waiting_for_reset" }, { status: "completed", completed_at: 5 }],
+          expected: "waiting_for_reset",
+        },
+        {
+          children: [{ status: "running" }, { status: "waiting_for_reset" }],
+          expected: "running",
+        },
         // Legacy backfill shapes: skipped children exist only in old data.
         { children: [{ status: "unauthorized", completed_at: 8 }], expected: "unauthorized" },
         { children: [{ status: "skipped" }], expected: "skipped" },
@@ -182,6 +190,7 @@ describe("automation invocations (D1 integration)", () => {
           deriveInvocationStatus({
             total: aggregate.total,
             active: aggregate.active,
+            waiting: aggregate.waiting,
             failed: aggregate.failed,
             completed: aggregate.completed,
             skipped: aggregate.skipped,

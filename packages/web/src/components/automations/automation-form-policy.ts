@@ -14,10 +14,15 @@ import {
 } from "@open-inspect/shared/types/automations";
 import { DEFAULT_MODEL, isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
+  assessRunnability,
+  getHarnessLabel,
   getValidHarnessOrDefault,
+  harnessForModel,
   reconcileProviderSelectionsForHarness,
+  selectedProviderAuthModes,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
+import { formatModelNameLower } from "@/lib/format";
 import { harnessForModelPick, type HarnessModelAvailability } from "@/lib/session-harness";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 
@@ -66,6 +71,7 @@ export type AutomationFormMode = "create" | "edit";
 
 type AutomationFormInvalidReason =
   | "models-loading"
+  | "not-runnable"
   | "no-compatible-model"
   | "required-fields"
   | "invalid-schedule"
@@ -123,6 +129,32 @@ export function createAutomationFormDraft(
   };
 }
 
+/**
+ * The warning for a preset (a saved automation, a template) whose setup
+ * cannot run as given: every run of it would fail unattended. The form
+ * already moves such a setup to one that can run; this says so, with why.
+ * Null for a blank form or a preset that can run.
+ */
+export function presetRunnabilityWarning(
+  initialValues: InitialAutomationFormValues = {},
+  draft: AutomationAgentDraft
+): string | null {
+  if (!initialValues.model) return null;
+  const harness = initialValues.harness ?? harnessForModel(initialValues.model);
+  const runnability = assessRunnability(
+    harness,
+    initialValues.model,
+    selectedProviderAuthModes(initialValues.providerSelections ?? {})
+  );
+  if (runnability.runnable) return null;
+  const reasons = runnability.reasons.map((reason) => reason.message).join(" ");
+  return (
+    `This setup cannot run as saved (${getHarnessLabel(harness)}, ` +
+    `${formatModelNameLower(initialValues.model)}): ${reasons} ` +
+    `The form now uses ${getHarnessLabel(draft.harness)}; check it before saving.`
+  );
+}
+
 export function requiresRepositoryContext(triggerType: AutomationTriggerType): boolean {
   return triggerType === "github_event" || triggerType === "linear_event";
 }
@@ -168,6 +200,7 @@ function getConditionRequirementError(
 function findInvalidEvaluation({
   mode,
   draft,
+  resolvedModel,
   modelAvailability,
   repositoryCount,
   environmentCount,
@@ -175,6 +208,7 @@ function findInvalidEvaluation({
 }: {
   mode: AutomationFormMode;
   draft: AutomationFormDraft;
+  resolvedModel: string;
   modelAvailability: HarnessModelAvailability;
   repositoryCount: number;
   environmentCount: number;
@@ -183,6 +217,16 @@ function findInvalidEvaluation({
   if (modelAvailability.status === "loading") return { valid: false, reason: "models-loading" };
   if (modelAvailability.status === "unavailable") {
     return { valid: false, reason: "no-compatible-model" };
+  }
+  // The server answers 422 for a setup that cannot run; never offer to save one.
+  if (
+    !assessRunnability(
+      draft.agent.harness,
+      resolvedModel,
+      selectedProviderAuthModes(draft.providerSelections)
+    ).runnable
+  ) {
+    return { valid: false, reason: "not-runnable" };
   }
   if (!draft.name.trim() || !draft.instructions.trim()) {
     return { valid: false, reason: "required-fields" };
@@ -304,6 +348,7 @@ export function evaluateAutomationForm({
   const invalidEvaluation = findInvalidEvaluation({
     mode,
     draft,
+    resolvedModel,
     modelAvailability,
     repositoryCount: targets.repositories.length,
     environmentCount: targets.environmentIds.length,
