@@ -38,11 +38,12 @@
     "images": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["control-plane", "web", "teams-bot"],
+      "required": ["control-plane", "web", "teams-bot", "github-bot"],
       "properties": {
         "control-plane": { "$ref": "#/$defs/image" },
         "web": { "$ref": "#/$defs/image" },
-        "teams-bot": { "$ref": "#/$defs/image" }
+        "teams-bot": { "$ref": "#/$defs/image" },
+        "github-bot": { "$ref": "#/$defs/image" }
       }
     },
     "sandbox": {
@@ -70,7 +71,7 @@
       "description": "Components to move even when their paths in deploy/sf/components.json did not change.",
       "type": "array",
       "uniqueItems": true,
-      "items": { "enum": ["control-plane", "web", "teams-bot"] }
+      "items": { "enum": ["control-plane", "web", "teams-bot", "github-bot"] }
     },
     "allowDowngrade": {
       "description": "Let promote.py move to a sourceSha that is not a descendant of the deployed one.",
@@ -85,7 +86,7 @@
       "properties": {
         "repository": {
           "type": "string",
-          "pattern": "^ghcr\\.io/(bramdokman|providenceit)/open-inspect-(control-plane|web|teams-bot)$"
+          "pattern": "^ghcr\\.io/(bramdokman|providenceit)/open-inspect-(control-plane|web|teams-bot|github-bot)$"
         },
         "tag": {
           "type": "string",

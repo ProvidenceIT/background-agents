@@ -21,7 +21,7 @@
 
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { CACHE_ENTRIES_SCHEMA_SQL } from "../db/sql-cache-store";
+import { CACHE_ENTRIES_SCHEMA_SQL } from "@open-inspect/shared/cache-store";
 import type { Logger } from "../logger";
 import { ensurePrivateDirectory } from "./private-paths";
 import { createNodeSqlDatabase, type NodeSqlDatabase } from "./sqlite-database";
