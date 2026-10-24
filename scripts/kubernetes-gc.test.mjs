@@ -249,3 +249,29 @@ for (const ignoreSelector of [false, true]) {
     assert.deepEqual(calls, ["delete pod oi-f2-x"]);
   });
 }
+
+test("lists larger than one command-line argument still collect", () => {
+  // Real lists carry managedFields and long annotations; past 128 KiB a list
+  // passed as a jq argument fails with "Argument list too long", and rule 1
+  // and 2 then silently do nothing.
+  const padding = "x".repeat(4096);
+  const claims = Array.from({ length: 60 }, (_, i) =>
+    claim(`big${i}`, {
+      createdAgo: 2 * HOUR_MS,
+      annotations: { "example.test/padding": padding },
+    })
+  );
+  assert.ok(JSON.stringify({ items: claims }).length > 128 * 1024);
+  const calls = runGc({
+    claims,
+    pods: [
+      sandboxPod("oi-ended-x", "ended", {
+        phase: "Failed",
+        startedAgo: 3 * HOUR_MS,
+        status: terminated(2 * HOUR_MS),
+      }),
+    ],
+  });
+  assert.ok(calls.includes("delete pod oi-ended-x"), calls.join("\n"));
+  assert.equal(calls.filter((c) => c.startsWith("delete pvc")).length, 60);
+});
