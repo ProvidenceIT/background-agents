@@ -96,11 +96,16 @@ export const AUTH_HOME_MAX_CONCURRENT_LIMIT = 32;
 
 /**
  * Providers a home can carry: the subscription providers whose CLI reads a
- * credential file from the home, plus the Z.AI Coding Plan, whose key the
- * sandbox sources from the home's `env` file. Model ids name the provider
- * as their first path segment (`zai-coding-plan/glm-5.3`).
+ * credential file from the home, the Z.AI Coding Plan, whose key the sandbox
+ * sources from the home's `env` file, and Google Antigravity, whose access
+ * token is pushed into the home (`agy/access.json`). Model ids name
+ * the provider as their first path segment (`zai-coding-plan/glm-5.3`).
  */
-export const AUTH_HOME_PROVIDER_IDS = [...SUBSCRIPTION_PROVIDER_IDS, "zai-coding-plan"] as const;
+export const AUTH_HOME_PROVIDER_IDS = [
+  ...SUBSCRIPTION_PROVIDER_IDS,
+  "zai-coding-plan",
+  "antigravity",
+] as const;
 export const authHomeProviderIdSchema = z.enum(AUTH_HOME_PROVIDER_IDS);
 export type AuthHomeProviderId = z.infer<typeof authHomeProviderIdSchema>;
 

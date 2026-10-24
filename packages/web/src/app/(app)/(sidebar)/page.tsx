@@ -34,7 +34,7 @@ import {
   reconcileProviderSelectionsForHarness,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
-import { resolveHarnessModelSelection } from "@/lib/session-harness";
+import { harnessForModelPick, resolveHarnessModelSelection } from "@/lib/session-harness";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
 import {
@@ -227,11 +227,17 @@ export default function Home() {
         // Storage migration must not block provider-selection hydration.
       }
     }
-    setStoredPreference({
-      model: storedModel ?? DEFAULT_MODEL,
-      reasoningEffort: storedReasoningEffort ?? undefined,
-    });
-    setHarness(getValidHarnessOrDefault(localStorage.getItem(LAST_SELECTED_HARNESS_STORAGE_KEY)));
+    const model = storedModel ?? DEFAULT_MODEL;
+    setStoredPreference({ model, reasoningEffort: storedReasoningEffort ?? undefined });
+    // A model pinned to another harness drives it: a stored OpenCode harness
+    // with an Anthropic model gives way to Claude Agent, so a first visit on
+    // the default model lands there too.
+    setHarness(
+      harnessForModelPick(
+        getValidHarnessOrDefault(localStorage.getItem(LAST_SELECTED_HARNESS_STORAGE_KEY)),
+        model
+      )
+    );
     if (storedProviderSelections) setProviderSelections(storedProviderSelections);
     setProviderSelectionsHydrated(true);
     hasHydratedModelPreferencesRef.current = true;
@@ -277,6 +283,7 @@ export default function Home() {
         enabledModels,
         enabledModelOptions,
         loading: loadingEnabledModels,
+        switchable: true,
       }),
     [
       enabledModelOptions,
@@ -340,11 +347,19 @@ export default function Home() {
     }
   }, []);
 
+  const handleHarnessChange = useCallback((nextHarness: HarnessId) => {
+    setHarness(nextHarness);
+    localStorage.setItem(LAST_SELECTED_HARNESS_STORAGE_KEY, nextHarness);
+  }, []);
+
+  // Picking a model another harness is pinned to switches to that harness.
   const handleModelChange = useCallback(
     (model: ValidModel) => {
       saveModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
+      const nextHarness = harnessForModelPick(harness, model);
+      if (nextHarness !== harness) handleHarnessChange(nextHarness);
     },
-    [saveModelPreferenceDraft]
+    [handleHarnessChange, harness, saveModelPreferenceDraft]
   );
 
   const handleReasoningEffortChange = useCallback(
@@ -354,10 +369,33 @@ export default function Home() {
     [saveModelPreferenceDraft, selectedModel]
   );
 
-  const handleHarnessChange = useCallback((nextHarness: HarnessId) => {
-    setHarness(nextHarness);
-    localStorage.setItem(LAST_SELECTED_HARNESS_STORAGE_KEY, nextHarness);
-  }, []);
+  // Picking a harness keeps the model it resolves to, so a reload restores
+  // the pair instead of letting the old model pull the harness back.
+  const handleHarnessPick = useCallback(
+    (nextHarness: HarnessId) => {
+      handleHarnessChange(nextHarness);
+      const preference = modelPreferenceDraft ?? storedPreference;
+      const next = resolveHarnessModelSelection({
+        harness: nextHarness,
+        preference,
+        enabledModels,
+        enabledModelOptions,
+        loading: loadingEnabledModels,
+      });
+      if (next.availability.status === "available" && next.model !== preference.model) {
+        saveModelPreferenceDraft({ model: next.model, reasoningEffort: next.reasoningEffort });
+      }
+    },
+    [
+      enabledModelOptions,
+      enabledModels,
+      handleHarnessChange,
+      loadingEnabledModels,
+      modelPreferenceDraft,
+      saveModelPreferenceDraft,
+      storedPreference,
+    ]
+  );
 
   const handleProviderSelectionChange = useCallback(
     (provider: SubscriptionProviderId, selection: ProviderAuthSelection | undefined) => {
@@ -483,7 +521,7 @@ export default function Home() {
       reasoningEffort={reasoningEffort}
       setReasoningEffort={handleReasoningEffortChange}
       harness={harness}
-      setHarness={handleHarnessChange}
+      setHarness={handleHarnessPick}
       prompt={prompt}
       handlePromptChange={(value) => {
         setPrompt(value);

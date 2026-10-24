@@ -11,7 +11,11 @@ import {
 } from "@open-inspect/shared";
 import type { ModelCategory } from "@open-inspect/shared/models";
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
-import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
+import {
+  filterModelOptionsForHarness,
+  harnessForModelPick,
+  shouldClearModelForHarness,
+} from "@/lib/session-harness";
 import { HarnessSelect } from "./harness-select";
 import { GitHubHarnessWarning } from "./github-harness-warning";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -52,7 +56,12 @@ export function GlobalSettingsSection({
 }) {
   const [model, setModel] = useState(settings?.defaults?.model ?? "");
   const [effort, setEffort] = useState(settings?.defaults?.reasoningEffort ?? "");
-  const [harness, setHarness] = useState<HarnessId>(settings?.defaults?.harness ?? DEFAULT_HARNESS);
+  const [harness, setHarness] = useState<HarnessId>(
+    harnessForModelPick(
+      settings?.defaults?.harness ?? DEFAULT_HARNESS,
+      settings?.defaults?.model ?? ""
+    )
+  );
   const [autoReviewOnOpen, setAutoReviewOnOpen] = useState(
     settings?.defaults?.autoReviewOnOpen ?? true
   );
@@ -89,7 +98,13 @@ export function GlobalSettingsSection({
       if (settings) {
         setModel(settings.defaults?.model ?? "");
         setEffort(settings.defaults?.reasoningEffort ?? "");
-        setHarness(settings.defaults?.harness ?? DEFAULT_HARNESS);
+        // A saved model pinned to another harness (Anthropic's) runs there.
+        setHarness(
+          harnessForModelPick(
+            settings.defaults?.harness ?? DEFAULT_HARNESS,
+            settings.defaults?.model ?? ""
+          )
+        );
         setAutoReviewOnOpen(settings.defaults?.autoReviewOnOpen ?? true);
         setEnabledRepos(settings.enabledRepos ?? []);
         setRepoScopeMode(settings.enabledRepos === undefined ? "all" : "selected");

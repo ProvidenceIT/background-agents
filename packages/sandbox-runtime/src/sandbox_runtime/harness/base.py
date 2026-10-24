@@ -33,6 +33,8 @@ class HarnessId(StrEnum):
     OPENCODE = "opencode"
     CLAUDE = "claude"
     CODEX = "codex"
+    GROK = "grok"
+    AGY = "agy"
 
 
 DEFAULT_HARNESS_ID = HarnessId.OPENCODE
@@ -149,6 +151,56 @@ class TurnOutcome:
         limit: SubscriptionLimit | None = None,
     ) -> TurnOutcome:
         return cls(success=False, error=error, message_cost_usd=message_cost_usd, limit=limit)
+
+
+# Anthropic models are served only by the Claude harness (the control plane
+# pins them there); every other harness refuses one before it starts a turn.
+ANTHROPIC_MODEL_REFUSAL: Final = (
+    "Anthropic models run only on the Claude Agent harness; fork this session onto Claude Agent"
+)
+# A turn without a model fails rather than run on a provider nobody picked.
+NO_MODEL_SELECTED: Final = "No model selected for this session"
+
+
+@dataclass(frozen=True)
+class CliHarnessConfig:
+    """What the supervisor hands a child-per-turn CLI harness (grok, agy).
+
+    The harness runs one CLI child per turn through ``cli_process`` and reads
+    its credential through ``pushed_token``; it never stages files itself
+    beyond what its own module documents.
+    """
+
+    # The repository checkout the child runs in (its cwd).
+    workdir: Path
+    # Per-sandbox harness directory: tool config, prompt files, attachments.
+    config_dir: Path
+    # The CLI's own state directory: ``GROK_HOME`` for grok, ``HOME`` for agy.
+    cli_home: Path
+    # ``provider/model`` used when a prompt carries no model.
+    default_model: str
+    # Memory notes to hand the child as standing instructions; ``None`` when empty.
+    memory_text: str | None = None
+    # The 0600 ``codex_tools`` config the ``oi`` MCP server reads; ``None`` without tools.
+    tool_config_path: Path | None = None
+    # The executable, by name on ``PATH`` or by path (tests point it at a fake).
+    binary: str = ""
+
+
+@dataclass(frozen=True)
+class GrokHarnessConfig(CliHarnessConfig):
+    """``CliHarnessConfig`` for the SuperGrok CLI; ``cli_home`` is ``GROK_HOME``."""
+
+    default_model: str = "xai/grok-4.7-build-fast"
+    binary: str = "grok"
+
+
+@dataclass(frozen=True)
+class AgyHarnessConfig(CliHarnessConfig):
+    """``CliHarnessConfig`` for the Antigravity CLI; ``cli_home`` is the child's ``HOME``."""
+
+    default_model: str = "antigravity/gemini-4-argon"
+    binary: str = "agy"
 
 
 class HarnessStartError(RuntimeError):

@@ -79,7 +79,8 @@ export interface ResolveSessionAgentInput {
 /**
  * Resolve the model (label → user preference → config → env default), its
  * reasoning effort, and the harness that runs it. The harness follows the
- * model: the configured harness when it can run the model, else OpenCode.
+ * model: the configured harness when it can run the model, else the model's
+ * own harness (Claude Agent for Anthropic, else OpenCode).
  */
 export function resolveSessionAgentSettings(input: ResolveSessionAgentInput): {
   harness: HarnessId;

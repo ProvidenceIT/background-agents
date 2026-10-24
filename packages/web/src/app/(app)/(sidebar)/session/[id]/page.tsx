@@ -766,6 +766,9 @@ function useModelSelection(sessionState: SessionState, harness: HarnessId) {
         enabledModels,
         enabledModelOptions,
         loading: loadingEnabledModels,
+        // A legacy OpenCode session on an Anthropic model must not move to
+        // another provider unasked: its next turn waits for a fork or a pick.
+        holdPinnedElsewhere: modelPreferenceDraft === null && !!sessionState?.model,
       }),
     [
       enabledModelOptions,
@@ -775,6 +778,7 @@ function useModelSelection(sessionState: SessionState, harness: HarnessId) {
       modelPreferenceDraft,
       sessionModel,
       sessionReasoningEffort,
+      sessionState?.model,
     ]
   );
   const handleModelChange = useCallback((model: ValidModel) => {

@@ -15,6 +15,7 @@ from sandbox_runtime.harness.claude_env import (
     stream_silence_budget_seconds,
 )
 from sandbox_runtime.prompt_budgets import (
+    CODEX_INACTIVITY_TIMEOUT_SECONDS,
     INACTIVITY_TIMEOUT_MAX_SECONDS,
     INACTIVITY_TIMEOUT_MIN_SECONDS,
     OPENCODE_INACTIVITY_TIMEOUT_SECONDS,
@@ -47,6 +48,21 @@ class TestInactivityTimeout:
         assert opencode.inactivity_timeout_seconds == OPENCODE_INACTIVITY_TIMEOUT_SECONDS
         assert claude.inactivity_timeout_seconds == stream_silence_budget_seconds()
         assert claude.inactivity_timeout_seconds > bash_timeout_ceiling_seconds()
+
+    def test_the_cli_children_share_the_codex_budget(self, monkeypatch):
+        monkeypatch.delenv(SSE_INACTIVITY_TIMEOUT_ENV_VAR, raising=False)
+
+        # grok and agy, like codex exec, say nothing while a tool command runs.
+        for harness in (HarnessId.GROK, HarnessId.AGY):
+            limits = resolve_prompt_limits(MagicMock(), harness)
+            assert limits.inactivity_timeout_seconds == CODEX_INACTIVITY_TIMEOUT_SECONDS == 1200.0
+
+    def test_a_cli_child_budget_stays_within_the_shared_bounds(self, monkeypatch):
+        monkeypatch.setenv(SSE_INACTIVITY_TIMEOUT_ENV_VAR, "99999")
+
+        limits = resolve_prompt_limits(MagicMock(), HarnessId.GROK)
+
+        assert limits.inactivity_timeout_seconds == INACTIVITY_TIMEOUT_MAX_SECONDS
 
     def test_the_claude_budget_follows_the_ceiling_its_own_child_enforces(self, monkeypatch):
         """The regression this guards is the one that prompted it: a budget

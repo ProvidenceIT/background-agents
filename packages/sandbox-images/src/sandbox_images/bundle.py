@@ -91,6 +91,8 @@ def validate_toolchain(tools: dict[str, Any]) -> None:
         tools[name]
         for name in (
             "uv",
+            "grok",
+            "agy",
             "codeServer",
             "ttyd",
             "chrome",
@@ -101,9 +103,12 @@ def validate_toolchain(tools: dict[str, Any]) -> None:
         )
     ]
     archives.extend(tools["node"].values())
+    # agy's release path embeds its build id next to the version.
+    if not re.fullmatch(r"[0-9]+", tools["agy"].get("build", "")):
+        raise ValueError("agy must pin its release build id")
     for pin in archives:
         version(pin["version"])
-        if not re.fullmatch(r"[a-f0-9]{64}", pin["sha256"]):
+        if not re.fullmatch(r"[a-f0-9]{64}", pin.get("sha256", "")):
             raise ValueError("Downloaded image tools must have a SHA-256 pin")
     # The optional Docker variant installs pinned Debian packages, never a
     # convenience script or an unpinned apt repository.
@@ -220,6 +225,8 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> PackedBundle:
         for name, key in (
             ("NODE", "node"),
             ("UV", "uv"),
+            ("GROK", "grok"),
+            ("AGY", "agy"),
             ("CODE_SERVER", "codeServer"),
             ("TTYD", "ttyd"),
             ("FLUXBOX", "fluxbox"),
@@ -231,6 +238,7 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> PackedBundle:
             pin = toolchain[key][plan["target"]["node"]] if key == "node" else toolchain[key]
             variables[f"{name}_VERSION"] = pin["version"]
             variables[f"{name}_SHA256"] = pin["sha256"]
+        variables["AGY_BUILD"] = toolchain["agy"]["build"]
         for package in DOCKER_PACKAGES:
             pin = toolchain["docker"][package]
             variables[f"DOCKER_{package.upper()}_FILE"] = pin["file"]

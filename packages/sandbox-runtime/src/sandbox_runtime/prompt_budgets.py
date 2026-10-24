@@ -38,6 +38,7 @@ OPENCODE_INACTIVITY_TIMEOUT_SECONDS = 300.0
 # ``codex exec --json`` prints an item when a command starts and again when it
 # ends, and nothing in between: a long build or test run is silence. The
 # budget covers such a command; the prompt deadline still bounds the turn.
+# The grok and agy children stream the same way, so they share it.
 CODEX_INACTIVITY_TIMEOUT_SECONDS = 1200.0
 INACTIVITY_TIMEOUT_MIN_SECONDS = 5.0
 INACTIVITY_TIMEOUT_MAX_SECONDS = 3600.0
@@ -61,7 +62,7 @@ def _inactivity_bounds(harness: HarnessId) -> tuple[float, float, float | None]:
         case HarnessId.CLAUDE:
             budget = stream_silence_budget_seconds()
             return budget, budget, None
-        case HarnessId.CODEX:
+        case HarnessId.CODEX | HarnessId.GROK | HarnessId.AGY:
             return (
                 CODEX_INACTIVITY_TIMEOUT_SECONDS,
                 INACTIVITY_TIMEOUT_MIN_SECONDS,

@@ -114,6 +114,7 @@ export function AutomationForm({
         enabledModels,
         enabledModelOptions,
         loading: loadingModels,
+        switchable: true,
       }),
     [agent.harness, agent.model, enabledModelOptions, enabledModels, loadingModels]
   );

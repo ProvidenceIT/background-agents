@@ -38,5 +38,7 @@ describe("memory tool specs", () => {
     expect(harnessMemoryToolName("opencode", "memory_read")).toBe("memory_read");
     expect(harnessMemoryToolName("claude", "memory_read")).toBe("mcp__oi__memory_read");
     expect(harnessMemoryToolName("codex", "memory_search")).toBe("mcp__oi__memory_search");
+    expect(harnessMemoryToolName("grok", "memory_write")).toBe("oi__memory_write");
+    expect(harnessMemoryToolName("agy", "memory_read")).toBe("memory_read");
   });
 });

@@ -286,6 +286,23 @@ export function AnthropicIcon({ className, ...props }: IconProps) {
   );
 }
 
+export function AntigravityIcon({ className, ...props }: IconProps) {
+  return (
+    <svg
+      role="img"
+      className={className}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="currentColor"
+      {...props}
+    >
+      <title>Antigravity</title>
+      <path d="M12 2.5 22 21.5h-4.5L12 10.75 6.5 21.5H2Z" />
+      <path d="M12 15.5 14.25 20h-4.5Z" opacity="0.45" />
+    </svg>
+  );
+}
+
 export function OpenCodeIcon({ className, ...props }: IconProps) {
   return (
     <svg

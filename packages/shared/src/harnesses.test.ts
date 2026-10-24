@@ -6,6 +6,8 @@ import {
   checkHarnessCompatibility,
   filterModelsForHarness,
   getValidHarnessOrDefault,
+  MODEL_PROVIDER_HARNESS,
+  harnessForModel,
   harnessSupportsModel,
   harnessSupportsProviderAuth,
   isValidHarness,
@@ -17,7 +19,7 @@ import { VALID_MODELS } from "./models";
 
 describe("harness catalog", () => {
   it("lists only harnesses the runtime can boot, built-in first", () => {
-    expect(HARNESS_IDS).toEqual(["opencode", "claude", "codex"]);
+    expect(HARNESS_IDS).toEqual(["opencode", "claude", "codex", "grok", "agy"]);
     expect(DEFAULT_HARNESS).toBe("opencode");
   });
 
@@ -35,6 +37,35 @@ describe("harness catalog", () => {
     });
   });
 
+  it("runs SuperGrok and Antigravity from a subscription home only", () => {
+    expect(HARNESS_CATALOG.grok).toMatchObject({
+      label: "SuperGrok",
+      modelFamilies: ["xai"],
+      defaultModel: "xai/grok-4.7-build-fast",
+      providerAuth: { xai: ["auth_home"] },
+    });
+    expect(HARNESS_CATALOG.agy).toMatchObject({
+      label: "Antigravity",
+      modelFamilies: ["antigravity"],
+      defaultModel: "antigravity/gemini-4-argon",
+      providerAuth: { antigravity: ["auth_home"] },
+    });
+  });
+
+  it("pins Anthropic to Claude Agent and Antigravity to agy", () => {
+    expect(MODEL_PROVIDER_HARNESS).toEqual({ anthropic: "claude", antigravity: "agy" });
+  });
+
+  it("starts every harness with a default model it can run", () => {
+    for (const harness of HARNESS_IDS) {
+      const model = (HARNESS_CATALOG[harness] as { defaultModel?: string }).defaultModel;
+      if (model) {
+        expect(VALID_MODELS).toContain(model);
+        expect(harnessSupportsModel(harness, model)).toBe(true);
+      }
+    }
+  });
+
   it("resolves an absent or unknown harness to the default", () => {
     expect(getValidHarnessOrDefault(undefined)).toBe("opencode");
     expect(getValidHarnessOrDefault(null)).toBe("opencode");
@@ -49,10 +80,40 @@ describe("harness catalog", () => {
 });
 
 describe("harnessSupportsModel", () => {
-  it("lets OpenCode run every catalog model", () => {
+  it("lets OpenCode run every catalog model outside a pinned provider", () => {
     for (const model of VALID_MODELS) {
-      expect(harnessSupportsModel("opencode", model)).toBe(true);
+      const pinned = model.startsWith("anthropic/") || model.startsWith("antigravity/");
+      expect(harnessSupportsModel("opencode", model)).toBe(!pinned);
     }
+    expect(harnessSupportsModel("opencode", "xai/grok-4.7")).toBe(true);
+    expect(harnessSupportsModel("opencode", "openai/gpt-6.1-sol")).toBe(true);
+  });
+
+  it("refuses Anthropic models, prefixed or bare, on every harness but Claude Agent", () => {
+    for (const harness of HARNESS_IDS) {
+      expect(harnessSupportsModel(harness, "anthropic/claude-opus-5-5")).toBe(harness === "claude");
+      expect(harnessSupportsModel(harness, "claude-sonnet-4-6")).toBe(harness === "claude");
+    }
+  });
+
+  it("restricts SuperGrok to the models the grok CLI lists", () => {
+    expect(harnessSupportsModel("grok", "xai/grok-4.7-build-fast")).toBe(true);
+    expect(harnessSupportsModel("grok", "xai/grok-4.7")).toBe(true);
+    expect(harnessSupportsModel("grok", "xai/grok-build-0.1")).toBe(false);
+    expect(harnessSupportsModel("grok", "openai/gpt-6.1-sol")).toBe(false);
+    expect(harnessSupportsModel("grok", "anthropic/claude-opus-5-5")).toBe(false);
+  });
+
+  it("restricts Antigravity to Antigravity models", () => {
+    expect(harnessSupportsModel("agy", "antigravity/gemini-4-argon")).toBe(true);
+    expect(harnessSupportsModel("agy", "anthropic/claude-opus-5-5")).toBe(false);
+    expect(harnessSupportsModel("agy", "claude-sonnet-4-6")).toBe(false);
+    expect(harnessSupportsModel("agy", "openai/gpt-6.1-sol")).toBe(false);
+    expect(harnessSupportsModel("agy", "xai/grok-4.7")).toBe(false);
+  });
+
+  it("catalogs no Claude model behind Antigravity", () => {
+    expect(VALID_MODELS.filter((model) => model.startsWith("antigravity/claude"))).toEqual([]);
   });
 
   it("restricts the Claude harness to Anthropic models", () => {
@@ -75,7 +136,21 @@ describe("harnessSupportsModel", () => {
     const filtered = filterModelsForHarness("claude", VALID_MODELS);
     expect(filtered.length).toBeGreaterThan(0);
     expect(filtered.every((model) => model.startsWith("anthropic/"))).toBe(true);
-    expect(filterModelsForHarness("opencode", VALID_MODELS)).toEqual([...VALID_MODELS]);
+    expect(filterModelsForHarness("opencode", VALID_MODELS)).toEqual(
+      VALID_MODELS.filter(
+        (model) => !model.startsWith("anthropic/") && !model.startsWith("antigravity/")
+      )
+    );
+  });
+});
+
+describe("harnessForModel", () => {
+  it("runs a pinned provider on its harness and everything else on the built-in harness", () => {
+    expect(harnessForModel("anthropic/x")).toBe("claude");
+    expect(harnessForModel("claude-sonnet-4-6")).toBe("claude");
+    expect(harnessForModel("antigravity/gemini-4-argon")).toBe("agy");
+    expect(harnessForModel("xai/grok-4.7")).toBe("opencode");
+    expect(harnessForModel("openai/gpt-6.1-sol")).toBe("opencode");
   });
 });
 
@@ -85,9 +160,15 @@ describe("resolveHarnessForModel", () => {
     expect(resolveHarnessForModel("opencode", "openai/gpt-5.5")).toBe("opencode");
   });
 
-  it("keeps Codex for an OpenAI model and falls back to the built-in harness otherwise", () => {
+  it("keeps Codex for an OpenAI model and falls back to the model's harness otherwise", () => {
     expect(resolveHarnessForModel("codex", "openai/gpt-6-sol")).toBe("codex");
-    expect(resolveHarnessForModel("codex", "anthropic/claude-sonnet-4-6")).toBe("opencode");
+    expect(resolveHarnessForModel("codex", "anthropic/x")).toBe("claude");
+    expect(resolveHarnessForModel("codex", "xai/grok-4.7")).toBe(DEFAULT_HARNESS);
+  });
+
+  it("moves a pinned model off OpenCode", () => {
+    expect(resolveHarnessForModel("opencode", "anthropic/claude-sonnet-4-6")).toBe("claude");
+    expect(resolveHarnessForModel("grok", "antigravity/gemini-4-argon")).toBe("agy");
   });
 
   it("falls back to the built-in harness for a model the configured harness cannot run", () => {
@@ -95,16 +176,17 @@ describe("resolveHarnessForModel", () => {
     expect(resolveHarnessForModel("claude", "xai/grok-4.6")).toBe(DEFAULT_HARNESS);
   });
 
-  it("resolves an unconfigured harness to the built-in harness for every model", () => {
+  it("resolves an unconfigured harness to the model's harness", () => {
+    expect(resolveHarnessForModel(undefined, "anthropic/x")).toBe("claude");
     for (const model of VALID_MODELS) {
-      expect(resolveHarnessForModel(undefined, model)).toBe(DEFAULT_HARNESS);
+      expect(resolveHarnessForModel(undefined, model)).toBe(harnessForModel(model));
     }
   });
 });
 
 describe("harnessSupportsProviderAuth", () => {
   it("passes resolver-assigned legacy mode through on every harness", () => {
-    expect(harnessSupportsProviderAuth("opencode", "anthropic", "legacy_scoped_oauth")).toBe(true);
+    expect(harnessSupportsProviderAuth("opencode", "openai", "legacy_scoped_oauth")).toBe(true);
     expect(harnessSupportsProviderAuth("claude", "anthropic", "legacy_scoped_oauth")).toBe(true);
     expect(harnessSupportsProviderAuth("claude", "openai", "legacy_scoped_oauth")).toBe(true);
   });
@@ -117,15 +199,39 @@ describe("harnessSupportsProviderAuth", () => {
     ).toMatchObject({ code: "provider_auth" });
   });
 
-  it("only the Claude harness may select an Anthropic provider account", () => {
+  it("selects Anthropic auth on the Claude harness only", () => {
     expect(harnessSupportsProviderAuth("opencode", "anthropic", "provider_account")).toBe(false);
-    expect(harnessSupportsProviderAuth("opencode", "anthropic", "api_key")).toBe(true);
+    expect(harnessSupportsProviderAuth("opencode", "anthropic", "api_key")).toBe(false);
+    expect(harnessSupportsProviderAuth("opencode", "anthropic", "auth_home")).toBe(false);
     expect(harnessSupportsProviderAuth("claude", "anthropic", "provider_account")).toBe(true);
+  });
+
+  it("runs SuperGrok and Antigravity only on a subscription home", () => {
+    expect(harnessSupportsProviderAuth("grok", "xai", "auth_home")).toBe(true);
+    expect(harnessSupportsProviderAuth("grok", "xai", "api_key")).toBe(false);
+    expect(harnessSupportsProviderAuth("grok", "xai", "legacy_scoped_oauth")).toBe(false);
+    expect(harnessSupportsProviderAuth("agy", "antigravity", "auth_home")).toBe(true);
+    expect(harnessSupportsProviderAuth("agy", "antigravity", "api_key")).toBe(false);
   });
 
   it("keeps OpenAI and xAI provider accounts on OpenCode", () => {
     expect(harnessSupportsProviderAuth("opencode", "openai", "provider_account")).toBe(true);
     expect(harnessSupportsProviderAuth("opencode", "xai", "provider_account")).toBe(true);
+  });
+
+  it("runs xAI on a subscription home only through SuperGrok", () => {
+    // The home holds a pushed SuperGrok token that only the grok CLI reads.
+    expect(harnessSupportsProviderAuth("opencode", "xai", "auth_home")).toBe(false);
+    expect(checkHarnessCompatibility("opencode", "xai/grok-4.7", { xai: "auth_home" })).toEqual({
+      code: "provider_auth",
+      message:
+        "The OpenCode harness cannot run xai on a subscription home; use the SuperGrok harness.",
+    });
+    expect(checkHarnessCompatibility("grok", "xai/grok-4.7", { xai: "auth_home" })).toBeNull();
+  });
+
+  it("lets OpenCode run every xAI model on a key, the SuperGrok defaults included", () => {
+    expect(harnessSupportsModel("opencode", "xai/grok-4.7-build-fast")).toBe(true);
   });
 
   it("selects no auth mode for a provider the harness has no row for", () => {
@@ -141,8 +247,8 @@ describe("reconcileProviderSelectionsForHarness", () => {
 
   it("drops a selection the harness runs the provider without", () => {
     expect(
-      reconcileProviderSelectionsForHarness("opencode", { anthropic: account, openai: account })
-    ).toEqual({ openai: account });
+      reconcileProviderSelectionsForHarness("codex", { openai: account, xai: account })
+    ).toEqual({ xai: account });
   });
 
   it("keeps selections for providers the harness does not run", () => {
@@ -153,9 +259,8 @@ describe("reconcileProviderSelectionsForHarness", () => {
   it("returns the same object when every selection is usable", () => {
     const selections = { anthropic: account };
     expect(reconcileProviderSelectionsForHarness("claude", selections)).toBe(selections);
-    expect(
-      reconcileProviderSelectionsForHarness("opencode", { anthropic: { mode: "api_key" } })
-    ).toEqual({ anthropic: { mode: "api_key" } });
+    const anthropic = { anthropic: account };
+    expect(reconcileProviderSelectionsForHarness("opencode", anthropic)).toBe(anthropic);
   });
 });
 
@@ -173,7 +278,10 @@ describe("selectedProviderAuthModes", () => {
 
 describe("checkHarnessCompatibility", () => {
   it("accepts a compatible harness, model and auth", () => {
-    expect(checkHarnessCompatibility("opencode", "anthropic/claude-sonnet-4-6")).toBeNull();
+    expect(checkHarnessCompatibility("opencode", "openai/gpt-6.1-sol")).toBeNull();
+    expect(
+      checkHarnessCompatibility("grok", "xai/grok-4.7-build-fast", { xai: "auth_home" })
+    ).toBeNull();
     expect(
       checkHarnessCompatibility("claude", "anthropic/claude-sonnet-4-6", {
         anthropic: "provider_account",
@@ -188,12 +296,23 @@ describe("checkHarnessCompatibility", () => {
     expect(result?.message).toContain("Claude Agent");
   });
 
+  it("points an Anthropic model on another harness to Claude Agent", () => {
+    expect(checkHarnessCompatibility("opencode", "anthropic/claude-sonnet-4-6")).toEqual({
+      code: "model",
+      message:
+        'Model "anthropic/claude-sonnet-4-6" cannot run on the OpenCode harness. It runs only on Claude Agent; fork this session onto Claude Agent.',
+    });
+  });
+
   it("rejects an auth mode the harness cannot select for the model's provider", () => {
-    const result = checkHarnessCompatibility("opencode", "anthropic/claude-sonnet-4-6", {
-      anthropic: "provider_account",
+    const result = checkHarnessCompatibility("opencode", "deepseek/deepseek-v4-pro", {
+      deepseek: "provider_account",
     });
     expect(result?.code).toBe("provider_auth");
     expect(result?.message).toContain("API key");
+    const grok = checkHarnessCompatibility("grok", "xai/grok-4.7", { xai: "provider_account" });
+    expect(grok?.code).toBe("provider_auth");
+    expect(grok?.message).toContain("subscription home");
   });
 
   it("ignores auth modes for providers the model does not use", () => {
@@ -214,7 +333,12 @@ describe("checkHarnessCompatibility", () => {
   it("refuses Codex on a model outside OpenAI", () => {
     expect(checkHarnessCompatibility("codex", "anthropic/claude-sonnet-4-6")).toEqual({
       code: "model",
-      message: 'Model "anthropic/claude-sonnet-4-6" cannot run on the Codex harness.',
+      message:
+        'Model "anthropic/claude-sonnet-4-6" cannot run on the Codex harness. It runs only on Claude Agent; fork this session onto Claude Agent.',
+    });
+    expect(checkHarnessCompatibility("codex", "xai/grok-4.7")).toEqual({
+      code: "model",
+      message: 'Model "xai/grok-4.7" cannot run on the Codex harness.',
     });
   });
 

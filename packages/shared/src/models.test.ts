@@ -49,7 +49,19 @@ const OPENAI_MODELS = [
   "openai/gpt-6-luna",
 ] as const;
 
-const XAI_MODELS = ["xai/grok-4.5", "xai/grok-4.6", "xai/grok-4.7", "xai/grok-build-0.1"] as const;
+const XAI_MODELS = [
+  "xai/grok-4.5",
+  "xai/grok-4.6",
+  "xai/grok-4.7",
+  "xai/grok-4.7-build-fast",
+  "xai/grok-build-0.1",
+] as const;
+
+const ANTIGRAVITY_MODELS = [
+  "antigravity/gemini-4-argon",
+  "antigravity/gemini-3.8-flash",
+  "antigravity/gpt-oss-120b",
+] as const;
 
 const ZEN_MODELS = [
   "opencode/kimi-k2.5",
@@ -172,6 +184,7 @@ describe("model utilities", () => {
       ...ANTHROPIC_MODELS,
       ...OPENAI_MODELS,
       ...XAI_MODELS,
+      ...ANTIGRAVITY_MODELS,
       ...ZEN_MODELS,
       ...GO_MODELS,
       ...ZAI_CODING_PLAN_MODELS,
@@ -340,6 +353,7 @@ describe("model utilities", () => {
   it("strictly derives subscription providers from canonical catalog routes", () => {
     expect(getSubscriptionProviderForModel("openai/gpt-5.6-sol")).toBe("openai");
     expect(getSubscriptionProviderForModel("xai/grok-4.6")).toBe("xai");
+    expect(getSubscriptionProviderForModel("antigravity/gemini-4-argon")).toBeNull();
     expect(getSubscriptionProviderForModel("anthropic/claude-sonnet-4-6")).toBe("anthropic");
     expect(getSubscriptionProviderForModel("deepseek/deepseek-v4-pro")).toBeNull();
   });
@@ -484,6 +498,14 @@ describe("model utilities", () => {
       default: "high",
     });
     expect(getReasoningConfig("xai/grok-build-0.1")).toBeUndefined();
+    expect(getReasoningConfig("antigravity/gemini-4-argon")).toEqual({
+      efforts: ["low", "medium", "high"],
+      default: "medium",
+    });
+    expect(getReasoningConfig("antigravity/gpt-oss-120b")).toEqual({
+      efforts: ["medium"],
+      default: "medium",
+    });
     expect(getReasoningConfig("deepseek/deepseek-v4-flash")).toBeUndefined();
   });
 
@@ -524,6 +546,8 @@ describe("model utilities", () => {
     expect(isValidReasoningEffort("xai/grok-4.5", "xhigh")).toBe(false);
     expect(isValidReasoningEffort("xai/grok-build-0.1", "high")).toBe(false);
     expect(isValidReasoningEffort("xai/grok-build-0.1", "xhigh")).toBe(false);
+    expect(isValidReasoningEffort("antigravity/gemini-3.8-flash", "low")).toBe(true);
+    expect(isValidReasoningEffort("antigravity/gpt-oss-120b", "high")).toBe(false);
     expect(isValidReasoningEffort("deepseek/deepseek-v4-pro", "high")).toBe(false);
     expect(isValidReasoningEffort("invalid", "high")).toBe(false);
     expect(isValidReasoningEffort("anthropic/claude-sonnet-4-5", "")).toBe(false);
@@ -540,6 +564,11 @@ describe("model utilities", () => {
       MODEL_OPTIONS.find((group) => group.category === "xAI / SuperGrok")?.models.map((m) => m.id)
     ).toEqual(XAI_MODELS);
     expect(
+      MODEL_OPTIONS.find((group) => group.category === "Google Antigravity")?.models.map(
+        (m) => m.id
+      )
+    ).toEqual(ANTIGRAVITY_MODELS);
+    expect(
       MODEL_OPTIONS.find((group) => group.category === "OpenCode Zen")?.models.map((m) => m.id)
     ).toEqual(ZEN_MODELS);
     expect(
@@ -555,6 +584,7 @@ describe("model utilities", () => {
     expect(DEFAULT_ENABLED_MODELS).toEqual([...ANTHROPIC_MODELS, ...OPENAI_MODELS]);
     for (const optInModel of [
       ...XAI_MODELS,
+      ...ANTIGRAVITY_MODELS,
       ...ZEN_MODELS,
       ...GO_MODELS,
       ...ZAI_CODING_PLAN_MODELS,

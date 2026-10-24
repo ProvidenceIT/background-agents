@@ -701,6 +701,34 @@ def test_supervisor_installs_codex_skills_where_codex_discovers_them(tmp_path):
     assert materializer.extra_collision_roots == (Path("/etc/codex/skills"),)
 
 
+@pytest.mark.parametrize(
+    ("harness", "destination"),
+    [
+        ("grok", Path(".openinspect") / "grok" / "home" / "skills"),
+        ("agy", Path(".gemini") / "config" / "skills"),
+    ],
+)
+def test_supervisor_installs_cli_skills_where_each_cli_discovers_them(
+    tmp_path, harness, destination
+):
+    environment = {
+        "CONTROL_PLANE_URL": "https://control.example",
+        "HOME": str(tmp_path / "home"),
+        "SF_AUTH_HOME": str(tmp_path / "auth"),
+        "SESSION_CONFIG": json.dumps({"session_id": "session-1", "harness": harness}),
+    }
+
+    with patch.dict("os.environ", environment, clear=True):
+        supervisor = build_supervisor(asyncio.Event())
+
+    materializer = supervisor.managed_skills
+    assert materializer is not None
+    assert materializer.destination == tmp_path / "home" / destination
+    # The Codex invocation policy and Codex skill roots are Codex's alone.
+    assert materializer.write_codex_invocation_policy is False
+    assert materializer.extra_collision_roots == ()
+
+
 def test_supervisor_checks_codex_home_skills_for_collisions(tmp_path):
     environment = {
         "CONTROL_PLANE_URL": "https://control.example",

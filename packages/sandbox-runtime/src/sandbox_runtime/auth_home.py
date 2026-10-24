@@ -4,8 +4,10 @@ The control plane mounts the home at ``$SF_AUTH_HOME`` and lists the
 providers it carries in ``$SF_AUTH_HOME_PROVIDERS``. The boot report states
 whether the mount is there, those providers, and when the Claude token
 expires (``claude/expires_at``, written next to the token when it is minted).
-For a Codex login pool it adds slot counts and names (never a login). It never
-opens a token or reports any other file.
+For a Codex login pool it adds slot counts and names (never a login). For a
+pushed SuperGrok or Antigravity token it adds the token's remaining life, the
+push's age and the account tag, read from ``<cli>/access.json``; that is the
+only token file it opens, and it never reports a value from it.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from . import pushed_token
 from .boot_events import REDACTED_VALUE
 from .harness import claude_pool, codex_pool
 from .harness.claude_env import (
@@ -36,7 +39,11 @@ _MAX_EXPIRES_AT_CHARS = 32
 
 
 def auth_home_boot_report(environ: Mapping[str, str] = os.environ) -> dict[str, Any] | None:
-    """``{present, providers, claude_expires_at}``, or ``None`` when no home is expected."""
+    """``{present, providers, claude_expires_at}``, or ``None`` when no home is expected.
+
+    ``pushed_credentials`` maps ``grok``/``agy`` to ``pushed_token.boot_status``
+    for each CLI the home is enrolled for or has a directory for.
+    """
     home = environ.get(AUTH_HOME_ENV_VAR)
     if not home:
         return None
@@ -59,6 +66,13 @@ def auth_home_boot_report(environ: Mapping[str, str] = os.environ) -> dict[str, 
         report["claude_pool_slots"] = len(slots)
         report["claude_expires_at"] = min(known)[1] if known else None
     report.update(_codex_pool_report(root))
+    pushed = {
+        cli: pushed_token.boot_status(root, cli)
+        for cli, spec in pushed_token.PUSHED_CLIS.items()
+        if spec.provider in providers or (root / spec.directory).is_dir()
+    }
+    if pushed:
+        report["pushed_credentials"] = pushed
     return report
 
 
@@ -137,6 +151,8 @@ def _read_expires_at(path: Path) -> int | str | None:
 _AUTH_HOME_ENV_FILE = "env"
 # Shorter values are not credentials and would redact ordinary words.
 _MIN_SECRET_CHARS = 8
+# Pushed access tokens kept after a newer push replaced them, per file.
+_PUSHED_TOKENS_KEPT = 16
 # A Claude subscription token has this shape whether or not it is the one in
 # the home (a stale copy, one pasted into a prompt).
 _CLAUDE_OAUTH_TOKEN = re.compile(r"sk-ant-oat01-[A-Za-z0-9_-]+")
@@ -150,13 +166,20 @@ class AuthHomeSecretRedactor:
     $SF_AUTH_HOME/...``). Tool output becomes session events the control
     plane stores, so every outbound event is scrubbed of the values the home
     holds now: the Claude token, the ``env`` file's values and every string
-    in Codex's ``auth.json`` and in every Codex pool slot's, plus anything
-    shaped like a Claude token. The files are re-read only when they change.
+    in Codex's ``auth.json`` and in every Codex pool slot's, the pushed
+    SuperGrok and Antigravity access tokens, plus anything shaped like a
+    Claude token. The files are re-read only when they change.
+
+    A pushed token stays redacted after the next push replaces it: it is
+    valid until it expires, and the CLIs' own copies in the pod lag behind
+    the push.
     """
 
     def __init__(self, home: Path) -> None:
         self._home = home
         self._cache: dict[str, tuple[tuple[int, int] | None, tuple[str, ...]]] = {}
+        # Insertion-ordered, oldest first; a dict serves as an ordered set.
+        self._pushed_seen: dict[str, dict[str, None]] = {}
 
     @classmethod
     def from_environ(cls, environ: Mapping[str, str] = os.environ) -> AuthHomeSecretRedactor | None:
@@ -176,7 +199,20 @@ class AuthHomeSecretRedactor:
         for slot in _pool_slot_dirs(self._home, _CODEX_POOL, codex_pool.AUTH_FILE):
             relative = str(slot.relative_to(self._home) / codex_pool.AUTH_FILE)
             values.update(self._read(relative, _json_string_values))
+        for spec in pushed_token.PUSHED_CLIS.values():
+            relative = f"{spec.directory}/{pushed_token.ACCESS_FILE}"
+            values.update(self._remember(relative, self._read(relative, _pushed_token_values)))
         return tuple(sorted(values, key=len, reverse=True))
+
+    def _remember(self, relative: str, current: tuple[str, ...]) -> tuple[str, ...]:
+        """``current`` plus the last ``_PUSHED_TOKENS_KEPT`` values ``relative`` held."""
+        seen = self._pushed_seen.setdefault(relative, {})
+        for value in current:
+            seen.pop(value, None)
+            seen[value] = None
+        while len(seen) > _PUSHED_TOKENS_KEPT:
+            del seen[next(iter(seen))]
+        return tuple(seen)
 
     def redact(self, event: dict[str, Any]) -> dict[str, Any]:
         """``event`` with every credential value replaced; the input is not changed."""
@@ -241,6 +277,15 @@ def _json_string_values(text: str) -> list[str]:
 
     walk(json.loads(text))
     return found
+
+
+def _pushed_token_values(text: str) -> list[str]:
+    # Only the token fields: the rest (provider, source host) are ordinary
+    # words that redaction would cut out of every event.
+    raw = json.loads(text)
+    if not isinstance(raw, dict):
+        return []
+    return [value for key, value in raw.items() if "token" in key and isinstance(value, str)]
 
 
 def _redact_text(text: str, secrets: tuple[str, ...]) -> str:

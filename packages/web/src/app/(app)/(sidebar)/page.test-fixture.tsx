@@ -173,12 +173,14 @@ vi.mock("@/components/model-reasoning-selector", () => ({
   ModelReasoningSelector: ({
     disabled,
     harness,
+    items,
     onHarnessChange,
     onModelChange,
   }: {
     disabled?: boolean;
     harness?: string | null;
-    onHarnessChange?: (harness: "opencode" | "claude") => void;
+    items: Array<{ models: Array<{ id: string; description: string }> }>;
+    onHarnessChange?: (harness: "opencode" | "claude" | "codex") => void;
     onModelChange: (model: string) => void;
   }) => (
     <>
@@ -190,8 +192,19 @@ vi.mock("@/components/model-reasoning-selector", () => ({
       >
         Model and effort
       </button>
+      <ul aria-label="Model options">
+        {items.flatMap((group) =>
+          group.models.map((model) => <li key={model.id}>{`${model.id}: ${model.description}`}</li>)
+        )}
+      </ul>
       <button type="button" onClick={() => onModelChange("openai/gpt-5.4")}>
         Switch model to GPT-5.4
+      </button>
+      <button type="button" onClick={() => onModelChange("anthropic/claude-opus-5-5")}>
+        Switch model to Claude Opus 5.5
+      </button>
+      <button type="button" onClick={() => onModelChange("antigravity/gemini-4-argon")}>
+        Switch model to Gemini 4 Argon
       </button>
       {onHarnessChange && (
         <>
@@ -200,6 +213,9 @@ vi.mock("@/components/model-reasoning-selector", () => ({
           </button>
           <button type="button" onClick={() => onHarnessChange("opencode")}>
             Switch agent to opencode
+          </button>
+          <button type="button" onClick={() => onHarnessChange("codex")}>
+            Switch agent to codex
           </button>
         </>
       )}

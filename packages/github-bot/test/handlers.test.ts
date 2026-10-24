@@ -1317,14 +1317,14 @@ describe("integration config", () => {
     expect(sessionBody.reasoningEffort).toBe("low");
   });
 
-  it("always sends a harness, defaulting to the built-in one when unconfigured", async () => {
+  it("always sends a harness, moving an Anthropic model off the built-in one onto Claude", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
 
     await handleReviewRequested(env, log, reviewRequestedPayload, "trace-no-harness");
 
     const sessionBody = sessionCreateBody(getControlPlaneFetch(env));
-    expect(sessionBody.harness).toBe("opencode");
+    expect(sessionBody.harness).toBe("claude");
   });
 
   it("sends the configured harness for every session-creating trigger", async () => {

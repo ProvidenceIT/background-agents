@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 from ..skill_invocation import expand_explicit_skill_invocations
 from .base import (
+    ANTHROPIC_MODEL_REFUSAL,
+    NO_MODEL_SELECTED,
     EventSink,
     HarnessId,
     HarnessPrompt,
@@ -21,6 +23,20 @@ if TYPE_CHECKING:
     from ..attachment_processor import AttachmentProcessor
     from ..log_config import StructuredLogger
     from .opencode_client import OpenCodeClient
+
+
+def model_refusal(model: str | None) -> str | None:
+    """Why OpenCode must not run ``model``, or ``None`` when it may.
+
+    The provider is resolved as the prompt stream sends it: a bare id is an
+    Anthropic model there, so it is refused like ``anthropic/...``.
+    """
+    if not model:
+        return NO_MODEL_SELECTED
+    provider = model.split("/", 1)[0] if "/" in model else "anthropic"
+    if provider == "anthropic":
+        return ANTHROPIC_MODEL_REFUSAL
+    return None
 
 
 class OpencodeHarness:
@@ -115,6 +131,13 @@ class OpencodeHarness:
         )
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
+        # The control plane already refuses these; this holds if it ever does not.
+        refusal = model_refusal(prompt.model)
+        if refusal is not None:
+            self.log.warn(
+                "opencode.model_refused", message_id=prompt.message_id, model=prompt.model
+            )
+            return TurnOutcome.failed(refusal)
         error_message: str | None = None
         message_cost_usd: float | None = None
         try:

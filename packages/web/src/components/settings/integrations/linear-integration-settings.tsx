@@ -26,10 +26,15 @@ import {
   checkHarnessCompatibility,
   getHarnessLabel,
   getValidHarnessOrDefault,
+  resolveHarnessForModel,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
-import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
+import {
+  filterModelOptionsForHarness,
+  harnessForModelPick,
+  shouldClearModelForHarness,
+} from "@/lib/session-harness";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { SettingsCardSection } from "../settings-card-section";
@@ -166,7 +171,10 @@ function GlobalSettingsSection({
   enabledModelOptions: ModelCategory[];
 }) {
   const [harness, setHarness] = useState<HarnessId>(
-    getValidHarnessOrDefault(settings?.defaults?.harness)
+    harnessForModelPick(
+      getValidHarnessOrDefault(settings?.defaults?.harness),
+      settings?.defaults?.model ?? ""
+    )
   );
   const [model, setModel] = useState(settings?.defaults?.model ?? "");
   const [effort, setEffort] = useState(settings?.defaults?.reasoningEffort ?? "");
@@ -196,7 +204,13 @@ function GlobalSettingsSection({
 
   useEffect(() => {
     if (settings === undefined || dirty || saving) return;
-    setHarness(getValidHarnessOrDefault(settings?.defaults?.harness));
+    // A saved model pinned to another harness (Anthropic's) runs there.
+    setHarness(
+      harnessForModelPick(
+        getValidHarnessOrDefault(settings?.defaults?.harness),
+        settings?.defaults?.model ?? ""
+      )
+    );
     setModel(settings?.defaults?.model ?? "");
     setEffort(settings?.defaults?.reasoningEffort ?? "");
     setEnabledRepos(settings?.enabledRepos ?? []);
@@ -352,11 +366,11 @@ function GlobalSettingsSection({
             Agent harness
           </label>
           <p id="linear-harness-help" className="text-xs text-muted-foreground mb-2">
-            Harness for new Linear sessions; running sessions keep theirs. Claude Agent runs
-            Anthropic models only, so a session whose model resolves to another provider (from a
-            model label, a user preference, or the system default) runs on OpenCode. Claude Agent
-            sessions use the default Claude account when its Automated authentication in Provider
-            Accounts allows it, and the Anthropic API key otherwise.
+            Harness for new Linear sessions; running sessions keep theirs. A session whose model
+            this harness cannot run (from a model label, a user preference, or the system default)
+            runs on the model&apos;s harness instead: Claude Agent for Anthropic models, OpenCode
+            for most others. Claude Agent sessions use the default Claude account when its Automated
+            authentication in Provider Accounts allows it, and the Anthropic API key otherwise.
           </p>
           <HarnessSelect
             id="linear-harness"
@@ -665,8 +679,9 @@ function RepoOverrideRow({
   const effectiveHarness = harness ?? inheritedHarness;
   // Save-time validation only sees one level; a clash across levels falls back at launch.
   const effectiveModel = model || inheritedModel;
-  const mismatch = effectiveModel
-    ? checkHarnessCompatibility(effectiveHarness, getValidModelOrDefault(effectiveModel))
+  const canonicalModel = effectiveModel ? getValidModelOrDefault(effectiveModel) : "";
+  const mismatch = canonicalModel
+    ? checkHarnessCompatibility(effectiveHarness, canonicalModel)
     : null;
 
   const handleHarnessChange = (newHarness: HarnessId | undefined) => {
@@ -682,6 +697,8 @@ function RepoOverrideRow({
   const handleModelChange = (newModel: string) => {
     setModel(newModel);
     setDirty(true);
+    const pinned = harnessForModelPick(effectiveHarness, newModel);
+    if (pinned !== effectiveHarness) setHarness(pinned);
 
     if (effort && newModel && !isValidReasoningEffort(newModel, effort)) {
       setEffort("");
@@ -767,7 +784,9 @@ function RepoOverrideRow({
             <SelectValue placeholder="Default model" />
           </SelectTrigger>
           <SelectContent>
-            {filterModelOptionsForHarness(effectiveHarness, enabledModelOptions).map((group) => (
+            {filterModelOptionsForHarness(effectiveHarness, enabledModelOptions, {
+              switchable: true,
+            }).map((group) => (
               <SelectGroup key={group.category}>
                 <SelectLabel>{group.category}</SelectLabel>
                 {group.models.map((m) => (
@@ -847,7 +866,9 @@ function RepoOverrideRow({
 
       {mismatch && (
         <p className="text-xs text-warning">
-          {mismatch.message} Sessions using this default model will fall back to OpenCode.
+          Model &quot;{canonicalModel}&quot; cannot run on the {getHarnessLabel(effectiveHarness)}{" "}
+          harness. Sessions using this default model will fall back to the model&apos;s harness,{" "}
+          {getHarnessLabel(resolveHarnessForModel(effectiveHarness, canonicalModel))}.
         </p>
       )}
     </div>

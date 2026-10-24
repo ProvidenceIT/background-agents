@@ -12,6 +12,7 @@ export const SESSION_SUBSCRIPTION_PRODUCT_NAMES = {
   openai: "ChatGPT",
   xai: "SuperGrok",
   "zai-coding-plan": "Z.AI Coding Plan",
+  antigravity: "Antigravity",
 } as const satisfies Readonly<Record<AuthHomeProviderId, string>>;
 
 /**

@@ -898,7 +898,7 @@ class TestSSEStreaming:
             {
                 "messageId": "cp-msg-1",
                 "content": "Test prompt",
-                "model": "anthropic/claude-haiku-4-5",
+                "model": "openai/gpt-6.1-sol",
                 "author": {"gitIdentity": {"mode": "agent-only"}},
             }
         )
@@ -2805,6 +2805,7 @@ class TestCompactionHandling:
             {
                 "messageId": "cp-msg-1",
                 "content": "Test prompt",
+                "model": "openai/gpt-6.1-sol",
                 "author": {"gitIdentity": {"mode": "agent-only"}},
             }
         )
@@ -2894,6 +2895,7 @@ class TestCompactionHandling:
             {
                 "messageId": "cp-msg-1",
                 "content": "Test prompt",
+                "model": "openai/gpt-6.1-sol",
                 "author": {"gitIdentity": {"mode": "agent-only"}},
             }
         )

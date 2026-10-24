@@ -1,6 +1,5 @@
 import {
   DEFAULT_HARNESS,
-  checkHarnessCompatibility,
   getHarnessLabel,
   resolveHarnessForModel,
   type HarnessId,
@@ -14,8 +13,7 @@ export function GitHubHarnessWarning({ harness, model }: { harness: HarnessId; m
     return (
       <p className="text-xs text-warning">
         GitHub sessions use the deployment default model. Set a compatible model to ensure sessions
-        run on {getHarnessLabel(harness)}; otherwise they may fall back to{" "}
-        {getHarnessLabel(DEFAULT_HARNESS)}.
+        run on {getHarnessLabel(harness)}; otherwise they fall back to the model&apos;s harness.
       </p>
     );
   }
@@ -25,8 +23,9 @@ export function GitHubHarnessWarning({ harness, model }: { harness: HarnessId; m
   if (resolvedHarness === harness) return null;
   return (
     <p className="text-xs text-warning">
-      {checkHarnessCompatibility(harness, canonicalModel)?.message} Sessions will run on{" "}
-      {getHarnessLabel(resolvedHarness)} until the harness and model are compatible.
+      Model &quot;{canonicalModel}&quot; cannot run on the {getHarnessLabel(harness)} harness.
+      Sessions fall back to the model&apos;s harness, {getHarnessLabel(resolvedHarness)}, until the
+      harness and model are compatible.
     </p>
   );
 }

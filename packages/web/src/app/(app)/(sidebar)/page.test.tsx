@@ -12,10 +12,6 @@ import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { environment, mocks, repo, sessionCreateBody } from "./page.test-fixture";
 import Home from "./page";
 
-function activeAnthropicAccount(id: string): (typeof mocks.providerAccountsValue)[number] {
-  return { ...activeOpenAiAccount(id), provider: "anthropic", displayName: "Owner Claude" };
-}
-
 function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[number] {
   return {
     id,
@@ -614,7 +610,88 @@ describe("Home", () => {
     );
   });
 
+  it("starts a first visit on Claude Agent, the default model's harness", async () => {
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({ harness: "claude", model: DEFAULT_MODEL })
+    );
+  });
+
+  it("hydrates a stored OpenCode harness with a stored Anthropic model to Claude Agent", async () => {
+    localStorage.setItem("open-inspect-last-selected-model", DEFAULT_MODEL);
+    localStorage.setItem("open-inspect-last-selected-harness", "opencode");
+    render(<Home />);
+
+    expect(
+      await screen.findByRole("button", { name: "Agent, model and effort: claude" })
+    ).toBeInTheDocument();
+  });
+
+  it("switches to Claude Agent when an Anthropic model is picked on OpenCode", async () => {
+    const openAiModel = "openai/gpt-5.4";
+    mocks.enabledModelsValue = [DEFAULT_MODEL, openAiModel];
+    localStorage.setItem("open-inspect-last-selected-model", openAiModel);
+    render(<Home />);
+    expect(
+      await screen.findByRole("button", { name: "Agent, model and effort: opencode" })
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch model to Claude Opus 5.5" }));
+
+    expect(
+      await screen.findByRole("button", { name: "Agent, model and effort: claude" })
+    ).toBeInTheDocument();
+    expect(localStorage.getItem("open-inspect-last-selected-harness")).toBe("claude");
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({
+        harness: "claude",
+        model: "anthropic/claude-opus-5-5",
+      })
+    );
+  });
+
+  it("switches to Antigravity when an Antigravity model is picked", async () => {
+    render(<Home />);
+    expect(
+      await screen.findByRole("button", { name: "Agent, model and effort: claude" })
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch model to Gemini 4 Argon" }));
+
+    expect(
+      await screen.findByRole("button", { name: "Agent, model and effort: agy" })
+    ).toBeInTheDocument();
+    expect(localStorage.getItem("open-inspect-last-selected-harness")).toBe("agy");
+  });
+
+  it("lists models pinned to another harness with the harness picking one switches to", async () => {
+    const openAiModel = "openai/gpt-5.4";
+    mocks.enabledModelsValue = [DEFAULT_MODEL, openAiModel];
+    mocks.enabledModelOptionsValue = [
+      { category: "Anthropic", models: [{ id: DEFAULT_MODEL, name: "Opus", description: "" }] },
+      { category: "OpenAI", models: [{ id: openAiModel, name: "GPT-5.4", description: "Fast" }] },
+    ];
+    localStorage.setItem("open-inspect-last-selected-model", openAiModel);
+    render(<Home />);
+    expect(
+      await screen.findByRole("button", { name: "Agent, model and effort: opencode" })
+    ).toBeInTheDocument();
+
+    const options = within(screen.getByRole("list", { name: "Model options" }));
+    expect(options.getByText(`${DEFAULT_MODEL}: Switches to Claude Agent`)).toBeInTheDocument();
+    expect(options.getByText(`${openAiModel}: Fast`)).toBeInTheDocument();
+  });
+
   it("persists a harness choice and re-warms the draft session with it", async () => {
+    const openAiModel = "openai/gpt-5.4";
+    mocks.enabledModelsValue = [DEFAULT_MODEL, openAiModel];
+    localStorage.setItem("open-inspect-last-selected-model", openAiModel);
     render(<Home />);
     fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
       target: { value: "Ship it" },
@@ -644,17 +721,24 @@ describe("Home", () => {
         .mocked(fetch)
         .mock.calls.filter(([input]) => String(input) === "/api/sessions");
       expect(createCalls.length).toBe(2);
-      expect(JSON.parse(String(createCalls[1][1]?.body))).toMatchObject({ harness: "claude" });
+      expect(JSON.parse(String(createCalls[1][1]?.body))).toMatchObject({
+        harness: "claude",
+        model: DEFAULT_MODEL,
+      });
     });
+    // The pick saved the model the harness resolved to, so a reload keeps the pair.
+    expect(localStorage.getItem("open-inspect-last-selected-model")).toBe(DEFAULT_MODEL);
   });
 
-  it("drops a connected Anthropic account pin when the harness switches to OpenCode", async () => {
+  it("drops a connected OpenAI account pin when the harness switches to Codex", async () => {
     const accountId = "c".repeat(32);
-    mocks.providerAccountsValue = [activeAnthropicAccount(accountId)];
-    localStorage.setItem("open-inspect-last-selected-harness", "claude");
+    const openAiModel = "openai/gpt-5.4";
+    mocks.enabledModelsValue = [DEFAULT_MODEL, openAiModel];
+    mocks.providerAccountsValue = [activeOpenAiAccount(accountId)];
+    localStorage.setItem("open-inspect-last-selected-model", openAiModel);
     localStorage.setItem(
       "open-inspect-last-provider-selections:v1",
-      JSON.stringify({ anthropic: { mode: "provider_account", accountId } })
+      JSON.stringify({ openai: { mode: "provider_account", accountId } })
     );
     render(<Home />);
     fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
@@ -662,12 +746,12 @@ describe("Home", () => {
     });
     await waitFor(() =>
       expect(sessionCreateBody()).toMatchObject({
-        harness: "claude",
-        providerSelections: { anthropic: { mode: "provider_account", accountId } },
+        harness: "opencode",
+        providerSelections: { openai: { mode: "provider_account", accountId } },
       })
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Switch agent to opencode" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Switch agent to codex" }));
 
     await waitFor(() =>
       expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe("{}")
@@ -684,7 +768,7 @@ describe("Home", () => {
         .mock.calls.filter(([input]) => String(input) === "/api/sessions");
       expect(createCalls.length).toBe(2);
       expect(JSON.parse(String(createCalls[1][1]?.body))).toMatchObject({
-        harness: "opencode",
+        harness: "codex",
         providerSelections: {},
       });
     });

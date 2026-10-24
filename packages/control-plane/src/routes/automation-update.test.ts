@@ -491,9 +491,14 @@ describe("automation read, update, and delete routes", () => {
     });
 
     it("rejects a replacement pin the automation's harness cannot use", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        harness: "codex",
+        model: "openai/gpt-6.1-sol",
+      });
       mockProviderAccountStore.getById.mockResolvedValue({
         id: "0123456789abcdef0123456789abcdef",
-        provider: "anthropic",
+        provider: "openai",
         status: "active",
         ownerUserId: "user-1",
         archivedAt: null,
@@ -502,7 +507,7 @@ describe("automation read, update, and delete routes", () => {
       const res = await callRoute("PUT", "/automations/auto-1", {
         body: {
           providerSelections: {
-            anthropic: {
+            openai: {
               mode: "provider_account",
               accountId: "0123456789abcdef0123456789abcdef",
             },
@@ -512,7 +517,7 @@ describe("automation read, update, and delete routes", () => {
 
       expect(res.status).toBe(400);
       await expect(res.json()).resolves.toEqual({
-        error: expect.stringContaining("select an API key"),
+        error: expect.stringContaining("only on a subscription home"),
       });
       expect(mockBatch).not.toHaveBeenCalled();
     });
@@ -854,6 +859,38 @@ describe("automation read, update, and delete routes", () => {
         error: 'Condition "path_glob" does not apply to github triggers',
       });
       expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+    });
+
+    it("moves a stored OpenCode automation on an Anthropic model to Claude Agent", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, harness: "opencode" });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { name: "Updated" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ name: "Updated", harness: "claude" })
+      );
+    });
+
+    it("moves the automation to the new model's harness when no harness is given", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        harness: "codex",
+        model: "openai/gpt-6.1-sol",
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { model: "anthropic/claude-sonnet-4-6" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ harness: "claude", model: "anthropic/claude-sonnet-4-6" })
+      );
     });
 
     it("updates reasoning effort when valid for the selected model", async () => {

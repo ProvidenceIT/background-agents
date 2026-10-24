@@ -332,9 +332,41 @@ export const MODEL_CATALOG = [
         reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
       },
       {
+        id: "xai/grok-4.7-build-fast",
+        name: "Grok 4.7 Build Fast",
+        description: "Fast Grok coding model",
+        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
+      },
+      {
         id: "xai/grok-build-0.1",
         name: "Grok Build 0.1",
         description: "Coding model for SuperGrok subscribers",
+      },
+    ],
+  },
+  {
+    // Runs on the Antigravity harness only. agy's own Claude models are left
+    // out: Anthropic models run only on Claude Agent.
+    category: "Google Antigravity",
+    enabledByDefault: false,
+    models: [
+      {
+        id: "antigravity/gemini-4-argon",
+        name: "Gemini 4 Argon",
+        description: "Google Antigravity subscription",
+        reasoning: { efforts: ["low", "medium", "high"], default: "medium" },
+      },
+      {
+        id: "antigravity/gemini-3.8-flash",
+        name: "Gemini 3.8 Flash",
+        description: "Google Antigravity subscription",
+        reasoning: { efforts: ["low", "medium", "high"], default: "medium" },
+      },
+      {
+        id: "antigravity/gpt-oss-120b",
+        name: "GPT-OSS 120B",
+        description: "Google Antigravity subscription",
+        reasoning: { efforts: ["medium"], default: "medium" },
       },
     ],
   },

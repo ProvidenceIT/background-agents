@@ -1,5 +1,4 @@
 import type { HarnessId } from "@open-inspect/shared/harnesses";
-import { CODEX_SEAT } from "@open-inspect/shared/types/auth-homes";
 import { UsageLedgerStore, type HomeSubscriptionSlot } from "../db/usage-ledger";
 import type { SqlDatabase } from "../db/sql-database";
 
@@ -16,5 +15,8 @@ export async function pinnableSubscriptionSlots(
   homeId: string | null
 ): Promise<HomeSubscriptionSlot[]> {
   if (harness !== PINNABLE_SLOT_HARNESS || !homeId) return [];
-  return new UsageLedgerStore(db).slotsForHome(homeId, { except: CODEX_SEAT });
+  return new UsageLedgerStore(db).slotsForHome(homeId, {
+    only: PINNABLE_SLOT_HARNESS,
+    orUnrecorded: true,
+  });
 }

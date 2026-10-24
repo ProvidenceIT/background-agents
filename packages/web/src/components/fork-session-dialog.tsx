@@ -28,7 +28,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import type { ModelPreference } from "@/lib/model-selection";
-import { resolveHarnessModelSelection } from "@/lib/session-harness";
+import { harnessForModelPick, resolveHarnessModelSelection } from "@/lib/session-harness";
 import {
   createSessionFork,
   fetchForkHandoff,
@@ -92,9 +92,14 @@ function useHandoffDraft(sessionId: string) {
 }
 
 function useForkModelSelection(source: ForkSource) {
-  const [harness, setHarness] = useState<HarnessId>(source.harness);
+  const sourceModel = source.model ?? DEFAULT_MODEL;
+  // A source on a model pinned to another harness (an OpenCode session on an
+  // Anthropic model) forks onto that harness, as its refusal tells the user to.
+  const [harness, setHarness] = useState<HarnessId>(() =>
+    harnessForModelPick(source.harness, sourceModel)
+  );
   const [preference, setPreference] = useState<ModelPreference>({
-    model: source.model ?? DEFAULT_MODEL,
+    model: sourceModel,
     reasoningEffort: source.reasoningEffort ?? undefined,
   });
   const { enabledModels, enabledModelOptions, loading } = useEnabledModels();
@@ -106,6 +111,7 @@ function useForkModelSelection(source: ForkSource) {
         enabledModels,
         enabledModelOptions,
         loading,
+        switchable: true,
       }),
     [enabledModelOptions, enabledModels, harness, loading, preference]
   );
@@ -113,8 +119,11 @@ function useForkModelSelection(source: ForkSource) {
     harness,
     setHarness,
     selection,
-    onModelChange: (model: ValidModel) =>
-      setPreference({ model, reasoningEffort: getDefaultReasoningEffort(model) }),
+    // Picking a model another harness is pinned to switches to that harness.
+    onModelChange: (model: ValidModel) => {
+      setPreference({ model, reasoningEffort: getDefaultReasoningEffort(model) });
+      setHarness((current) => harnessForModelPick(current, model));
+    },
     onReasoningEffortChange: (reasoningEffort: ReasoningEffort | undefined) =>
       setPreference({ model: selection.model, reasoningEffort }),
   };

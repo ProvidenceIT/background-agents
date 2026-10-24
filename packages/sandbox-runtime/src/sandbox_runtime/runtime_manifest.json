@@ -1,11 +1,13 @@
 {
-  "runtimeVersion": "v74-persistent-memory",
-  "generation": 74,
+  "runtimeVersion": "v75-grok-agy-harnesses",
+  "generation": 75,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 74,
+  "minimumRebuildGeneration": 75,
   "harnessMinimumGeneration": {
     "claude": 74,
-    "opencode": 74
+    "opencode": 74,
+    "grok": 75,
+    "agy": 75
   }
 }

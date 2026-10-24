@@ -242,6 +242,8 @@ def observed_tool_version(command: str, expected: str, output: str) -> str:
         "node": r"v",
         "opencode": r"",
         "codex": r"codex-cli\s+",
+        "grok": r"grok\s+",
+        "agy": r"",
         "bun": r"",
         "pnpm": r"",
         "agent-browser": r"agent-browser\s+",
@@ -276,6 +278,18 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
     ):
         observed = probe.run([command, "--version"])
         observed_tool_version(command, version, observed)
+    for command, version in (("grok", tools["grok"]["version"]), ("agy", tools["agy"]["version"])):
+        # Both agent CLIs write state under HOME on first start; keep it out of the
+        # baked home and prove they start without a login or network.
+        isolated = [
+            "sh",
+            "-c",
+            'export HOME="$(mktemp -d)"; trap \'rm -rf "$HOME"\' EXIT; timeout 10 "$@"',
+            "sh",
+            command,
+        ]
+        observed_tool_version(command, version, probe.run([*isolated, "--version"]))
+        probe.run([*isolated, "--help"], timeout_seconds=20)
     installed_runtime = probe.run(
         [
             "python3",

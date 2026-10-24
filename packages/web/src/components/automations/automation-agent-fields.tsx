@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { ChevronDownIcon, ModelIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
+import { harnessForModelPick } from "@/lib/session-harness";
 import { FieldDescription } from "./automation-form-field";
 import type { AutomationAgentDraft } from "./automation-form-policy";
 
@@ -52,7 +53,13 @@ export function AutomationAgentFields({
       value.reasoningEffort && isValidReasoningEffort(model, value.reasoningEffort)
         ? value.reasoningEffort
         : "";
-    onChange({ ...value, model, reasoningEffort });
+    // A model pinned to another harness (Anthropic's to Claude Agent) switches to it.
+    onChange({
+      ...value,
+      harness: harnessForModelPick(value.harness, model),
+      model,
+      reasoningEffort,
+    });
   };
 
   return (
@@ -83,7 +90,7 @@ export function AutomationAgentFields({
         </Select>
         <FieldDescription>
           Agent harness that runs each session this automation creates. It decides which models are
-          available below.
+          available below; picking a model that runs only on another harness switches to it.
         </FieldDescription>
       </div>
 

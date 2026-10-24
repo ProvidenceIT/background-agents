@@ -66,6 +66,12 @@ export function harnessMemoryToolName(harness: HarnessId, tool: MemoryToolName):
       // Codex through the same tools served over stdio; both qualify an MCP
       // tool as `mcp__<server>__<tool>`.
       return `mcp__oi__${tool}`;
+    case "grok":
+      // grok calls MCP tools through its built-in `use_tool` as `<server>__<tool>`.
+      return `oi__${tool}`;
+    case "agy":
+      // agy calls MCP tools through `call_mcp_tool` with the server and the bare tool name.
+      return tool;
     default: {
       const exhaustive: never = harness;
       throw new Error(`Unknown harness: ${String(exhaustive)}`);

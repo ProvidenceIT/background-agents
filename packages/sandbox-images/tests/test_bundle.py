@@ -62,6 +62,31 @@ def test_binary_checksum_and_minimum_tool_version_are_required():
         validate_toolchain(tools)
 
 
+@pytest.mark.parametrize("tool", ["grok", "agy"])
+def test_agent_cli_binaries_require_a_checksum_pin(tool):
+    tools = json.loads((REPO_ROOT / "packages/sandbox-images/toolchain.json").read_text())
+    del tools[tool]["sha256"]
+    with pytest.raises(ValueError, match="SHA-256"):
+        validate_toolchain(tools)
+
+
+def test_agy_requires_its_release_build_id():
+    tools = json.loads((REPO_ROOT / "packages/sandbox-images/toolchain.json").read_text())
+    tools["agy"]["build"] = "latest"
+    with pytest.raises(ValueError, match="build id"):
+        validate_toolchain(tools)
+
+
+def test_agent_clis_install_as_checked_binaries_without_their_installers():
+    script = (REPO_ROOT / "packages/sandbox-images/install/tools.sh").read_text()
+    assert '"$GROK_SHA256" "$download_dir/grok"' in script
+    assert '"$AGY_SHA256" "$download_dir/agy.tar.gz"' in script
+    assert "ln -sf /opt/openinspect/grok/grok /usr/local/bin/grok" in script
+    assert "ln -sf /opt/openinspect/agy/agy /usr/local/bin/agy" in script
+    assert "x.ai/cli/install.sh" not in script
+    assert "agy install" not in script
+
+
 def test_debian_installs_disable_recommended_packages():
     script = (REPO_ROOT / "packages/sandbox-images/install/os/debian.sh").read_text()
     install_commands = [line for line in script.splitlines() if line.startswith("apt-get install ")]
@@ -212,6 +237,16 @@ def test_docker_pins_reach_the_installer_as_shell_variables(checkout, tmp_path):
     for package in ("ENGINE", "CLI", "CONTAINERD", "BUILDX", "COMPOSE"):
         assert f"export DOCKER_{package}_FILE=" in config
         assert f"export DOCKER_{package}_SHA256=" in config
+
+
+def test_agent_cli_pins_reach_the_installer_as_shell_variables(checkout, tmp_path):
+    tools = json.loads((checkout / "packages/sandbox-images/toolchain.json").read_text())
+    bundle = pack_bundle(checkout, "kubernetes", tmp_path / "out")
+    config = (bundle.directory / "image-config.sh").read_text()
+    for name, key in (("GROK", "grok"), ("AGY", "agy")):
+        assert f"export {name}_VERSION={tools[key]['version']}\n" in config
+        assert f"export {name}_SHA256={tools[key]['sha256']}\n" in config
+    assert f"export AGY_BUILD={tools['agy']['build']}\n" in config
 
 
 def test_docker_daemon_shutdown_timeout_fits_inside_the_runtime_stop_deadline():

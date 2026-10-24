@@ -128,13 +128,16 @@ describe("handleAgentSessionEvent harness selection", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([null, {}])("creates OpenCode sessions when no harness is configured (%j)", async (c) => {
-    const { createBody, activities } = await delegate({ config: c });
+  it.each([null, {}])(
+    "creates Claude Agent sessions for an Anthropic model when no harness is configured (%j)",
+    async (c) => {
+      const { createBody, activities } = await delegate({ config: c });
 
-    expect(createBody).toMatchObject({ harness: "opencode", model: "anthropic/claude-haiku-4-5" });
-    expect(activities).toContain("agent: OpenCode, model: anthropic/claude-haiku-4-5");
-    expect(activities).toContain("with **anthropic/claude-haiku-4-5** (OpenCode).");
-  });
+      expect(createBody).toMatchObject({ harness: "claude", model: "anthropic/claude-haiku-4-5" });
+      expect(activities).toContain("agent: Claude Agent, model: anthropic/claude-haiku-4-5");
+      expect(activities).toContain("with **anthropic/claude-haiku-4-5** (Claude Agent).");
+    }
+  );
 
   it("creates Claude Agent sessions when Claude Agent is configured", async () => {
     const { createBody, activities } = await delegate({

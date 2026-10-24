@@ -166,6 +166,31 @@ describe("handleSessionSubscription", () => {
     ]);
   });
 
+  it("keeps SuperGrok and Antigravity turns out of the Claude pool", async () => {
+    const ledger = new UsageLedgerStore(db);
+    const turn = (messageId: string, harness: string, slot: string, settledAt: number) =>
+      ledger.recordTurn({
+        messageId,
+        sessionId: HOUSEHOLD.sessionId,
+        userId: HOUSEHOLD.owner,
+        repoExternalId: null,
+        harness,
+        model: "anthropic/claude-sonnet-4-5",
+        costUsd: 0,
+        inputTokens: 10,
+        outputTokens: 5,
+        subscriptionSlot: slot,
+        settledAt,
+      });
+    await turn("msg-1", "claude", "claude-4", 100);
+    await turn("msg-2", "grok", "grok:acct-1", 200);
+    await turn("msg-3", "agy", "agy:acct-2", 300);
+
+    const subscriptions = await subscriptionsFor(HOUSEHOLD.colleague);
+    expect(subscriptions.anthropic.slots.map((entry) => entry.slot)).toEqual(["claude-4"]);
+    expect(subscriptions.openai.slots).toEqual([]);
+  });
+
   it("reports workspace credentials for Z.AI when no home serves the session", async () => {
     await db
       .prepare("UPDATE sessions SET auth_home_id = NULL, auth_home_selection = NULL WHERE id = ?")

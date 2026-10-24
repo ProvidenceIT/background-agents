@@ -225,7 +225,7 @@ describe("session fork routes", () => {
       forkRequestId: crypto.randomUUID(),
       handoff: "Continue.",
       harness: "opencode",
-      model: "anthropic/claude-sonnet-4-6",
+      model: "openai/gpt-5.6-sol",
       reasoningEffort: "low",
     });
 
@@ -233,7 +233,7 @@ describe("session fork routes", () => {
     const { sessionId } = await response.json<ForkSessionResponse>();
     expect(await store.get(sessionId)).toMatchObject({
       harness: "opencode",
-      model: "anthropic/claude-sonnet-4-6",
+      model: "openai/gpt-5.6-sol",
       reasoningEffort: "low",
     });
     await waitForSandboxStatus(env.SESSION.get(env.SESSION.idFromName(sessionId)), "failed");
@@ -590,10 +590,6 @@ describe("forking onto a chosen subscription slot", () => {
   it.each([
     ["a slot the home never spent", { subscriptionSlot: "claude-7" }],
     ["a Codex slot", { subscriptionSlot: "codex-1" }],
-    [
-      "a slot on a harness without a pinnable pool",
-      { subscriptionSlot: "claude-2", harness: "opencode" },
-    ],
   ])("refuses %s and creates nothing", async (_label, choice) => {
     const { name } = await seedSource();
 

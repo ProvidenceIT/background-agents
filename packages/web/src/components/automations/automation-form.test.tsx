@@ -6,6 +6,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
+import type { ComboboxGroup } from "@/components/ui/combobox";
 import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { DEFAULT_HARNESS } from "@open-inspect/shared/harnesses";
@@ -39,7 +40,7 @@ function mockRepo(id: number, owner: string, name: string, defaultBranch = "main
 }
 
 // Mutable per-test hook results; the hoisted mocks close over them.
-let enabledModelsValue: string[] = ["openai/gpt-5.4"];
+let enabledModelsValue: string[] = [DEFAULT_MODEL, "openai/gpt-5.4"];
 let loadingModelsValue = false;
 let reposValue: MockRepo[] = [];
 let environmentsValue: Array<{
@@ -70,7 +71,8 @@ vi.mock("@/hooks/use-resource-teams", () => ({
 }));
 beforeEach(() => {
   scopeMocks.allowWorkspace = true;
-  enabledModelsValue = ["openai/gpt-5.4"];
+  // A blank create starts on the default model, which runs only on Claude Agent.
+  enabledModelsValue = [DEFAULT_MODEL, "openai/gpt-5.4"];
   loadingModelsValue = false;
   environmentsValue = [];
   reposValue = [
@@ -109,6 +111,10 @@ vi.mock("@/hooks/use-enabled-models", () => ({
         category: "OpenAI",
         models: [{ id: "openai/gpt-5.4", name: "GPT-5.4", description: "Test model" }],
       },
+      {
+        category: "Anthropic",
+        models: [{ id: DEFAULT_MODEL, name: "Default Claude", description: "Test model" }],
+      },
     ],
     loading: loadingModelsValue,
   }),
@@ -125,8 +131,31 @@ vi.mock("@/hooks/use-slack-channels", () => ({
   useSlackChannels: () => ({ channels: [], loading: false }),
 }));
 
+// The model picker lists its options as buttons so tests can pick one.
 vi.mock("@/components/ui/combobox", () => ({
-  Combobox: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Combobox: ({
+    id,
+    children,
+    items,
+    onChange,
+  }: {
+    id?: string;
+    children: ReactNode;
+    items: ComboboxGroup[];
+    onChange: (value: string) => void;
+  }) => (
+    <div>
+      {children}
+      {id === "automation-model" &&
+        items.flatMap((group) =>
+          group.options.map((option) => (
+            <button key={option.value} type="button" onClick={() => onChange(option.value)}>
+              {`Pick ${option.label}${option.description ? ` (${option.description})` : ""}`}
+            </button>
+          ))
+        )}
+    </div>
+  ),
 }));
 
 const singleRepository = [
@@ -1353,7 +1382,7 @@ describe("model normalization", () => {
   };
 
   it("coerces a disabled initial model to an enabled one before submit", () => {
-    const onSubmit = submitForm({ model: "anthropic/claude-opus-4-8" });
+    const onSubmit = submitForm({ model: "openai/gpt-6-sol" });
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0].model).toBe("openai/gpt-5.4");
   });
@@ -1371,13 +1400,13 @@ describe("model normalization", () => {
 
   it("drops a reasoning effort the coerced model does not support", () => {
     // gpt-5.4 supports none/low/medium/high/xhigh but not "max".
-    const onSubmit = submitForm({ model: "anthropic/claude-opus-4-8", reasoningEffort: "max" });
+    const onSubmit = submitForm({ model: "openai/gpt-6-sol", reasoningEffort: "max" });
     expect(onSubmit.mock.calls[0][0].model).toBe("openai/gpt-5.4");
     expect(onSubmit.mock.calls[0][0].reasoningEffort).toBeNull();
   });
 
   it("keeps a reasoning effort the coerced model supports", () => {
-    const onSubmit = submitForm({ model: "anthropic/claude-opus-4-8", reasoningEffort: "high" });
+    const onSubmit = submitForm({ model: "openai/gpt-6-sol", reasoningEffort: "high" });
     expect(onSubmit.mock.calls[0][0].model).toBe("openai/gpt-5.4");
     expect(onSubmit.mock.calls[0][0].reasoningEffort).toBe("high");
   });
@@ -1481,11 +1510,36 @@ describe("agent harness", () => {
     submit();
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
+    // OpenCode cannot run the Anthropic model either, so it is coerced too.
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       harness: "opencode",
-      model: DEFAULT_MODEL,
+      model: "openai/gpt-5.4",
       providerSelections: {},
     });
+  });
+
+  it("switches to Claude Agent when an Anthropic model is picked on OpenCode", () => {
+    const { onSubmit, submit } = renderForm({ harness: "opencode" }, "create");
+    expect(screen.getByRole("combobox", { name: "Agent harness" })).toHaveTextContent("OpenCode");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Pick Default Claude (Switches to Claude Agent)" })
+    );
+    expect(screen.getByRole("combobox", { name: "Agent harness" })).toHaveTextContent(
+      "Claude Agent"
+    );
+    submit();
+
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ harness: "claude", model: DEFAULT_MODEL });
+  });
+
+  it("moves a saved OpenCode automation on an Anthropic model to Claude Agent", () => {
+    const { onSubmit, submit } = renderForm({ harness: "opencode", model: DEFAULT_MODEL }, "edit");
+    expect(screen.getByRole("combobox", { name: "Agent harness" })).toHaveTextContent(
+      "Claude Agent"
+    );
+    submit();
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ harness: "claude", model: DEFAULT_MODEL });
   });
 
   it("blocks submission and says so when the harness can run none of the enabled models", () => {
