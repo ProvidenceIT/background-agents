@@ -196,5 +196,16 @@ describe("RBAC registry", () => {
     expect(() =>
       replaceMemberStatusInputSchema.parse({ suspended: true, suspendedAt: 123 })
     ).toThrow();
+    expect(replaceMemberStatusInputSchema.parse({ suspended: true, confirm: true })).toEqual({
+      suspended: true,
+      confirm: true,
+    });
+    expect(() =>
+      replaceMemberStatusInputSchema.parse({ suspended: true, confirm: false })
+    ).toThrow();
+    expect(replaceMemberRoleInputSchema.parse({ roleId: "role_custom", confirm: true })).toEqual({
+      roleId: "role_custom",
+      confirm: true,
+    });
   });
 });

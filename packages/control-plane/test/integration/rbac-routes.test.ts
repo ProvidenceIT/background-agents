@@ -375,7 +375,7 @@ describe("RBAC routes", () => {
 
     const response = await serviceFetch(`https://cp.test/members/${owner!.id}/status`, {
       method: "PUT",
-      body: JSON.stringify({ suspended: true }),
+      body: JSON.stringify({ suspended: true, confirm: true }),
       headers: { "Content-Type": "application/json" },
     });
     expect(response.status).toBe(409);
@@ -402,7 +402,7 @@ describe("RBAC routes", () => {
 
     const response = await serviceFetch(`https://cp.test/members/${ownerId}/status`, {
       method: "PUT",
-      body: JSON.stringify({ suspended: true }),
+      body: JSON.stringify({ suspended: true, confirm: true }),
       headers: { "Content-Type": "application/json" },
     });
 
@@ -430,7 +430,7 @@ describe("RBAC routes", () => {
 
     const response = await serviceFetch(`https://cp.test/members/${ownerId}/role`, {
       method: "PUT",
-      body: JSON.stringify({ roleId: "role_builtin_administrator" }),
+      body: JSON.stringify({ roleId: "role_builtin_administrator", confirm: true }),
       headers: { "Content-Type": "application/json" },
     });
 
@@ -447,11 +447,72 @@ describe("RBAC routes", () => {
 
     const response = await serviceFetch(`https://cp.test/members/${ownerId}/role`, {
       method: "PUT",
+      body: JSON.stringify({ roleId: "role_builtin_administrator", confirm: true }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    expect(response.status).toBe(409);
+    expect(
+      await env.DB.prepare(
+        `SELECT r.key FROM user_role_assignments ura
+         JOIN roles r ON r.id = ura.role_id WHERE ura.user_id = ?`
+      )
+        .bind(ownerId)
+        .first()
+    ).toEqual({ key: "owner" });
+  });
+
+  it("refuses self-suspension without confirmation and leaves the caller active", async () => {
+    const ownerId = await seedOwner();
+    const otherOwner = await new UserStore(sqlDatabase(env.DB)).createUser({
+      displayName: "Other Owner",
+    });
+    await env.DB.prepare(
+      "UPDATE user_role_assignments SET role_id = 'role_builtin_owner' WHERE user_id = ?"
+    )
+      .bind(otherOwner.id)
+      .run();
+
+    const response = await serviceFetch(`https://cp.test/members/${ownerId}/status`, {
+      method: "PUT",
+      body: JSON.stringify({ suspended: true }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "Changing your own access needs confirmation",
+      code: "self_change_unconfirmed",
+    });
+    expect(
+      await env.DB.prepare("SELECT suspended_at FROM users WHERE id = ?").bind(ownerId).first()
+    ).toEqual({ suspended_at: null });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.member_status_updated'"
+      ).first()
+    ).toEqual({ count: 0 });
+  });
+
+  it("refuses a self role change without confirmation", async () => {
+    const ownerId = await seedOwner();
+    const otherOwner = await new UserStore(sqlDatabase(env.DB)).createUser({
+      displayName: "Other Owner",
+    });
+    await env.DB.prepare(
+      "UPDATE user_role_assignments SET role_id = 'role_builtin_owner' WHERE user_id = ?"
+    )
+      .bind(otherOwner.id)
+      .run();
+
+    const response = await serviceFetch(`https://cp.test/members/${ownerId}/role`, {
+      method: "PUT",
       body: JSON.stringify({ roleId: "role_builtin_administrator" }),
       headers: { "Content-Type": "application/json" },
     });
 
     expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "self_change_unconfirmed" });
     expect(
       await env.DB.prepare(
         `SELECT r.key FROM user_role_assignments ura

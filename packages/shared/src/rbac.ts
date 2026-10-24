@@ -279,10 +279,17 @@ export const roleListResponseSchema = z.array(roleSummarySchema);
 /** Validates the complete workspace-member-list response. */
 export const workspaceMemberListResponseSchema = z.array(workspaceMemberSchema);
 
+/**
+ * Set by a caller that has confirmed a change to their own access. The control
+ * plane refuses a self role change or self-suspension without it.
+ */
+const confirmSelfChangeSchema = z.literal(true).optional();
+
 /** Validates a request to atomically replace a member's assigned role. */
 export const replaceMemberRoleInputSchema = z
   .object({
     roleId: z.string().min(1),
+    confirm: confirmSelfChangeSchema,
   })
   .strict();
 
@@ -290,6 +297,7 @@ export const replaceMemberRoleInputSchema = z
 export const replaceMemberStatusInputSchema = z
   .object({
     suspended: z.boolean(),
+    confirm: confirmSelfChangeSchema,
   })
   .strict();
 

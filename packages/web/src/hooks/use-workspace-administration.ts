@@ -25,6 +25,15 @@ async function fetchRoles(): Promise<RoleSummary[]> {
 }
 
 /**
+ * A member update. `confirm` records that the user confirmed a change to their
+ * own access; the control plane refuses self-suspension or a self role change
+ * without it.
+ */
+export type WorkspaceMemberAction = (
+  { kind: "role"; roleId: string } | { kind: "status"; suspended: boolean }
+) & { confirm?: true };
+
+/**
  * Provides the workspace members and roles the current user may read, plus authorized member updates.
  */
 export function useWorkspaceAdministration(input: { readMembers: boolean; readRoles: boolean }) {
@@ -33,16 +42,15 @@ export function useWorkspaceAdministration(input: { readMembers: boolean; readRo
   const members = useSWR(input.readMembers ? "/api/members" : null, fetchMembers);
   const roles = useSWR(input.readRoles ? "/api/roles" : null, fetchRoles);
 
-  async function updateMember(
-    user: WorkspaceMember,
-    action: { kind: "role"; roleId: string } | { kind: "status"; suspended: boolean }
-  ): Promise<void> {
+  async function updateMember(user: WorkspaceMember, action: WorkspaceMemberAction): Promise<void> {
     const path =
       action.kind === "role"
         ? (`/api/members/${encodeURIComponent(user.userId)}/role` as const)
         : (`/api/members/${encodeURIComponent(user.userId)}/status` as const);
-    const body =
-      action.kind === "role" ? { roleId: action.roleId } : { suspended: action.suspended };
+    const body = {
+      ...(action.kind === "role" ? { roleId: action.roleId } : { suspended: action.suspended }),
+      ...(action.confirm ? { confirm: true } : {}),
+    };
     const response = await browserApiFetch(path, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

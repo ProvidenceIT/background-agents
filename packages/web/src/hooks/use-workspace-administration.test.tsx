@@ -56,6 +56,22 @@ describe("useWorkspaceAdministration", () => {
     );
   });
 
+  it("forwards a confirmed self-change to the control plane", async () => {
+    const { result } = renderHook(
+      () => useWorkspaceAdministration({ readMembers: false, readRoles: false }),
+      { wrapper }
+    );
+
+    await act(() =>
+      result.current.updateMember(member, { kind: "status", suspended: true, confirm: true })
+    );
+
+    expect(browserApiFetch).toHaveBeenCalledWith(
+      `/api/members/${member.userId}/status`,
+      expect.objectContaining({ body: JSON.stringify({ suspended: true, confirm: true }) })
+    );
+  });
+
   it("treats self-suspension as successful and clears the authenticated session cache", async () => {
     vi.mocked(useAuthSession).mockReturnValue({
       data: { user: { id: member.userId, name: "Ada", email: "ada@example.com", image: null } },
