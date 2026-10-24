@@ -157,8 +157,12 @@ class AgyHarness:
 
     @property
     def subscription_slot(self) -> str | None:
-        """``agy:<account tag>`` of the pushed login the last turn ran on."""
-        return f"agy:{self._account_tag}" if self._account_tag else None
+        """``agy-<account tag>`` of the pushed login the last turn ran on.
+
+        The wire allows only ``[A-Za-z0-9._-]`` in a slot (``subscriptionSlotSchema``),
+        and the control plane drops an ``execution_complete`` whose slot breaks it.
+        """
+        return f"agy-{self._account_tag}" if self._account_tag else None
 
     # --- lifecycle -----------------------------------------------------------
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
 import stat
 import subprocess
@@ -288,7 +289,9 @@ class TestHarness:
         outcome = await rig.harness.run_prompt(prompt(reasoning_effort="high"), rig.emit)
         assert outcome.success
         assert rig.harness.session_id == CONVERSATION
-        assert rig.harness.subscription_slot == "agy:abcd1234"
+        assert rig.harness.subscription_slot == "agy-abcd1234"
+        # The shared subscriptionSlotSchema; the control plane drops a completion that breaks it.
+        assert re.fullmatch(r"[A-Za-z0-9._-]{1,64}", rig.harness.subscription_slot)
         types = [e["type"] for e in rig.events]
         assert types[0] == "step_start" and types[-1] == "step_finish"
         assert [e["content"] for e in rig.events if e["type"] == "token"][-1] == (

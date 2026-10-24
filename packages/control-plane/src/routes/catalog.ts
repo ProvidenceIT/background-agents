@@ -9,6 +9,7 @@ import type { RouteModule } from "../routing/hono-env";
 import { authHomeRoutes } from "../auth-homes/routes";
 import { webhookRoutes } from "../webhooks";
 import { analyticsRoutes } from "./analytics";
+import { approvalRoutes } from "./approvals";
 import { auditEventRoutes } from "./audit-events";
 import { autofixRoutes } from "./autofix";
 import { automationRoutes } from "./automations";
@@ -30,6 +31,8 @@ import { modelProviderAccountRoutes } from "./model-provider-accounts";
 import { providerRuntimeCredentialRoutes } from "./provider-runtime-credentials";
 import { rbacRoutes } from "./rbac";
 import { reposRoutes } from "./repos";
+import { repoOwnershipRoutes } from "./repo-ownership";
+import { repoPathPolicyRoutes } from "./repo-path-policies";
 import { scmSettingsRoutes } from "./scm-settings";
 import { secretsRoutes } from "./secrets";
 import { sessionRoutes } from "./sessions";
@@ -64,6 +67,8 @@ export const catalog: readonly RouteModule[] = [
 
   // Repository management
   reposRoutes,
+  repoOwnershipRoutes,
+  repoPathPolicyRoutes,
 
   // Secrets
   secretsRoutes,
@@ -133,4 +138,7 @@ export const catalog: readonly RouteModule[] = [
 
   // Read-only GitHub bot routing hints
   githubRoutingRoutes,
+
+  // Approval requests for every kind, and the service-actor decide
+  approvalRoutes,
 ];

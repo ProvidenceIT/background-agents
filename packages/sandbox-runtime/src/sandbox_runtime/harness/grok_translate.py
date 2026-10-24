@@ -296,7 +296,10 @@ def _output_failed(raw_output: object) -> bool:
 
 
 def _tool_output(event: Mapping[str, Any]) -> str:
-    """``rawOutput.output_for_prompt``, else the update's text content, else an MCP output."""
+    """``rawOutput.output_for_prompt``, else the update's text content, else a raw-only output.
+
+    ``list_dir`` sends no text content: its listing is ``rawOutput.Content.content``.
+    """
     raw_output = event.get("rawOutput")
     if isinstance(raw_output, dict):
         for_prompt = raw_output.get("output_for_prompt")
@@ -313,6 +316,10 @@ def _tool_output(event: Mapping[str, Any]) -> str:
     if isinstance(raw_output, dict) and raw_output.get("type") == "MCP":
         output = raw_output.get("output")
         return output if isinstance(output, str) else json.dumps(output)
+    if isinstance(raw_output, dict) and isinstance(raw_output.get("Content"), dict):
+        listing = raw_output["Content"].get("content")
+        if isinstance(listing, str):
+            return listing
     return ""
 
 
