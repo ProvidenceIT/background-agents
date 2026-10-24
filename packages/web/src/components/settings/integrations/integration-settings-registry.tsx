@@ -8,6 +8,8 @@ import {
 import { CodeServerIntegrationSettings } from "./code-server-integration-settings";
 import { GitHubIntegrationSettings } from "./github-integration-settings";
 import { LinearIntegrationSettings } from "./linear-integration-settings";
+import { NotificationsIntegrationSettings } from "./notifications-integration-settings";
+import { SessionToolsIntegrationSettings } from "./session-tools-integration-settings";
 import { SlackIntegrationSettings } from "./slack-integration-settings";
 import { VncIntegrationSettings } from "./vnc-integration-settings";
 
@@ -17,6 +19,8 @@ export const integrationSettingsComponents: Partial<Record<IntegrationId, Compon
   "code-server": CodeServerIntegrationSettings,
   vnc: VncIntegrationSettings,
   slack: SlackIntegrationSettings,
+  notifications: NotificationsIntegrationSettings,
+  "session-tools": SessionToolsIntegrationSettings,
 };
 
 export const visibleIntegrationDefinitions = INTEGRATION_DEFINITIONS.filter(
