@@ -21,7 +21,6 @@ import {
 } from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import {
-  checkHarnessCompatibility,
   harnessForModel,
   resolveHarnessForModel,
   selectedProviderAuthModes,
@@ -88,6 +87,7 @@ import {
   resolveReasoningEffort,
   resolveRepositorySelection,
   validateSlackTriggerConfig,
+  validateAutomationRunnability,
   validateTargetCounts,
   validateTeamExecutor,
 } from "./automation-validation";
@@ -262,8 +262,8 @@ async function handleCreateAutomation(
   // Validate harness and model; no harness asked for means the model's own.
   const model = getValidModelOrDefault(body.model);
   const harness = body.harness ?? harnessForModel(model);
-  const harnessIncompatibility = checkHarnessCompatibility(harness, model);
-  if (harnessIncompatibility) return error(harnessIncompatibility.message, 400);
+  const notRunnable = validateAutomationRunnability(harness, model);
+  if (notRunnable) return notRunnable;
   const reasoningEffort = resolveReasoningEffort(model, body.reasoningEffort);
   if (body.reasoningEffort !== undefined && body.reasoningEffort !== null && !reasoningEffort) {
     return error("Invalid reasoning effort for selected model", 400);
@@ -296,12 +296,12 @@ async function handleCreateAutomation(
   }
   // The auth half of the harness rule: an explicit selection the harness
   // cannot use must not be saved for every future run to trip over.
-  const harnessAuthIncompatibility = checkHarnessCompatibility(
+  const notRunnableOnSelections = validateAutomationRunnability(
     harness,
     model,
     selectedProviderAuthModes(providerSelections)
   );
-  if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
+  if (notRunnableOnSelections) return notRunnableOnSelections;
 
   // Compute next run (only for schedule triggers)
   const nextRunAt = isSchedule
@@ -533,12 +533,12 @@ async function handleUpdateAutomation(
     (body.harness !== undefined || body.model !== undefined
       ? toProviderSelections(await providerAuthStore.list(id))
       : null);
-  const harnessIncompatibility = checkHarnessCompatibility(
+  const notRunnable = validateAutomationRunnability(
     nextHarness,
     nextModel,
     nextProviderSelections ? selectedProviderAuthModes(nextProviderSelections) : undefined
   );
-  if (harnessIncompatibility) return error(harnessIncompatibility.message, 400);
+  if (notRunnable) return notRunnable;
   const requestedReasoningEffort = body.reasoningEffort;
   const resolvedReasoningEffort =
     requestedReasoningEffort !== undefined

@@ -308,7 +308,16 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
-      error: expect.stringContaining("only on a subscription home"),
+      error:
+        "The Codex harness runs openai only on a subscription home; enrol one under Settings > Subscription homes.",
+      code: "payer_mismatch",
+      reasons: [
+        {
+          code: "payer_mismatch",
+          message:
+            "The Codex harness runs openai only on a subscription home; enrol one under Settings > Subscription homes.",
+        },
+      ],
     });
     expect(store.create).not.toHaveBeenCalled();
   });
