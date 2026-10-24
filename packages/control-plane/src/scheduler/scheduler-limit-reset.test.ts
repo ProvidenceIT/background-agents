@@ -8,11 +8,20 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
-import { AutomationStore, type AutomationRow } from "../db/automation-store";
+import {
+  AutomationStore,
+  type AutomationRow,
+  type InvocationOverlapScope,
+} from "../db/automation-store";
 import { applyMigrations } from "../node/migrate";
 import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
 import type { Env } from "../types";
-import { Scheduler, type AutomationRunCompletion, type AutomationRunResumePort } from "./scheduler";
+import {
+  AutomationTriggerBlockedError,
+  Scheduler,
+  type AutomationRunCompletion,
+  type AutomationRunResumePort,
+} from "./scheduler";
 
 const MIGRATIONS = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -70,7 +79,11 @@ describe("Scheduler.runComplete at a usage limit", () => {
   });
 
   /** One firing with one running child, as the launch leaves it. */
-  async function seedRunningRun(n: number): Promise<string> {
+  async function seedRunningRun(
+    n: number,
+    concurrencyKey: string | null = null,
+    overlapScope: InvocationOverlapScope = { kind: "concurrencyKey", concurrencyKey: `key-${n}` }
+  ): Promise<string> {
     const runId = `run-${n}`;
     await store.insertInvocationGuarded({
       invocation: {
@@ -79,7 +92,7 @@ describe("Scheduler.runComplete at a usage limit", () => {
         source: "manual",
         scheduled_at: null,
         trigger_key: null,
-        concurrency_key: null,
+        concurrency_key: concurrencyKey,
         trigger_metadata: null,
         skip_reason: null,
         failure_counted_at: null,
@@ -109,7 +122,7 @@ describe("Scheduler.runComplete at a usage limit", () => {
           environment_id: null,
         },
       ],
-      overlapScope: { kind: "concurrencyKey", concurrencyKey: `key-${n}` },
+      overlapScope,
     });
     // The insert leaves the deadline to the launch claim; stamp the launch budget.
     await store.setRunExecutionDeadline(runId, NOW + HOUR_MS);
@@ -303,6 +316,54 @@ describe("Scheduler.runComplete at a usage limit", () => {
     expect(await runRow(runId)).toMatchObject({
       status: "failed",
       failure_reason: "execution_timeout",
+    });
+  });
+
+  describe("a waiting run holds the active slot", () => {
+    async function seedWaitingRun(concurrencyKey: string | null = null): Promise<string> {
+      const runId = await seedRunningRun(1, concurrencyKey);
+      await scheduler.runComplete(
+        completion(runId, { outcome: "usage_limited", resetsAtMs: NOW + HOUR_MS }),
+        resume
+      );
+      expect((await runRow(runId))?.status).toBe("waiting_for_reset");
+      return runId;
+    }
+
+    it("skips a scheduled firing during the wait as concurrent_run_active", async () => {
+      await seedWaitingRun();
+      await db
+        .prepare("UPDATE automations SET next_run_at = ? WHERE id = ?")
+        .bind(NOW - 1, automation.id)
+        .run();
+
+      await scheduler.tick();
+
+      const { invocations } = await store.listInvocations(automation.id, { limit: 10, offset: 0 });
+      expect(invocations.map((invocation) => [invocation.status, invocation.skipReason])).toEqual([
+        // The seeded run was created at NOW + 1; the skip at NOW.
+        ["waiting_for_reset", null],
+        ["skipped", "concurrent_run_active"],
+      ]);
+    });
+
+    it("blocks a manual trigger during the wait", async () => {
+      await seedWaitingRun();
+
+      await expect(scheduler.trigger(automation.id, "user-1")).rejects.toBeInstanceOf(
+        AutomationTriggerBlockedError
+      );
+    });
+
+    it("blocks a same-key event and the guarded insert during the wait", async () => {
+      const runId = await seedWaitingRun("pr-42");
+
+      expect((await store.getActiveRunForKey(automation.id, "pr-42"))?.id).toBe(runId);
+      expect(await store.getActiveRunForKey(automation.id, "pr-43")).toBeNull();
+      expect((await store.getActiveRunForAutomation(automation.id))?.id).toBe(runId);
+      // The atomic insert re-applies the same predicate, so a racing firing loses too.
+      await seedRunningRun(2, "pr-42", { kind: "concurrencyKey", concurrencyKey: "pr-42" });
+      expect(await runRow("run-2")).toBeNull();
     });
   });
 });

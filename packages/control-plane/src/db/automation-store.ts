@@ -128,6 +128,14 @@ type AutomationListResult = { automations: AutomationRow[] } & (
  */
 export const EXECUTION_TIMEOUT_FAILURE_REASON = "execution_timeout";
 
+/**
+ * Run statuses that hold the automation's (or concurrency key's) single active
+ * slot. A waiting_for_reset run still owns its session and resumes on its own,
+ * so a new firing must not start beside it. Must match the partial predicate of
+ * idx_runs_active_lookup (migration 0106) for the planner to use that index.
+ */
+const OVERLAP_BLOCKING_RUN_STATUS_SQL = "('starting', 'running', 'waiting_for_reset')";
+
 export interface AutomationRunRow {
   id: string;
   automation_id: string;
@@ -1146,7 +1154,7 @@ export class AutomationStore {
     return this.db
       .prepare(
         `SELECT * FROM automation_runs
-         WHERE automation_id = ? AND status IN ('starting', 'running')
+         WHERE automation_id = ? AND status IN ${OVERLAP_BLOCKING_RUN_STATUS_SQL}
          ORDER BY created_at DESC LIMIT 1`
       )
       .bind(automationId)
@@ -1173,7 +1181,7 @@ export class AutomationStore {
   /**
    * Per-source overlap predicate, used both as the cheap pre-check and inside
    * the conditional insert (same SQL, one definition). Schedule/manual firings
-   * block on ANY active run of the automation (main parity with
+   * block on ANY active or waiting run of the automation (main parity with
    * getActiveRunForAutomation); event firings block per concurrency key only —
    * an automation-wide guard would serialize unrelated events.
    */
@@ -1187,13 +1195,13 @@ export class AutomationStore {
               JOIN automation_invocations ai ON ai.id = ar.invocation_id
               WHERE ar.automation_id = ?
                 AND ai.concurrency_key = ?
-                AND ar.status IN ('starting', 'running')`,
+                AND ar.status IN ${OVERLAP_BLOCKING_RUN_STATUS_SQL}`,
         params: [automationId, scope.concurrencyKey],
       };
     }
     return {
       sql: `SELECT 1 FROM automation_runs ar
-            WHERE ar.automation_id = ? AND ar.status IN ('starting', 'running')`,
+            WHERE ar.automation_id = ? AND ar.status IN ${OVERLAP_BLOCKING_RUN_STATUS_SQL}`,
       params: [automationId],
     };
   }
@@ -1668,7 +1676,7 @@ export class AutomationStore {
          JOIN automation_invocations i ON i.id = r.invocation_id
          WHERE r.automation_id = ?
            AND i.concurrency_key = ?
-           AND r.status IN ('starting', 'running')
+           AND r.status IN ${OVERLAP_BLOCKING_RUN_STATUS_SQL}
          ORDER BY r.created_at DESC LIMIT 1`
       )
       .bind(automationId, concurrencyKey)

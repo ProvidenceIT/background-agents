@@ -16,3 +16,13 @@ ALTER TABLE automation_runs ADD COLUMN outcome TEXT;
 CREATE INDEX IF NOT EXISTS idx_runs_waiting_sweep
   ON automation_runs (execution_deadline_at)
   WHERE status = 'waiting_for_reset';
+
+-- A waiting run still holds its automation's single active slot: the overlap
+-- guards treat 'waiting_for_reset' like 'starting'/'running', so a new firing is
+-- skipped as concurrent_run_active instead of starting beside a run that will
+-- resume on its own. Widen the active-run partial index to the same predicate so
+-- getActiveRunForAutomation keeps using it.
+DROP INDEX IF EXISTS idx_runs_active_lookup;
+CREATE INDEX idx_runs_active_lookup
+  ON automation_runs (automation_id, created_at DESC)
+  WHERE status IN ('starting', 'running', 'waiting_for_reset');
