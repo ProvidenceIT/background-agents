@@ -9,14 +9,42 @@ import { signedControlPlaneFetch } from "./internal-auth";
 import type { Env } from "./types";
 import type { SessionTargetFields } from "./session-target";
 
-const sessionCreationErrorSchema = z.object({ code: z.string() });
+const controlPlaneErrorSchema = z.object({
+  code: z.string(),
+  message: z.string().optional(),
+});
 
 /** Trigger kinds a GitHub event can start a session with. */
 export type GitHubTriggerKind = Extract<TriggerKind, "issue_label" | "pr_event">;
 
-export type SessionCreationResult =
-  | { ok: true; sessionId: string }
-  | { ok: false; status: number; code: string | undefined; body: string };
+/** A non-2xx answer, with the error code and message the control plane sent, if any. */
+export interface ControlPlaneRequestFailure {
+  ok: false;
+  status: number;
+  code: string | undefined;
+  message: string | undefined;
+  body: string;
+}
+
+export type SessionCreationResult = { ok: true; sessionId: string } | ControlPlaneRequestFailure;
+
+export type PromptDeliveryResult = { ok: true; messageId: string } | ControlPlaneRequestFailure;
+
+async function requestFailure(response: Response): Promise<ControlPlaneRequestFailure> {
+  const parsed = controlPlaneErrorSchema.safeParse(
+    await response
+      .clone()
+      .json()
+      .catch(() => null)
+  );
+  return {
+    ok: false,
+    status: response.status,
+    code: parsed.success ? parsed.data.code : undefined,
+    message: parsed.success ? parsed.data.message : undefined,
+    body: await response.text(),
+  };
+}
 
 export async function createSession(
   env: Env,
@@ -62,20 +90,7 @@ export async function createSession(
     actor: `github:${params.scmUserId}`,
     traceId,
   });
-  if (!response.ok) {
-    const parsed = sessionCreationErrorSchema.safeParse(
-      await response
-        .clone()
-        .json()
-        .catch(() => null)
-    );
-    return {
-      ok: false,
-      status: response.status,
-      code: parsed.success ? parsed.data.code : undefined,
-      body: await response.text(),
-    };
-  }
+  if (!response.ok) return requestFailure(response);
   const result = createSessionResponseSchema.safeParse(await response.json());
   if (!result.success) {
     throw new Error("Session creation failed: invalid response");
@@ -88,7 +103,7 @@ export async function sendPrompt(
   traceId: string,
   sessionId: string,
   params: { content: string; authorId: string }
-): Promise<string> {
+): Promise<PromptDeliveryResult> {
   const url = `https://internal/sessions/${sessionId}/prompt`;
   // Every turn this bot relays is a pull-request event; the control plane
   // gates the session's subscription home on that kind.
@@ -104,13 +119,10 @@ export async function sendPrompt(
     actor: params.authorId.startsWith("github:") ? params.authorId : undefined,
     traceId,
   });
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Prompt delivery failed: ${response.status} ${body}`);
-  }
+  if (!response.ok) return requestFailure(response);
   const result = sendPromptResponseSchema.safeParse(await response.json());
   if (!result.success) {
     throw new Error("Prompt delivery failed: invalid response");
   }
-  return result.data.messageId;
+  return { ok: true, messageId: result.data.messageId };
 }

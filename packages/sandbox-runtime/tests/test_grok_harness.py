@@ -17,6 +17,7 @@ import asyncio
 import itertools
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -246,7 +247,9 @@ async def test_pong_turn_argv_env_and_outcome(tmp_path: Path) -> None:
     assert env["GROK_TELEMETRY_ENABLED"] == "0"
     assert FAKE_TOKEN not in json.dumps(run)
     assert [e["content"] for e in rig.events if e["type"] == "token"] == ["PO", "PONG"]
-    assert harness.subscription_slot == "grok:abcd1234"
+    assert harness.subscription_slot == "grok-abcd1234"
+    # The shared subscriptionSlotSchema; the control plane drops a completion that breaks it.
+    assert re.fullmatch(r"[A-Za-z0-9._-]{1,64}", harness.subscription_slot)
     assert not group_alive(run["pgid"])
 
 
@@ -581,7 +584,7 @@ async def test_live_pong_tool_resume_and_abort(tmp_path: Path) -> None:
     tokens = [e["content"] for e in events if e["type"] == "token"]
     assert tokens and "PONG" in tokens[-1]
     assert all(later.startswith(earlier) for earlier, later in itertools.pairwise(tokens))
-    assert harness.subscription_slot and harness.subscription_slot.startswith("grok:")
+    assert harness.subscription_slot and harness.subscription_slot.startswith("grok-")
 
     events.clear()
     outcome = await harness.run_prompt(

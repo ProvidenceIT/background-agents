@@ -122,6 +122,10 @@
       "import": "./dist/cron.js",
       "types": "./dist/cron.d.ts"
     },
+    "./policy/protected-paths": {
+      "import": "./dist/policy/protected-paths.js",
+      "types": "./dist/policy/protected-paths.d.ts"
+    },
     "./triggers": {
       "import": "./dist/triggers/index.js",
       "types": "./dist/triggers/index.d.ts"
@@ -145,6 +149,10 @@
     "./types/repository-catalog": {
       "import": "./dist/types/repository-catalog.js",
       "types": "./dist/types/repository-catalog.d.ts"
+    },
+    "./types/repo-ownership": {
+      "import": "./dist/types/repo-ownership.js",
+      "types": "./dist/types/repo-ownership.d.ts"
     },
     "./types/automations": {
       "import": "./dist/types/automations.js",
@@ -229,6 +237,10 @@
     "./types/analytics": {
       "import": "./dist/types/analytics.js",
       "types": "./dist/types/analytics.d.ts"
+    },
+    "./types/approvals": {
+      "import": "./dist/types/approvals.js",
+      "types": "./dist/types/approvals.d.ts"
     },
     "./types/audit-events": {
       "import": "./dist/types/audit-events.js",

@@ -31,7 +31,7 @@ import { join } from "node:path";
 import { WebSocketServer } from "ws";
 import { exportAuditEvents } from "../db/audit-export";
 import { SessionIndexStore } from "../db/session-index";
-import { SqlCacheStore } from "../db/sql-cache-store";
+import { SqlCacheStore } from "@open-inspect/shared/cache-store";
 import type { SqlDatabase } from "../db/sql-database";
 import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../env-validation";
 import { createLogger, parseLogLevel, type Logger } from "../logger";

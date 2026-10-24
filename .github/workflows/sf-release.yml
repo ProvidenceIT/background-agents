@@ -2,7 +2,7 @@
 #
 # Every push to sf/main: run our own gates (a copy of ci.yml's jobs plus the
 # compose smoke), and only when they all pass push the control-plane, web and
-# teams-bot images to private GHCR, build the sandbox image when its content
+# teams-bot and github-bot images to private GHCR, build the sandbox image when its content
 # hash is new, tag the commit sf-<UTC committer time>-<sha8>, and open or
 # refresh ONE rolling "Deploy sf/main @ <sha8>" pull request in the private
 # deploy repo <owner>/software-factory (deploy/scripts/promote.py there). The
@@ -53,7 +53,7 @@ on:
         type: string
         default: ""
       force_components:
-        description: "Comma-separated components to move even without path changes (control-plane,web,teams-bot)"
+        description: "Comma-separated components to move even without path changes (control-plane,web,teams-bot,github-bot)"
         type: string
         default: ""
       allow_downgrade:
@@ -132,13 +132,13 @@ jobs:
           sha8=${SHA:0:8}
           tag="sf-$ts-$sha8"
 
-          # force_components: comma-separated subset of the three components, as a JSON array.
+          # force_components: comma-separated subset of the components, as a JSON array.
           force='[]'
           IFS=',' read -ra items <<< "${FORCE// /}"
           for c in "${items[@]}"; do
             [[ -z "$c" ]] && continue
             case "$c" in
-              control-plane|web|teams-bot) force=$(jq -c --arg c "$c" '. + [$c] | unique' <<< "$force") ;;
+              control-plane|web|teams-bot|github-bot) force=$(jq -c --arg c "$c" '. + [$c] | unique' <<< "$force") ;;
               *) echo "::error::unknown component '$c' in force_components"; exit 1 ;;
             esac
           done
@@ -443,6 +443,8 @@ jobs:
             file: deploy/sf/web/Dockerfile
           - component: teams-bot
             file: packages/teams-bot/Dockerfile
+          - component: github-bot
+            file: packages/github-bot/Dockerfile
     env:
       REPOSITORY: ghcr.io/${{ github.repository_owner == 'ProvidenceIT' && 'providenceit' || 'bramdokman' }}/open-inspect-${{ matrix.component }}
       TAG: ${{ needs.meta.outputs.tag }}
@@ -818,6 +820,7 @@ jobs:
             --slurpfile cp "$d/digest-control-plane.json" \
             --slurpfile web "$d/digest-web.json" \
             --slurpfile bot "$d/digest-teams-bot.json" \
+            --slurpfile ghbot "$d/digest-github-bot.json" \
             --slurpfile sbx "$d/digest-sandbox.json" \
             --argjson force "$FORCE" --argjson downgrade "$ALLOW_DOWNGRADE" \
             '{
@@ -825,7 +828,7 @@ jobs:
               sourceSha: $sha,
               releaseTag: $tag,
               runUrl: $run,
-              images: {"control-plane": $cp[0], "web": $web[0], "teams-bot": $bot[0]},
+              images: {"control-plane": $cp[0], "web": $web[0], "teams-bot": $bot[0], "github-bot": $ghbot[0]},
               sandbox: $sbx[0],
               forceComponents: $force,
               allowDowngrade: $downgrade

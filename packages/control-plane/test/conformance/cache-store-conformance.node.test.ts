@@ -7,7 +7,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqlCacheStore } from "../../src/db/sql-cache-store";
+import { SqlCacheStore } from "@open-inspect/shared/cache-store";
 import { openNodeCacheDatabase } from "../../src/node/cache-database";
 import {
   registerCacheStoreConformanceSuite,
