@@ -27,6 +27,7 @@ import {
 import {
   createAutomationFormDraft,
   evaluateAutomationForm,
+  presetRunnabilityWarning,
   requiresRepositoryContext,
   type AutomationAgentDraft,
   type AutomationFormValues,
@@ -70,6 +71,10 @@ export function AutomationForm({
   const [name, setName] = useState(initialDraft.name);
   const [providerSelections, setProviderSelections] = useState(initialDraft.providerSelections);
   const [agent, setAgent] = useState(initialDraft.agent);
+  const presetWarning = useMemo(
+    () => presetRunnabilityWarning(initialValues, initialDraft.agent),
+    [initialValues, initialDraft.agent]
+  );
   const [instructions, setInstructions] = useState(initialDraft.instructions);
   const [trigger, setTrigger] = useState(initialDraft.trigger);
   const repositoryRequired = requiresRepositoryContext(trigger.type);
@@ -217,6 +222,7 @@ export function AutomationForm({
         resolvedModel={resolvedModel}
         enabledModelOptions={modelSelection.options}
         modelError={modelError}
+        presetWarning={presetWarning}
         onChange={handleAgentChange}
       />
 
