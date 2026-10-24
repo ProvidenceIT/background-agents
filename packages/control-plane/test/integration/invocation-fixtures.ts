@@ -72,6 +72,8 @@ export function makeChild(
     scheduled_at: now,
     started_at: null,
     execution_deadline_at: null,
+    resume_at: null,
+    outcome: null,
     completed_at: null,
     created_at: now,
     repo_owner: null,

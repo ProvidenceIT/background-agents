@@ -1,6 +1,7 @@
 import {
   CONTINUE_AT_RESET_BUFFER_MS,
   CONTINUE_AT_RESET_PROMPT,
+  type AutomationCallbackContext,
 } from "@open-inspect/shared/types/session-api";
 import type {
   ScheduledContinueFailure,
@@ -121,6 +122,39 @@ export class SessionScheduledContinue {
     return { kind: "scheduled", atMs: schedule.atMs };
   }
 
+  /**
+   * Schedule (or replace) an automation run's own continue at `atMs`: the run
+   * waits out a usage limit or an overloaded provider, and the continue is its
+   * next turn, reporting back through `callbackContext`. The scheduler decides
+   * when; false when this session cannot take another turn.
+   */
+  async scheduleForAutomation(request: {
+    atMs: number;
+    requestedByUserId: string;
+    authorId: string;
+    callbackContext: AutomationCallbackContext;
+  }): Promise<boolean> {
+    const session = this.deps.repository.getSession();
+    if (!session || session.status === "archived" || session.status === "cancelled") return false;
+    if (session.budget_exhausted === 1) return false;
+    const schedule: ScheduledContinue = {
+      atMs: request.atMs,
+      requestedByUserId: request.requestedByUserId,
+      authorId: request.authorId,
+      createdAtMs: this.deps.now(),
+      automationCallback: request.callbackContext,
+    };
+    this.store(schedule);
+    await this.arm(schedule.atMs);
+    this.deps.log.info("scheduled_continue.set", {
+      event: "scheduled_continue.set",
+      at_ms: schedule.atMs,
+      requested_by_user_id: schedule.requestedByUserId,
+      automation_run_id: request.callbackContext.runId,
+    });
+    return true;
+  }
+
   /** Cancel at the user's request; answers the same whether or not one was scheduled. */
   cancel(): void {
     this.store(null);
@@ -151,7 +185,7 @@ export class SessionScheduledContinue {
       await this.arm(schedule.atMs);
       return;
     }
-    const blocked = this.blockedReason();
+    const blocked = this.blockedReason(schedule);
     if (blocked) {
       this.drop(schedule, blocked);
       return;
@@ -171,24 +205,27 @@ export class SessionScheduledContinue {
       });
       return;
     }
-    const blockedAfterAuthorization = this.blockedReason();
+    const blockedAfterAuthorization = this.blockedReason(current);
     if (blockedAfterAuthorization) {
       this.drop(current, blockedAfterAuthorization);
       return;
     }
 
     this.store(null);
+    const automationCallback = current.automationCallback;
     try {
       await this.deps.enqueuePrompt({
         turn: {
-          triggerKind: "prompt",
+          // An automation's continue is admitted like the unattended turn it resumes.
+          triggerKind: automationCallback ? "schedule" : "prompt",
           channel: "prompt",
           requestId: `continue-at-reset:${current.createdAtMs}`,
         },
         content: CONTINUE_AT_RESET_PROMPT,
         authorId: current.authorId,
         canonicalUserId: current.requestedByUserId,
-        source: "web",
+        source: automationCallback ? "automation" : "web",
+        ...(automationCallback ? { callbackContext: automationCallback } : {}),
       });
       this.deps.log.info("scheduled_continue.fired", {
         event: "scheduled_continue.fired",
@@ -214,7 +251,7 @@ export class SessionScheduledContinue {
         error: error instanceof Error ? error : String(error),
       });
       // Restore only while nothing else has moved the session on during the enqueue.
-      if (this.deps.repository.getScheduledContinue() || this.blockedReason()) return;
+      if (this.deps.repository.getScheduledContinue() || this.blockedReason(current)) return;
       await this.retry(current, "enqueue_failed");
     }
   }
@@ -241,12 +278,15 @@ export class SessionScheduledContinue {
   }
 
   /** Why a due continue must not run now, or null when it may. */
-  private blockedReason(): string | null {
+  private blockedReason(schedule: ScheduledContinue): string | null {
     const status = this.deps.repository.getSession()?.status;
     if (status === undefined || status === "archived" || status === "cancelled") {
       return "session_closed";
     }
-    if (!this.deps.repository.getLastTurnLimit()) return "limit_cleared";
+    // An automation's continue may follow an overloaded turn, which leaves no limit.
+    if (!schedule.automationCallback && !this.deps.repository.getLastTurnLimit()) {
+      return "limit_cleared";
+    }
     if (this.deps.messageRepository.getPendingOrProcessingCount() > 0) return "session_busy";
     return null;
   }

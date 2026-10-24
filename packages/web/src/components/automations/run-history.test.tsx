@@ -6,6 +6,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ComponentProps } from "react";
 import type { AutomationInvocation, AutomationRun } from "@open-inspect/shared/types/automations";
+import { waitingForResetLabel } from "@/lib/automation-invocation-status";
 import { RunHistory } from "./run-history";
 
 expect.extend(matchers);
@@ -33,6 +34,7 @@ function makeRun(overrides: Partial<AutomationRun> = {}): AutomationRun {
     status: "completed",
     skipReason: null,
     failureReason: null,
+    resumeAt: null,
     scheduledAt: FIRED_AT,
     startedAt: FIRED_AT + 5_000,
     completedAt: FIRED_AT + 65_000,
@@ -64,6 +66,20 @@ function makeInvocation(overrides: Partial<AutomationInvocation> = {}): Automati
 }
 
 describe("RunHistory", () => {
+  it("shows a run waiting for a limit reset with its resume time", () => {
+    const resumeAt = new Date("2026-07-01T14:05:00Z").getTime();
+    const invocation = makeInvocation({
+      status: "waiting_for_reset",
+      completedAt: null,
+      runs: [makeRun({ status: "waiting_for_reset", completedAt: null, resumeAt })],
+    });
+
+    render(<RunHistory invocations={[invocation]} total={1} loading={false} hasMore={false} />);
+
+    expect(screen.getByText("Waiting for reset")).toBeInTheDocument();
+    expect(screen.getByText(waitingForResetLabel(resumeAt))).toBeInTheDocument();
+  });
+
   it("shows the empty state before any firing", () => {
     render(<RunHistory invocations={[]} total={0} loading={false} hasMore={false} />);
 

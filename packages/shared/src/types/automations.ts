@@ -15,9 +15,19 @@ import { modelProviderSelectionsSchema } from "./provider-accounts";
 import { isEnvironmentId } from "./environments";
 import { isCanonicalUserId } from "../user-id";
 
-/** `unauthorized` is a terminal, sessionless GitHub repository grant denial. */
+/**
+ * `unauthorized` is a terminal, sessionless GitHub repository grant denial.
+ * `waiting_for_reset` is not terminal: the run's session stopped at a usage
+ * limit (or an overloaded provider) and continues on its own at `resumeAt`.
+ */
 export type AutomationRunStatus =
-  "starting" | "running" | "completed" | "failed" | "skipped" | "unauthorized";
+  | "starting"
+  | "running"
+  | "waiting_for_reset"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "unauthorized";
 
 export type AutomationInvocationSource = "schedule" | "manual" | "event";
 
@@ -29,6 +39,7 @@ export type AutomationInvocationSource = "schedule" | "manual" | "event";
 export const automationInvocationStatusSchema = z.enum([
   "starting",
   "running",
+  "waiting_for_reset",
   "completed",
   "failed",
   "partial_failed",
@@ -253,6 +264,8 @@ export interface AutomationRun {
   status: AutomationRunStatus;
   skipReason: string | null;
   failureReason: string | null;
+  /** When a `waiting_for_reset` run's session continues on its own (epoch ms). */
+  resumeAt: number | null;
   scheduledAt: number;
   startedAt: number | null;
   completedAt: number | null;

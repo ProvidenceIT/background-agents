@@ -58,6 +58,8 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
     scheduled_at: now,
     started_at: null,
     execution_deadline_at: null,
+    resume_at: null,
+    outcome: null,
     completed_at: null,
     created_at: now,
     invocation_id: `inv-${id}`,

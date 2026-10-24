@@ -481,7 +481,24 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       getMsTeamsChannelBinding: (channelId) => teamChannelBindingStore.get("msteams", channelId),
     },
     env,
-    completeAutomationRun: (completion) => scheduler.runComplete(completion),
+    // A run that waits out a limit resumes as this session's own continue, in
+    // the name of the participant who sent the run's prompt.
+    completeAutomationRun: (completion) =>
+      scheduler.runComplete(completion, {
+        scheduleContinue: async ({ messageId, atMs, callbackContext }) => {
+          const message = messageRepository.getMessageById(messageId);
+          const author = message
+            ? participantRepository.getParticipantById(message.author_id)
+            : null;
+          if (!author) return false;
+          return scheduledContinue.scheduleForAutomation({
+            atMs,
+            requestedByUserId: author.canonical_user_id ?? author.user_id,
+            authorId: author.user_id,
+            callbackContext,
+          });
+        },
+      }),
     log,
     getSessionId: () => resolvePublicSessionId(sessionCoreRepository.getSession(), durableObjectId),
   });

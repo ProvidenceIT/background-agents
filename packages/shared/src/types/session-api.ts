@@ -161,6 +161,8 @@ export const automationCallbackContextSchema = z.object({
   automationId: z.string(),
   runId: z.string(),
   automationName: z.string(),
+  /** Retries this run has spent on an overloaded provider; absent before the first. */
+  overloadRetries: z.number().int().nonnegative().optional(),
 });
 
 export type AutomationCallbackContext = z.infer<typeof automationCallbackContextSchema>;

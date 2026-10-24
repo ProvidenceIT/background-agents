@@ -36,6 +36,7 @@ import {
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { CreatedAtCursor } from "../created-at-cursor";
+import { STRIKE_FAILED_RUN_SQL, type AutomationRunOutcome } from "../scheduler/invocation-outcome";
 import { z } from "zod";
 import { UserStore } from "./user-store";
 import { rolePermissionPredicate } from "../authorization/permission-sql";
@@ -145,6 +146,10 @@ export interface AutomationRunRow {
    * claims a session, and on rows that predate the column.
    */
   execution_deadline_at: number | null;
+  /** When a 'waiting_for_reset' run's session continues on its own; null otherwise. */
+  resume_at: number | null;
+  /** Why the run last stopped short of success, when not its own failure (migration 0106). */
+  outcome: AutomationRunOutcome | null;
   created_at: number;
   /** Repository snapshot taken at firing time (null for repo-less runs). */
   repo_owner: string | null;
@@ -250,7 +255,11 @@ export interface ScheduleAdvance {
 export interface InvocationRunAggregate {
   total: number;
   active: number;
+  /** Children waiting out a usage limit; neither active nor terminal. */
+  waiting: number;
   failed: number;
+  /** Failed children that count as a strike (outcome not in NON_STRIKE_OUTCOMES). */
+  strikeFailed: number;
   completed: number;
   skipped: number;
   lastCompletedAt: number | null;
@@ -321,6 +330,7 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
     status: row.status,
     skipReason: row.skip_reason,
     failureReason: row.failure_reason,
+    resumeAt: row.resume_at ?? null,
     scheduledAt: row.scheduled_at,
     startedAt: row.started_at,
     completedAt: row.completed_at,
@@ -340,7 +350,8 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
 // `r`) with a TS twin below — integration tests assert the two agree. Arms, in
 // order: childless ⇒ skipped (new skips are childless; the app enforces
 // skip_reason on them); any active child ⇒ starting until any child has left
-// 'starting', then running; all-terminal: all skipped ⇒ skipped (legacy
+// 'starting', then running; else any child waiting for a limit reset ⇒
+// waiting_for_reset; all-terminal: all skipped ⇒ skipped (legacy
 // backfilled skip rows), any denied child ⇒ unauthorized, no failure ⇒ completed, no success ⇒ failed,
 // otherwise partial_failed.
 
@@ -351,6 +362,7 @@ const DERIVED_INVOCATION_STATUS_SQL = `CASE
       WHEN SUM(CASE WHEN r.status <> 'starting' THEN 1 ELSE 0 END) = 0 THEN 'starting'
       ELSE 'running'
     END
+  WHEN SUM(CASE WHEN r.status = 'waiting_for_reset' THEN 1 ELSE 0 END) > 0 THEN 'waiting_for_reset'
   WHEN SUM(CASE WHEN r.status = 'skipped' THEN 1 ELSE 0 END) = COUNT(r.id) THEN 'skipped'
   WHEN SUM(CASE WHEN r.status = 'unauthorized' THEN 1 ELSE 0 END) > 0 THEN 'unauthorized'
   WHEN SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) = 0 THEN 'completed'
@@ -361,7 +373,7 @@ END`;
 /** Derived completion time: latest child completion once all children are terminal. */
 const DERIVED_INVOCATION_COMPLETED_AT_SQL = `CASE
   WHEN COUNT(r.id) = 0 THEN NULL
-  WHEN SUM(CASE WHEN r.status IN ('starting', 'running') THEN 1 ELSE 0 END) > 0 THEN NULL
+  WHEN SUM(CASE WHEN r.status IN ('starting', 'running', 'waiting_for_reset') THEN 1 ELSE 0 END) > 0 THEN NULL
   ELSE MAX(r.completed_at)
 END`;
 
@@ -389,6 +401,7 @@ export function allRunsUnauthorized(runs: readonly Pick<AutomationRunRow, "statu
 export function deriveInvocationStatus(counts: {
   total: number;
   active: number;
+  waiting: number;
   failed: number;
   completed: number;
   skipped: number;
@@ -401,6 +414,7 @@ export function deriveInvocationStatus(counts: {
   if (counts.active > 0) {
     return counts.starting === counts.total ? "starting" : "running";
   }
+  if (counts.waiting > 0) return "waiting_for_reset";
   if (counts.skipped === counts.total) return "skipped";
   if (counts.unauthorized > 0) return "unauthorized";
   if (counts.failed === 0) return "completed";
@@ -999,7 +1013,8 @@ export class AutomationStore {
   // --- Run management ---
 
   /**
-   * Update an active run. SQL-guarded on `status IN ('starting','running')`:
+   * Update an active or waiting run. SQL-guarded on
+   * `status IN ('starting','running','waiting_for_reset')`:
    * a JS pre-check alone is a lost-update race under concurrent callbacks and
    * sweeps — a terminal run must never transition again (a sweep flipping a
    * completed child to failed would retroactively corrupt its invocation's
@@ -1015,6 +1030,9 @@ export class AutomationStore {
       "failure_reason",
       "started_at",
       "completed_at",
+      "execution_deadline_at",
+      "resume_at",
+      "outcome",
     ];
 
     for (const field of allowedFields) {
@@ -1031,7 +1049,7 @@ export class AutomationStore {
     const result = await this.db
       .prepare(
         `UPDATE automation_runs SET ${setClauses.join(", ")}
-         WHERE id = ? AND status IN ('starting', 'running')`
+         WHERE id = ? AND status IN ('starting', 'running', 'waiting_for_reset')`
       )
       .bind(...params)
       .run();
@@ -1102,9 +1120,13 @@ export class AutomationStore {
     await this.bulkFailRunsInStatus(runIds, "running", reason, completedAt);
   }
 
+  async bulkFailWaitingRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
+    await this.bulkFailRunsInStatus(runIds, "waiting_for_reset", reason, completedAt);
+  }
+
   private async bulkFailRunsInStatus(
     runIds: string[],
-    status: "starting" | "running",
+    status: "starting" | "running" | "waiting_for_reset",
     reason: string,
     completedAt: number
   ): Promise<void> {
@@ -1450,7 +1472,9 @@ export class AutomationStore {
         `SELECT
            COUNT(*) AS total,
            COALESCE(SUM(CASE WHEN status IN ('starting', 'running') THEN 1 ELSE 0 END), 0) AS active,
+           COALESCE(SUM(CASE WHEN status = 'waiting_for_reset' THEN 1 ELSE 0 END), 0) AS waiting,
            COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+           COALESCE(SUM(CASE WHEN ${STRIKE_FAILED_RUN_SQL} THEN 1 ELSE 0 END), 0) AS strike_failed,
            COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
            COALESCE(SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END), 0) AS skipped,
            MAX(completed_at) AS last_completed_at
@@ -1460,7 +1484,9 @@ export class AutomationStore {
       .first<{
         total: number;
         active: number;
+        waiting: number;
         failed: number;
+        strike_failed: number;
         completed: number;
         skipped: number;
         last_completed_at: number | null;
@@ -1469,7 +1495,9 @@ export class AutomationStore {
     return {
       total: row?.total ?? 0,
       active: row?.active ?? 0,
+      waiting: row?.waiting ?? 0,
       failed: row?.failed ?? 0,
+      strikeFailed: row?.strike_failed ?? 0,
       completed: row?.completed ?? 0,
       skipped: row?.skipped ?? 0,
       lastCompletedAt: row?.last_completed_at ?? null,
@@ -1546,7 +1574,7 @@ export class AutomationStore {
   // --- Invocation finalization sweep (D2c) ---
 
   /**
-   * Recent all-terminal invocations with a failed child whose failure was
+   * Recent all-terminal invocations with a strike-counting failed child whose failure was
    * never counted — the crash-after-last-callback window. Bounded by
    * created_at (idx_invocations_created) to keep the derived-status scan cheap.
    */
@@ -1562,7 +1590,7 @@ export class AutomationStore {
            AND i.failure_counted_at IS NULL
            AND EXISTS (
              SELECT 1 FROM automation_runs r
-             WHERE r.invocation_id = i.id AND r.status = 'failed')
+             WHERE r.invocation_id = i.id AND ${STRIKE_FAILED_RUN_SQL})
            AND NOT EXISTS (
              SELECT 1 FROM automation_runs r
              WHERE r.invocation_id = i.id AND r.status IN ('starting', 'running'))
@@ -1688,6 +1716,11 @@ export class AutomationStore {
   static readonly RUNS_PAST_EXECUTION_DEADLINE_SQL =
     "SELECT * FROM automation_runs WHERE status = 'running' AND (execution_deadline_at < ? OR (execution_deadline_at IS NULL AND started_at < ?))";
 
+  // A waiting run is due once its resumed turn should have reported back: the
+  // deadline is moved to resume_at plus the run's execution budget each time it waits.
+  static readonly WAITING_RUNS_PAST_DEADLINE_SQL =
+    "SELECT * FROM automation_runs WHERE status = 'waiting_for_reset' AND execution_deadline_at < ?";
+
   async getOrphanedStartingRuns(thresholdMs: number, limit: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;
     const result = await this.db
@@ -1714,6 +1747,17 @@ export class AutomationStore {
          ORDER BY COALESCE(execution_deadline_at, started_at) ASC LIMIT ?`
       )
       .bind(now, now - defaultDeadlineMs, limit)
+      .all<AutomationRunRow>();
+    return result.results || [];
+  }
+
+  /** Waiting runs whose resumed turn never reported back by their deadline. */
+  async getWaitingRunsPastDeadline(now: number, limit: number): Promise<AutomationRunRow[]> {
+    const result = await this.db
+      .prepare(
+        `${AutomationStore.WAITING_RUNS_PAST_DEADLINE_SQL} ORDER BY execution_deadline_at ASC LIMIT ?`
+      )
+      .bind(now, limit)
       .all<AutomationRunRow>();
     return result.results || [];
   }

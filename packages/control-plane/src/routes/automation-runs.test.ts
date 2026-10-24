@@ -37,6 +37,8 @@ const linkedRunRow: EnrichedRunRow = {
   scheduled_at: 1000,
   started_at: 1100,
   execution_deadline_at: 3000,
+  resume_at: null,
+  outcome: null,
   completed_at: 2000,
   created_at: 1000,
   repo_owner: "group/subgroup",

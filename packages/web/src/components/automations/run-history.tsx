@@ -10,6 +10,7 @@ import { formatRepoLabel } from "@/lib/repo-label";
 import { useEnvironments } from "@/hooks/use-environments";
 import {
   AUTOMATION_INVOCATION_STATUS,
+  waitingForResetLabel,
   type AutomationInvocationTone,
 } from "@/lib/automation-invocation-status";
 
@@ -60,6 +61,9 @@ function formatRunCounts(runs: AutomationRun[]): string {
   if (count("failed") > 0) parts.push(`${count("failed")} failed`);
   if (count("unauthorized") > 0) parts.push(`${count("unauthorized")} unauthorized`);
   if (count("skipped") > 0) parts.push(`${count("skipped")} skipped`);
+  if (count("waiting_for_reset") > 0) {
+    parts.push(`${count("waiting_for_reset")} waiting for reset`);
+  }
   if (active > 0) parts.push(`${active} running`);
   return parts.join(", ");
 }
@@ -74,6 +78,12 @@ function invocationStartedAt(invocation: AutomationInvocation): number | null {
 
 function firedAtLabel(invocation: AutomationInvocation): string {
   return new Date(invocation.scheduledAt ?? invocation.createdAt).toLocaleString();
+}
+
+/** The resume time of a run waiting out a usage limit, or nothing. */
+function WaitingForReset({ run }: { run: AutomationRun }) {
+  if (run.status !== "waiting_for_reset" || run.resumeAt === null) return null;
+  return <p className="mt-1 text-xs text-warning">{waitingForResetLabel(run.resumeAt)}</p>;
 }
 
 /** A skipped firing: no child runs, only a reason. */
@@ -122,6 +132,7 @@ function SingleRunRow({ invocation }: { invocation: AutomationInvocation }) {
           )}
         </div>
       </div>
+      <WaitingForReset run={run} />
       {run.failureReason && (
         <p className="mt-1 text-xs text-destructive">{formatRunReason(run.failureReason)}</p>
       )}
@@ -161,6 +172,7 @@ function TargetRunRow({
         {run.artifactSummary && (
           <p className="mt-1 text-xs text-muted-foreground">{run.artifactSummary}</p>
         )}
+        <WaitingForReset run={run} />
         {run.failureReason && (
           <p className="mt-1 text-xs text-destructive">{formatRunReason(run.failureReason)}</p>
         )}

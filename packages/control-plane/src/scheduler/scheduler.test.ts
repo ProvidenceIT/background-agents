@@ -171,15 +171,18 @@ const { AutomationExecutionUnauthorizedError, EXECUTION_DEADLINE_GRACE_MS, Sched
 
 // ─── Mock factories ──────────────────────────────────────────────────────────
 
+/** Failed children count as strikes unless `strikeFailed` says otherwise. */
 function aggregate(overrides?: Partial<InvocationRunAggregate>): InvocationRunAggregate {
   return {
     total: 1,
     active: 1,
+    waiting: 0,
     failed: 0,
     completed: 0,
     skipped: 0,
     lastCompletedAt: null,
     ...overrides,
+    strikeFailed: overrides?.strikeFailed ?? overrides?.failed ?? 0,
   };
 }
 
@@ -225,6 +228,7 @@ function createMockStore() {
     countOverdue: vi.fn().mockResolvedValue(0),
     getOrphanedStartingRuns: vi.fn().mockResolvedValue([]),
     getRunsPastExecutionDeadline: vi.fn().mockResolvedValue([]),
+    getWaitingRunsPastDeadline: vi.fn().mockResolvedValue([]),
     incrementConsecutiveFailures: vi.fn().mockResolvedValue(1),
     resetConsecutiveFailures: vi.fn().mockResolvedValue(undefined),
     autoPause: vi.fn().mockResolvedValue(undefined),
@@ -232,6 +236,7 @@ function createMockStore() {
     advanceNextRunAt: vi.fn().mockResolvedValue(true),
     bulkFailStartingRuns: vi.fn().mockResolvedValue(undefined),
     bulkFailRunningRuns: vi.fn().mockResolvedValue(undefined),
+    bulkFailWaitingRuns: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -2646,6 +2651,7 @@ describe("Scheduler", () => {
       expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
         status: "failed",
         failure_reason: "Sandbox crashed",
+        outcome: null,
         completed_at: expect.any(Number),
       });
       expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledWith("inv-1");
