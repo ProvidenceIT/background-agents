@@ -42,6 +42,7 @@ export function isWorkspaceAdmin(roleKey: string | null | undefined): boolean {
 /** Canonical permission identifiers accepted by the RBAC policy and persistence layers. */
 export const PERMISSION_IDS = [
   "analytics.read",
+  "approvals.decide",
   "auth_homes.assign",
   "auth_homes.manage_own",
   "auth_homes.read_all",
@@ -167,6 +168,8 @@ const VIEWER_PERMISSIONS = new Set<PermissionId>([
 
 const MEMBER_PERMISSIONS = new Set<PermissionId>([
   ...VIEWER_PERMISSIONS,
+  // Approval requests name their responders; the grant lets a member answer the ones naming them.
+  "approvals.decide",
   "automations.create",
   "automations.manage.own",
   "automations.trigger.own",

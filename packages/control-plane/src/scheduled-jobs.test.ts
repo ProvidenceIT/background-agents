@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runApprovalExpiryJob } from "./approvals/expiry";
 import { runAuthHomeNoticesJob } from "./auth-homes/expiry-digest";
 import { checkAutofixQueueHealth } from "./autofix/queue-health";
 import { SessionIndexStore } from "./db/session-index";
@@ -32,6 +33,7 @@ import type { Env } from "./types";
 // The job bodies are mocked; the cron constants stay the production values so
 // the Terraform parity check below reads what the Worker really registers.
 vi.mock("./autofix/queue-health", () => ({ checkAutofixQueueHealth: vi.fn(async () => {}) }));
+vi.mock("./approvals/expiry", () => ({ runApprovalExpiryJob: vi.fn(async () => {}) }));
 vi.mock("./auth-homes/expiry-digest", () => ({ runAuthHomeNoticesJob: vi.fn(async () => {}) }));
 vi.mock("./notifications/drainer", () => ({ runSessionNoticesJob: vi.fn(async () => {}) }));
 vi.mock("./image-builds/scheduler", async (importOriginal) => ({
@@ -107,7 +109,7 @@ describe("SCHEDULED_JOBS", () => {
     expect(findScheduledJob("0 0 * * *")).toBeUndefined();
   });
 
-  it("runs the every-minute tick: queue health, team sync, both notice jobs and the CODEOWNERS sync in the background, the scheduler tick awaited", async () => {
+  it("runs the every-minute tick: queue health, team sync, both notice jobs, approval expiry and the CODEOWNERS sync in the background, the scheduler tick awaited", async () => {
     const deps = fakeDeps();
 
     await findScheduledJob(SCHEDULER_TICK_CRON)!.run(deps, 1_000);
@@ -119,6 +121,7 @@ describe("SCHEDULED_JOBS", () => {
       "github_team_sync",
       "auth_home_notices",
       "session_notices",
+      "approval_expiry",
       "codeowners_sync",
     ]);
     expect(checkAutofixQueueHealth).not.toHaveBeenCalled();
@@ -133,8 +136,11 @@ describe("SCHEDULED_JOBS", () => {
     expect(runSessionNoticesJob).not.toHaveBeenCalled();
     await deps.submitted[3]!.task();
     expect(runSessionNoticesJob).toHaveBeenCalledWith(deps.env, deps.db, deps.log, 1_000);
-    expect(runCodeownersSync).not.toHaveBeenCalled();
+    expect(runApprovalExpiryJob).not.toHaveBeenCalled();
     await deps.submitted[4]!.task();
+    expect(runApprovalExpiryJob).toHaveBeenCalledWith(deps.db, deps.log, 1_000);
+    expect(runCodeownersSync).not.toHaveBeenCalled();
+    await deps.submitted[5]!.task();
     expect(runCodeownersSync).toHaveBeenCalledWith(deps.env, deps.db, deps.log, 1_000);
   });
 

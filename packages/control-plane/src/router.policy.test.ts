@@ -66,11 +66,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(264);
+    expect(routes).toHaveLength(269);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(200);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(264);
+    expect(new Set(paths).size).toBe(204);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(269);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",

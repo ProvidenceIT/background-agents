@@ -41,6 +41,8 @@ exports[`route admission matrix > admits only the named bot on every exact-servi
   "POST /internal/github-event github-bot=400 slack-bot=403 web=403",
   "POST /internal/slack-event slack-bot=400 github-bot=403 web=403",
   "GET /github/route github-bot=400 slack-bot=403 web=403",
+  "POST /approvals github-bot=400 motion=403 web=403",
+  "POST /internal/approvals/:id/decide teams-bot=400 slack-bot=403 web=403",
 ]
 `;
 
@@ -280,6 +282,9 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "GET /teams/:id/secrets owner=200",
   "PUT /teams/:id/secrets owner=400",
   "DELETE /teams/:id/secrets/:key owner=404",
+  "GET /approvals owner=200",
+  "GET /approvals/:id owner=404",
+  "POST /approvals/:id/decide owner=400",
 ]
 `;
 
@@ -549,6 +554,11 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "POST /internal/github-event anonymous=401",
   "POST /internal/slack-event anonymous=401",
   "GET /github/route anonymous=401",
+  "POST /approvals anonymous=401",
+  "GET /approvals anonymous=401",
+  "GET /approvals/:id anonymous=401",
+  "POST /approvals/:id/decide anonymous=401",
+  "POST /internal/approvals/:id/decide anonymous=401",
 ]
 `;
 
