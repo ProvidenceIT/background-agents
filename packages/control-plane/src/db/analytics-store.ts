@@ -367,7 +367,8 @@ export class AnalyticsStore {
       .prepare(
         `SELECT s.model AS model, a.provider AS provider, COUNT(*) AS sessions
        FROM sessions s
-       JOIN session_model_provider_auth a ON a.session_id = s.id AND a.auth_mode = 'provider_account'
+       JOIN session_model_provider_auth a ON a.session_id = s.id
+         AND a.auth_mode IN ('provider_account', 'auth_home')
        WHERE s.created_at >= ? AND s.created_at < ?
            ${sql} ${visible.sql ? `AND ${visible.sql}` : ""}
        GROUP BY s.model, a.provider`

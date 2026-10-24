@@ -1420,6 +1420,12 @@ describe("Analytics API", () => {
     )
       .bind("xai-account", "first", "xai")
       .run();
+    // A subscription home is billed to the subscriber's plan, like a connected account.
+    await env.DB.prepare(
+      "UPDATE session_model_provider_auth SET auth_mode = 'auth_home' WHERE session_id = ? AND provider = ?"
+    )
+      .bind("prefixed", "anthropic")
+      .run();
     for (const by of ["model", "harness", "spawnSource", "automation", "provider"] as const) {
       const response = await serviceFetch(`https://test.local/analytics/breakdown?by=${by}`);
       expect(response.status).toBe(200);
@@ -1454,7 +1460,7 @@ describe("Analytics API", () => {
         displayName: "Anthropic",
         sessions: 2,
         avgDuration: 300,
-        subscriptionSessions: 0,
+        subscriptionSessions: 1,
       }),
     ]);
     const dashboard = await (

@@ -105,6 +105,9 @@ describe("getCostKpis", () => {
   it("reports the subscription share and token totals", () => {
     const items = getCostKpis(analyticsDashboard());
     expect(items.find((item) => item.label === "Billed to subscriptions")?.value).toBe("33%");
+    expect(items.find((item) => item.label === "Billed to subscriptions")?.detail).toBe(
+      "Of sessions; paid by the plan"
+    );
     expect(items.find((item) => item.label === "Tokens")?.value).toBe("19.1K");
   });
 });

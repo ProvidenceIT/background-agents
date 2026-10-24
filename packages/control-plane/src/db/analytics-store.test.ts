@@ -143,7 +143,7 @@ describe("AnalyticsStore query boundaries", () => {
 
     store.prepareBilling({ startAt: 10, endAt: 20, scope: "agent" });
     expect(db.prepare.mock.calls[0][0]).toContain(
-      "JOIN session_model_provider_auth a ON a.session_id = s.id AND a.auth_mode = 'provider_account'"
+      "AND a.auth_mode IN ('provider_account', 'auth_home')"
     );
     expect(db.prepare.mock.calls[0][0]).toContain("AND s.spawn_source IN (?)");
     expect(bind).toHaveBeenLastCalledWith(10, 20, "agent");
